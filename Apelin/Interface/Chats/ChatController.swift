@@ -615,6 +615,50 @@ extension ChatController {
         guard chat != nil else { return }
         onComposerSubmit(draft: ComposerDraft(text: text)) {}
     }
+
+    /// Files another app opened with Apelin (`SampleInbox`), for this
+    /// conversation's composer. Each is read here, where its draft is, and
+    /// its staged copy is removed once it is attached; one that cannot be
+    /// attached stays where the notice names it.
+    func receiveSamples(_ samples: [StagedSample]) {
+        guard let chat, !samples.isEmpty else { return }
+        let chatID = chat.id
+        let draftID = composer.draft.id
+        Task { @MainActor in
+            var problems: [String] = []
+            for sample in samples {
+                do {
+                    let attachment = try await Task.detached(priority: .userInitiated) {
+                        try ComposerAttachmentImport.readAttachment(at: sample.url, name: sample.name)
+                    }.value
+                    if insert(attachment, in: chatID, draft: draftID) {
+                        try? FileManager.default.removeItem(at: sample.url.deletingLastPathComponent())
+                    }
+                } catch {
+                    problems.append("\(sample.name): \(error.readableMessage)\n\(sample.url.path)")
+                }
+            }
+            if !problems.isEmpty {
+                presentNotice(title: "Unable to Import File", message: problems.joined(separator: "\n"))
+            }
+        }
+    }
+
+    /// `attachment` joins `chatID`'s composer when it is the one on the page,
+    /// else its saved draft, as a picker's does. False when neither took it,
+    /// and the staged copy is kept.
+    private func insert(_ attachment: ComposerAttachment, in chatID: UUID, draft draftID: UUID) -> Bool {
+        if chat?.id == chatID, composer.draft.id == draftID {
+            composer.insertAttachment(attachment)
+            return true
+        }
+        if var draft = runtime.records[chatID]?.draft, draft.id == draftID {
+            draft.attachments.append(attachment)
+            runtime.saveDraft(draft, for: chatID)
+            return true
+        }
+        return false
+    }
 }
 
 extension ChatController: ComposerView.Delegate {

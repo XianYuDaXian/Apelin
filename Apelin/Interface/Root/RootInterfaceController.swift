@@ -24,6 +24,13 @@ final class RootInterfaceController: UIViewController {
     private var pendingLink: ApelinLink?
     /// A link is being looked up: the launch's own restore waits for it.
     private var isResolvingLink = false
+    /// Files another app opened with Apelin, held until a conversation is on
+    /// the page. A cold launch delivers them before the conversations are
+    /// read, and the welcome page holds them until it ends.
+    private var pendingSamples: [StagedSample] = []
+    /// A delivery is starting a conversation: `newChat` tells the runtime,
+    /// whose change calls back here, and that call must not start another.
+    private var isDeliveringSamples = false
     private lazy var sidebarNavigation = UINavigationController(rootViewController: sidebar)
     /// The conversation page, made once and handed each conversation picked.
     private lazy var chatController: ChatController = {
@@ -70,13 +77,17 @@ final class RootInterfaceController: UIViewController {
         super.init(nibName: nil, bundle: nil)
         sidebar.runtime = chatRuntime
         sidebar.onSelect = { [weak self] chat, picked in self?.open(chat, picked: picked) }
-        sidebar.onProjectsLoaded = { [weak self] in self?.restoreChatIfReady() }
+        sidebar.onProjectsLoaded = { [weak self] in
+            self?.restoreChatIfReady()
+            self?.deliverPendingSamples()
+        }
         // startNewChat has just put that conversation on the page
         sidebar.onSendPrompt = { [weak self] text in self?.chatController.sendPrompt(text) }
         chatRuntime.onChange = { [weak self] in
             guard let self else { return }
             sidebar.refresh()
             restoreChatIfReady()
+            deliverPendingSamples()
             chatController.refreshRuntime()
             ChatWidgetPublisher.shared.chatsChanged()
         }
@@ -336,6 +347,31 @@ final class RootInterfaceController: UIViewController {
 
     // MARK: - The detail column
 
+    /// Files another app opened with Apelin (Filza, Fila, Files, a share
+    /// sheet) join the conversation on the page; with none, a new General
+    /// conversation starts for them.
+    func receiveSamples(_ samples: [StagedSample]) {
+        pendingSamples += samples
+        deliverPendingSamples()
+    }
+
+    private func deliverPendingSamples() {
+        guard !isDeliveringSamples, !pendingSamples.isEmpty, chatRuntime.isLoaded, !WelcomeFlow.shouldPresent else {
+            return
+        }
+        isDeliveringSamples = true
+        defer { isDeliveringSamples = false }
+        if chatController.chat == nil {
+            // `open`'s own delivery is held by the guard above; this call
+            // takes the files once the conversation is on the page
+            open(chatRuntime.newChat(project: nil, preferring: nil), picked: true)
+        }
+        guard chatController.chat != nil else { return }
+        let samples = pendingSamples
+        pendingSamples = []
+        chatController.receiveSamples(samples)
+    }
+
     /// The picked conversation on the one conversation page. With none
     /// left picked, beside the sidebar the column shows the icon, and behind
     /// a drawer a new conversation. The page is put back at the root only
@@ -361,6 +397,7 @@ final class RootInterfaceController: UIViewController {
         if picked, drawerProgress > 0 {
             setDrawerOpen(false)
         }
+        deliverPendingSamples()
     }
 
     /// Opens an `apelin://` link: its conversation, in its project, as if

@@ -1994,6 +1994,32 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   split view, borrowing the five-field apps' designs — a privileged process
   handing back a file descriptor for editing among them.
 
+### Samples from other apps (2026-10-25)
+
+- **A file another app opens with Apelin joins a conversation.** The app
+  declares `public.data` and `public.content` at `LSHandlerRank` Alternate in
+  `CFBundleDocumentTypes`, beside the three transfer types it owns, so
+  Filza's and Fila's share sheets and Files' Open in offer Apelin for any
+  file. uikittools' triggers register the bundle after install; no maintainer
+  hook calls `uicache` (`make check` refuses one).
+- **The opener's URL is copied before anything reads it.** `SampleInbox`
+  copies a regular file into `Samples/Inbox/<uuid>/<name>` under the app's
+  data folder; a folder or a symbolic link is refused, the source path is
+  made canonical (`realpath`) after `lstat` proves the final component is a
+  regular file, and the name is cleaned of separators, control characters and
+  a leading dot. The copy is capped at 256 MB, because an attachment may not
+  exceed 32 MB and a copy that can only be refused must not fill the disk.
+- **Delivery waits for a conversation.** `RootInterfaceController` holds the
+  copies until the chat runtime is read and a conversation is on the page —
+  the launch's saved one, or a new General one — then hands them to
+  `ChatController`, which reads each into the composer's attachment list and
+  removes the copy once attached. A file over 32 MB stays staged and the
+  notice names its path.
+- **No share extension.** Document types cover a single file handed to the
+  app; Photos multi-select, web pages and several files at once need a
+  `com.apple.share-services` extension with its own target, App Group handoff
+  and packaging, and are not in this version.
+
 ## Layout
 
 ```
