@@ -39,6 +39,8 @@ enum AgentHandler: DomainHandler {
             return await forward(request, AgentCompactRequest.self, host: host) { $0.sessionID }
         case .agentRegenerate:
             return await forward(request, AgentRegenerateRequest.self, host: host) { $0.sessionID }
+        case .agentModelSwitch:
+            return await forward(request, AgentModelSwitchRequest.self, host: host) { $0.sessionID }
         case .agentApprove:
             return await approve(request, host: host)
         case .agentAttach:

@@ -143,6 +143,25 @@ public enum AgentWorker {
                 try await session.regenerate()
                 return Acknowledged()
             }
+        case .agentModelSwitch:
+            await WorkerMain.serve(AgentModelSwitchRequest.self, request) { change in
+                let session = try await state.session(change.sessionID)
+                // Mid-run: the answer in flight is not touched, the next
+                // request of the turn reads the new model.
+                try await session.switchModel(
+                    provider: AgentWorker.provider(AgentOpenRequest(provider: change.provider, model: change.model)),
+                    thinking: .init(rawValue: change.reasoningEffort?.rawValue ?? "off") ?? .off,
+                    serviceTier: AgentWorker.serviceTier(change.serviceTier),
+                    credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
+                )
+                await state.modelChoice.set(
+                    provider: change.provider,
+                    model: change.model,
+                    reasoningEffort: change.reasoningEffort,
+                    serviceTier: change.serviceTier,
+                )
+                return Acknowledged()
+            }
         case .agentApprove:
             await WorkerMain.serve(AgentApproveRequest.self, request) { approve in
                 try await state.approve(approve)
