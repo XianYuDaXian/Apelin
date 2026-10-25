@@ -709,6 +709,22 @@ let compactionReplay = history + [event(13, "compactionStarted"), event(14, "com
 precondition(compacted.take(compactionReplay).isEmpty, "a compaction in the history is part of the replay")
 let asked = compacted.take([event(15, "compactionStarted"), event(16, "compactionFinished", ["outcome": .string("tooShort")])])
 precondition(asked.map(\.kind) == ["compactionStarted", "compactionFinished"], "the one asked for after a reopen is taken")
+// A retry reopens with no user message after it: the `regenerated` event
+// ends the replay; one already in the history is not new.
+var retried = ChatRecord(summary: ChatSummary(title: "Retry", updated: Date()))
+retried.task = TaskHandle(taskID: .make(), kind: .agent)
+retried.events = history + [event(13, "regenerated")]
+retried.reopen(as: TaskHandle(taskID: .make(), kind: .agent))
+let retryReplay = history + [event(13, "regenerated")]
+precondition(retried.take(retryReplay).isEmpty, "a retry in the history is part of the replay")
+let newTurn = retried.take([
+    event(14, "regenerated"),
+    event(15, "messageStarted"),
+    event(16, "text", ["text": .string("Again")]),
+    event(17, "finished"),
+])
+precondition(newTurn.map(\.kind) == ["regenerated", "messageStarted", "text", "finished"],
+             "the retry after a reopen is taken")
 print("ok: a reopened session's replay is read past, and the conversation keeps its rows")
 
 /// A name the reader gives a conversation is kept: the agent's `title`
