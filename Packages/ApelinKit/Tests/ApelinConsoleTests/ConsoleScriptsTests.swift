@@ -14,6 +14,7 @@ final class ConsoleScriptsTests: XCTestCase {
     /// unless a script truly cannot reach one.
     private static let notScripted: [AppOperation: String] = [
         .agentAPIConfiguration: "Only the editing form may read saved API keys; the console refuses it before sending.",
+        .agentRegenerate: "The app's retry button sends it, and a script has no reply it may drop without a provider answer.",
         .gitCredentialSet: "A git credential comes only from Sign In with GitHub in Settings ▸ Git; the console refuses it before sending.",
     ]
 
