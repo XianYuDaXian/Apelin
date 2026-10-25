@@ -878,13 +878,19 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   for headless runs) ride on it. The tier last chosen is kwwk's
   `AgentState.serviceTier` (kwwk 0.1.100), which its loop sends with every
   turn; the agent keeps kwwk's own stream, so native compaction stays on.
-  Prompt, steer, abort, compact, approve and close go
+  Prompt, steer, abort, compact, regenerate, approve and close go
   to that session's running worker and to no other. `agentCompact` (the
   app's alone, 2026-10-24) compacts the conversation between runs with
   kwwk's own compactor, as it does when the context fills — natively where
   the provider can —, answers once begun (`conflict` while a run or
   another compaction goes), writes the transcript when done, holds back a
-  message sent meanwhile until it ends, and stops on `agentAbort`. Task events: `prompt`, `title` {text},
+  message sent meanwhile until it ends, and stops on `agentAbort`.
+  `agentRegenerate` (the app's alone, 2026-10-25) drops the last reply and
+  answers again from what is left: the prompt and every tool result stay,
+  the last assistant message is rewritten out of `transcript.json`, and a
+  new run starts at once. Refused `conflict` while a run or a compaction
+  goes, when the last thing said is not a reply, and when that reply still
+  carries tool calls. Task events: `prompt`, `title` {text},
   `projectNameSuggested` {name} (only a concrete project intent),
   `steer`, `queued` {id, text, attachments} (a message sent while a run
   goes, handed to the run as a steer and recorded as its `prompt` of the
@@ -893,7 +899,9 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   messages a run that was stopped, failed or had just ended never took,
   cleared from kwwk's steering queue too so no later run reads them; the
   app puts their text back in an empty composer), `messageStarted`, `toolCallPreparing` (the model began writing a
-  call, which `toolCall` follows once its arguments are whole), `text` and `thinking` (streamed text coalesced
+  call, which `toolCall` follows once its arguments are whole), `regenerated`
+  (the last reply was dropped and a new turn follows; the app removes that
+  reply's row), `text` and `thinking` (streamed text coalesced
   to ≥ 512 bytes or 250 ms), `received` {tokens} (the output tokens the
   run has received so far: what streams of a message — text, thinking and
   a call's arguments alike — estimated by ApelinProtocol's

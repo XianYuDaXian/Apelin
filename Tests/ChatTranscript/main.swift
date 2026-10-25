@@ -875,6 +875,52 @@ precondition(earlierTitles == callTitles(earlierNames.compactMap { AgentToolName
 precondition(!earlierTitles.contains { $0.contains("_") }, "an earlier name is titled, not spelled out")
 print("ok: calls recorded under the earlier tool names read as today's do")
 
+/// A reply asked again: the session's `regenerated` event drops its row, and
+/// the new turn streams in its place. The thinking before it stays a
+/// summary, never the reply's text.
+func checkRegenerate() {
+    let promptID = UUID()
+    var events = [
+        event(1, "prompt", ["id": .string(promptID.uuidString), "text": .string("Why?")]),
+        event(2, "messageStarted"),
+        event(3, "thinking", ["text": .string("Let me think.")]),
+        event(4, "text", ["text": .string("First answer")]),
+        event(5, "message", ["text": .string("First answer")]),
+        event(6, "finished", ["reason": .string("completed")]),
+    ]
+    var transcript = ChatTranscript(events: events) { _ in nil }
+    precondition(transcript.messages.last?.role == .assistant)
+    precondition(transcript.messages.last?.canRetry == true, "an idle last reply can be asked again")
+    precondition(transcript.messages.filter { $0.role == .assistant }.map(\.text) == ["First answer"])
+    precondition(!transcript.messages.contains { $0.role == .assistant && $0.text.contains("Let me think.") },
+                 "the thinking is a summary, not the reply")
+
+    // The event alone, before the new turn: the old reply is gone and the
+    // turn reads as working.
+    let between = ChatTranscript(events: Array(events.prefix(7))) { _ in nil }
+    precondition(between.isWorking)
+    precondition(!between.messages.contains { $0.role == .assistant && $0.text.contains("First answer") })
+    precondition(between.messages.contains { $0.role == .thinking })
+
+    events += [
+        event(7, "regenerated"),
+        event(8, "messageStarted"),
+        event(9, "text", ["text": .string("Second answer")]),
+        event(10, "message", ["text": .string("Second answer")]),
+        event(11, "finished", ["reason": .string("completed")]),
+    ]
+    transcript = ChatTranscript(events: events) { _ in nil }
+    precondition(transcript.messages.last?.role == .assistant)
+    precondition(transcript.messages.last?.text == "Second answer")
+    precondition(transcript.messages.last?.canRetry == true)
+    precondition(transcript.messages.filter { $0.role == .assistant }.map(\.text) == ["Second answer"],
+                 "the first answer's row is gone")
+    precondition(transcript.messages.filter { $0.role == .user }.count == 1, "the prompt stays")
+    print("ok: a reply asked again leaves its row and the new turn takes its place")
+}
+
+checkRegenerate()
+
 checkTranscriptFold()
 
 checkToolCallDetail()

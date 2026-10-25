@@ -534,6 +534,54 @@ public actor AgentSession {
         }
     }
 
+    /// Drops the last reply and asks the model again from what is left: the
+    /// prompt and every tool result before it stay, so the model answers
+    /// again without repeating the tools it ran. Refused while a run or a
+    /// compaction goes, and when the last thing said is not a reply of its
+    /// own (one that still carries tool calls, or a conversation that ends
+    /// elsewhere). The app removes the old reply when it reads `regenerated`;
+    /// the new turn then streams as any other.
+    public func regenerate() async throws {
+        guard runTask == nil, compaction == nil else {
+            throw ApelinError(.conflict, "Wait for the current reply to finish, then try again.")
+        }
+        var messages = agent.state.messages
+        guard let last = messages.lastIndex(where: { $0.role != .system }),
+              case let .assistant(assistant) = messages[last],
+              !assistant.content.contains(where: { block in
+                  if case .toolCall = block { return true }
+                  return false
+              })
+        else {
+            throw ApelinError(.conflict, "The last thing said is not a reply that can be tried again.")
+        }
+        messages.removeSubrange(last...)
+        guard let previous = messages.last(where: { $0.role != .system }), previous.role != .assistant else {
+            throw ApelinError(.conflict, "There is nothing before this reply to answer again.")
+        }
+        // Nothing a stopped run left may reach the new one.
+        agent.clearSteeringQueue()
+        agent.clearFollowUpQueue()
+        agent.state.messages = messages
+        do {
+            try await log.writeTranscript(messages)
+        } catch {
+            throw ApelinError(.internal, "Unable to save the conversation history: \(error.localizedDescription)")
+        }
+        aborted = false
+        runEnding = false
+        await record(.regenerated)
+        let agent = agent
+        runTask = Task { [weak self] in
+            do {
+                try await agent.continue()
+            } catch {
+                await self?.recordRunError(error)
+            }
+            await self?.runEnded()
+        }
+    }
+
     private static func runCompaction(_ agent: Agent, sessionID: String) async -> AgentContextCompactionOutcome {
         do {
             return try await agent.withMaintenance { cancellation in
