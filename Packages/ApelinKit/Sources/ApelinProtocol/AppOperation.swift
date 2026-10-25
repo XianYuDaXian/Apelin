@@ -74,6 +74,7 @@ public enum AppOperation: String, Codable, CaseIterable, Sendable {
     case agentAPIConfiguration
     case agentModelList
     case agentModelActivate
+    case agentModelSwitch
     case agentSignIn
     case agentSignInRespond
     case agentSignInCancel
@@ -121,7 +122,7 @@ public enum AppOperation: String, Codable, CaseIterable, Sendable {
              .agentAttach, .agentList,
              .agentClose, .agentRunCode, .agentCredentialImport, .agentAccountList, .agentSkillList,
              .agentAPIConfiguration, .agentModelList,
-             .agentModelActivate, .agentSignIn, .agentSignInRespond, .agentSignInCancel, .agentSignOut:
+             .agentModelActivate, .agentModelSwitch, .agentSignIn, .agentSignInRespond, .agentSignInCancel, .agentSignOut:
             .agent
         case .toolHostOpen, .toolHostClose, .toolHostCall: .toolHost
         case .gitStatus, .gitDiff, .gitStage, .gitUnstage, .gitCommit, .gitClone, .gitCloneInto, .gitFetch, .gitPull,
@@ -189,6 +190,7 @@ public enum AppOperation: String, Codable, CaseIterable, Sendable {
         case .agentAPIConfiguration: AgentAPIConfigurationRequest.self
         case .agentModelList: AgentModelListRequest.self
         case .agentModelActivate: AgentModelActivateRequest.self
+        case .agentModelSwitch: AgentModelSwitchRequest.self
         case .agentSignIn: AgentSignInRequest.self
         case .agentSignInRespond: AgentSignInRespondRequest.self
         case .agentSignInCancel: AgentSignInCancelRequest.self

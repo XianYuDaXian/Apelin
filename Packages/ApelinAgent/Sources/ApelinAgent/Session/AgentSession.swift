@@ -5,6 +5,42 @@ import KWWKAgent
 import KWWKAI
 import KWWKMCP
 
+/// The model a running turn's next request uses. kwwk's loop fixes its
+/// configuration when a run starts, so the stream function reads this
+/// instead; a switch made while the answer streams lands at the next request.
+private actor LiveModel {
+    struct Snapshot: Sendable {
+        var model: Model
+        var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
+        var thinking: ThinkingLevel
+        var serviceTier: ServiceTier?
+    }
+
+    private var snapshot: Snapshot
+
+    init(
+        model: Model,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
+        thinking: ThinkingLevel,
+        serviceTier: ServiceTier?,
+    ) {
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier)
+    }
+
+    func current() -> Snapshot {
+        snapshot
+    }
+
+    func update(
+        model: Model,
+        authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
+        thinking: ThinkingLevel,
+        serviceTier: ServiceTier?,
+    ) {
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier)
+    }
+}
+
 /// One agent session: the core of an `apelin-agent` process.
 ///
 /// It owns a kwwk `Agent` with the §7 tools, puts every call through the
@@ -20,6 +56,9 @@ public actor AgentSession {
     public nonisolated let log: SessionEventLog
 
     private let agent: Agent
+    /// What the running turn's next request reads, which the reader can
+    /// change without stopping the answer (`switchModel`).
+    private let liveModel: LiveModel
     private let gate: ApprovalGate
     private let runner: ToolRunner
     private let mcpManager: MCPManager?
@@ -30,6 +69,17 @@ public actor AgentSession {
     private var runEnding = false
     /// A compaction the app asked for; no run starts until it ends.
     private var compaction: Task<Void, Never>?
+    /// A model switch made while a run goes: the running turn's next
+    /// requests read it from `liveModel`, and the agent's own state takes it
+    /// when the run ends, so nothing reads a half-changed state mid-turn.
+    private var pendingSwitch: PendingSwitch?
+
+    private struct PendingSwitch: Sendable {
+        var model: Model
+        var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
+        var thinking: ThinkingLevel
+        var serviceTier: ServiceTier?
+    }
     /// What the model was last resolved from. The same provider and stored
     /// sign-in keep that resolution: resolving again exchanges some
     /// providers' tokens over the network, before the message is recorded.
@@ -129,6 +179,48 @@ public actor AgentSession {
         let snapshot = PromptState.read(configuration, root: root, skills: skills.skills)
         let systemPrompt = Self.systemPrompt(configuration, root: root, state: snapshot)
 
+        let liveModel = LiveModel(
+            model: resolved.model,
+            authResolver: resolved.authResolver,
+            thinking: configuration.thinking,
+            serviceTier: configuration.serviceTier,
+        )
+        // The loop fixes the model when the run starts; this reads the live
+        // one at every request, so a switch during the answer lands at the
+        // next step and nothing in flight is touched.
+        let streamFn: StreamFn = { _, context, options in
+            let live = await liveModel.current()
+            var model = live.model
+            var options = options ?? StreamOptions()
+            if let resolver = live.authResolver {
+                let auth = try await resolver(model, options.sessionId)
+                options.resolvedAuth = auth
+                options.apiKey = auth?.token
+                if let metadata = auth?.metadata, !metadata.isEmpty {
+                    options.metadata = metadata
+                } else {
+                    options.metadata = nil
+                }
+                if let baseURL = auth?.baseURL, !baseURL.isEmpty {
+                    model.baseURL = baseURL
+                }
+            } else {
+                options.resolvedAuth = nil
+                options.apiKey = nil
+                options.metadata = nil
+            }
+            // The loop built its reasoning level for the model the run
+            // started with; a model that cannot reason must not be sent one.
+            // A level the loop left nil (its final-tool turn) stays nil.
+            if !model.reasoning {
+                options.reasoning = nil
+                options.thinkingBudgets = nil
+            } else if options.reasoning != nil {
+                options.reasoning = live.thinking == .off ? nil : Self.reasoningLevel(live.thinking)
+            }
+            options.serviceTier = live.serviceTier
+            return try await KWWKAI.stream(model: model, context: context, options: options)
+        }
         let agent = Agent(options: AgentOptions(
             initialState: AgentInitialState(
                 systemPrompt: systemPrompt,
@@ -137,6 +229,7 @@ public actor AgentSession {
                 tools: runner.agentTools(mcp: mcpTools),
                 messages: transcript,
             ),
+            streamFn: streamFn,
             toolExecution: .sequential,
             sessionId: configuration.id,
             cwd: root.path,
@@ -151,6 +244,7 @@ public actor AgentSession {
         self.configuration = configuration
         self.log = log
         self.agent = agent
+        self.liveModel = liveModel
         self.gate = gate
         self.runner = runner
         self.mcpManager = mcpManager
@@ -197,6 +291,59 @@ public actor AgentSession {
     }
 
     // MARK: - Control
+
+    /// Switches the model the running turn's next request uses. Unlike
+    /// `configure`, this is allowed mid-run: the request in flight finishes
+    /// with the old model, and the next one reads the new model, so the
+    /// answer is not interrupted.
+    public func switchModel(
+        provider: ProviderConfiguration,
+        thinking: ThinkingLevel,
+        serviceTier: ServiceTier? = nil,
+        credentials: any CredentialSource,
+    ) async throws {
+        let resolved = try await ProviderResolver.resolve(provider, credentials: credentials)
+        resolvedFrom = (provider, resolved.credentials)
+        let change = PendingSwitch(
+            model: resolved.model,
+            authResolver: resolved.authResolver,
+            thinking: thinking,
+            serviceTier: serviceTier,
+        )
+        // The stream function reads this for the rest of the running turn.
+        await liveModel.update(
+            model: change.model,
+            authResolver: change.authResolver,
+            thinking: change.thinking,
+            serviceTier: change.serviceTier,
+        )
+        if runTask == nil {
+            apply(change)
+        } else {
+            pendingSwitch = change
+        }
+    }
+
+    /// The agent's own state, which a new run reads when its loop is built.
+    /// Called only with no run going.
+    private func apply(_ change: PendingSwitch) {
+        agent.state.model = change.model
+        agent.state.thinkingLevel = change.thinking
+        agent.state.serviceTier = change.serviceTier
+        agent.authResolver = change.authResolver
+    }
+
+    private static func reasoningLevel(_ level: ThinkingLevel) -> ReasoningLevel? {
+        switch level {
+        case .off: nil
+        case .minimal: .minimal
+        case .low: .low
+        case .medium: .medium
+        case .high: .high
+        case .xhigh: .xhigh
+        case .max: .max
+        }
+    }
 
     /// Each prompt carries the app's current setting, including an existing
     /// session. The model reads it in the next message's `<system-state>`;
@@ -832,6 +979,10 @@ public actor AgentSession {
         await record(.finished(reason: reason))
         runTask = nil
         runEnding = false
+        if let change = pendingSwitch {
+            pendingSwitch = nil
+            apply(change)
+        }
     }
 
     /// An assistant message's text blocks, joined with nothing between them.
