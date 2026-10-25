@@ -65,6 +65,9 @@ final class ChatController: UIViewController {
     private var attachmentImport: ComposerAttachmentImport?
     /// A retry is on its way to the session; another tap waits for it.
     private var isRetrying = false
+    /// The model switch already sent to the running turn, so a selection
+    /// notification does not send it twice.
+    private var appliedSwitch: (provider: AgentProvider, model: String, effort: AgentReasoningEffort?, tier: AgentServiceTier?)?
     private var modelButton: UIButton {
         composer.modelBar.button
     }
@@ -476,6 +479,9 @@ final class ChatController: UIViewController {
     }
 
     private func showTranscript(_ items: [ChatMessage]) {
+        if chat?.isWorking != true {
+            appliedSwitch = nil
+        }
         // A retry is on its way: once the turn is working, or its reply is
         // no longer retryable, another tap can be taken again.
         if isRetrying, (chat?.isWorking == true || !items.contains(where: { $0.canRetry })) {
@@ -495,6 +501,25 @@ final class ChatController: UIViewController {
         composer.modelBar.setModelName(selection?.model)
         composer.modelBar.setEfforts(selection?.supportedEfforts ?? [], selected: selection?.effort)
         composer.modelBar.setTiers(selection?.supportedTiers ?? [], selected: selection?.tier)
+        applyModelWhileWorking(selection)
+    }
+
+    /// A switch during a run lands at the next request of that run; the
+    /// answer in flight is not interrupted. Idle, the next prompt carries it.
+    private func applyModelWhileWorking(_ selection: ComposerModelSelection?) {
+        guard let chat, chat.isWorking, let selection else { return }
+        let key = (selection.provider, selection.model, selection.effort, selection.tier)
+        if let appliedSwitch, appliedSwitch == key { return }
+        appliedSwitch = key
+        let id = chat.id
+        Task {
+            do {
+                try await runtime.switchModel(id, selection)
+            } catch {
+                appliedSwitch = nil
+                presentNotice(title: "Models Unavailable", message: error.readableMessage)
+            }
+        }
     }
 
     /// A model disabled in Settings stops being the one the next message uses.

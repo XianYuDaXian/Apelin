@@ -454,6 +454,7 @@ do {
     // Accounts are the app's alone: a session's agent never starts, answers
     // or reads a sign-in, and never lists or forgets an account.
     for operation: AppOperation in [.protectedEditOpen, .protectedEditCommit, .ptyOpen, .ptyAttach, .agentApprove, .agentSteer, .agentCompact,
+                                    .agentRegenerate, .agentModelSwitch,
                                     .toolchainRemove, .sdkRemove, .environmentCancel,
                                     .agentAccountList, .agentAPIConfiguration, .agentModelList, .agentModelActivate, .agentSignIn, .agentSignInRespond, .agentSignInCancel, .agentSignOut,
                                     .agentCredentialImport, .transferExport, .transferInspect, .transferImport]

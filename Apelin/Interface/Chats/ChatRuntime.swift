@@ -375,6 +375,21 @@ final class ChatRuntime {
         )
     }
 
+    /// A model picked while the answer streams: the session's next request
+    /// reads it, and the turn goes on. The request in flight is untouched.
+    func switchModel(_ id: UUID, _ selection: ComposerModelSelection) async throws {
+        // Only a session this app is following can take it; one not yet
+        // attached gets the selection with the next open or prompt.
+        guard let sessionID = records[id]?.sessionID, readers[id] != nil else { return }
+        try await ApelinService.app.agentModelSwitch(
+            sessionID: sessionID,
+            provider: selection.provider,
+            model: selection.model,
+            reasoningEffort: selection.effort,
+            serviceTier: selection.tier,
+        )
+    }
+
     /// Between runs only: a session to compact, nothing running, waiting
     /// for an approval or on its way to the host.
     func canCompact(_ id: UUID) -> Bool {

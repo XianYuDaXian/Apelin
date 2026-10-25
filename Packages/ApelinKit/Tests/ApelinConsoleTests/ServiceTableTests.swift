@@ -133,6 +133,10 @@ final class ServiceTableTests: XCTestCase {
             return Row(reply: ack) { try await $0.agentCompact(sessionID: "s") }
         case .agentRegenerate:
             return Row(reply: ack) { try await $0.agentRegenerate(sessionID: "s") }
+        case .agentModelSwitch:
+            return Row(reply: ack) {
+                try await $0.agentModelSwitch(sessionID: "s", provider: .openAICompatible, model: "m")
+            }
         case .agentApprove:
             return Row(reply: ack) { try await $0.agentApprove(sessionID: "s", approvalID: "a", decision: .deny) }
         case .agentAttach:

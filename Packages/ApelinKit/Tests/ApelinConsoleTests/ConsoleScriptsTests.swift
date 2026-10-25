@@ -15,6 +15,7 @@ final class ConsoleScriptsTests: XCTestCase {
     private static let notScripted: [AppOperation: String] = [
         .agentAPIConfiguration: "Only the editing form may read saved API keys; the console refuses it before sending.",
         .agentRegenerate: "The app's retry button sends it, and a script has no reply it may drop without a provider answer.",
+        .agentModelSwitch: "The composer sends it when the reader switches model mid-answer; a script has no running turn to switch.",
         .gitCredentialSet: "A git token is typed only in Settings ▸ Git; the console refuses it before sending.",
     ]
 

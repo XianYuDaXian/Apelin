@@ -355,6 +355,32 @@ public struct AgentCompactRequest: OperationRequest {
     }
 }
 
+/// The model the running turn's next request uses. The answer in flight is
+/// not interrupted: the switch is read between model requests, so the next
+/// step answers with the new model and the turn goes on. The app's alone.
+public struct AgentModelSwitchRequest: OperationRequest {
+    public typealias Response = Acknowledged
+    public static let operation = AppOperation.agentModelSwitch
+    public var sessionID: String
+    public var provider: AgentProvider
+    public var model: String
+    public var reasoningEffort: AgentReasoningEffort?
+    public var serviceTier: AgentServiceTier?
+    public init(
+        sessionID: String,
+        provider: AgentProvider,
+        model: String,
+        reasoningEffort: AgentReasoningEffort? = nil,
+        serviceTier: AgentServiceTier? = nil,
+    ) {
+        self.sessionID = sessionID
+        self.provider = provider
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.serviceTier = serviceTier
+    }
+}
+
 /// Drops the last reply and asks the model again from the same context: the
 /// prompt and every tool result before it stay, so the model answers again
 /// without repeating what it did. The app's alone, between runs: refused
@@ -511,6 +537,22 @@ public extension ApelinService {
         serviceTier: AgentServiceTier? = nil,
     ) async throws {
         _ = try await send(AgentRegenerateRequest(
+            sessionID: sessionID,
+            provider: provider,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+        ))
+    }
+
+    func agentModelSwitch(
+        sessionID: String,
+        provider: AgentProvider,
+        model: String,
+        reasoningEffort: AgentReasoningEffort? = nil,
+        serviceTier: AgentServiceTier? = nil,
+    ) async throws {
+        _ = try await send(AgentModelSwitchRequest(
             sessionID: sessionID,
             provider: provider,
             model: model,
