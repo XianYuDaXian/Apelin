@@ -26,6 +26,8 @@ struct ChatRecord: Codable, Sendable {
 struct SessionReplay: Codable, Sendable {
     private static let userMessageKinds: Set<String> = ["prompt", "steer"]
     private static let compactionKind = "compactionStarted"
+    /// A reply asked again is new even though no user message follows it.
+    private static let retryKind = "regenerated"
 
     /// How far the task has been read.
     var cursor = EventSeq.start
@@ -36,6 +38,8 @@ struct SessionReplay: Codable, Sendable {
     /// The compactions still to come again. Absent from older files, which
     /// have none.
     private var compactions: Int?
+    /// The retries still to come again. Absent from older files.
+    private var retries: Int?
 
     /// The replay of a session whose history is `events`.
     init(of events: [TaskEvent]) {
@@ -47,11 +51,19 @@ struct SessionReplay: Codable, Sendable {
             }
         }
         compactions = events.count { $0.kind == Self.compactionKind }
+        retries = events.count { $0.kind == Self.retryKind }
     }
 
     /// Whether `event` is still part of the replay, counting off the user
     /// message it repeats.
     mutating func replays(_ event: TaskEvent) -> Bool {
+        if event.kind == Self.retryKind {
+            // A retry has no user message after it: this is what ends the
+            // replay when the conversation asked for its last reply again.
+            guard let remaining = retries, remaining > 0 else { return false }
+            retries = remaining - 1
+            return true
+        }
         if event.kind == Self.compactionKind {
             guard let remaining = compactions, remaining > 0 else { return false }
             compactions = remaining - 1

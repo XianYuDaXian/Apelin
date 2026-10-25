@@ -517,6 +517,11 @@ final class ChatController: UIViewController {
     }
 
     private func showTranscript(_ items: [ChatMessage]) {
+        // A retry is on its way: once the turn is working, or its reply is
+        // no longer retryable, another tap can be taken again.
+        if isRetrying, (chat?.isWorking == true || !items.contains(where: { $0.canRetry })) {
+            isRetrying = false
+        }
         if let page = tracePage, let message = items.first(where: { $0.id == page.messageID }) {
             page.show(message)
         }
@@ -677,10 +682,10 @@ extension ChatController {
         isRetrying = true
         let id = chat.id
         Task {
-            defer { isRetrying = false }
             do {
                 try await runtime.regenerate(id)
             } catch {
+                isRetrying = false
                 presentNotice(title: "Unable to Try Again", message: error.readableMessage)
             }
         }
