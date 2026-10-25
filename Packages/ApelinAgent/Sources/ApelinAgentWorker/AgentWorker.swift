@@ -123,7 +123,24 @@ public enum AgentWorker {
             }
         case .agentRegenerate:
             await WorkerMain.serve(AgentRegenerateRequest.self, request) { regenerate in
-                try await state.session(regenerate.sessionID).regenerate()
+                let session = try await state.session(regenerate.sessionID)
+                // The reply is asked again with the model the composer shows
+                // now, not the one the session was opened with.
+                if let provider = regenerate.provider {
+                    try await session.configure(
+                        provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: regenerate.model)),
+                        thinking: .init(rawValue: regenerate.reasoningEffort?.rawValue ?? "off") ?? .off,
+                        serviceTier: AgentWorker.serviceTier(regenerate.serviceTier),
+                        credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
+                    )
+                    await state.modelChoice.set(
+                        provider: provider,
+                        model: regenerate.model,
+                        reasoningEffort: regenerate.reasoningEffort,
+                        serviceTier: regenerate.serviceTier,
+                    )
+                }
+                try await session.regenerate()
                 return Acknowledged()
             }
         case .agentApprove:
