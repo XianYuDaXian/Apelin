@@ -51,6 +51,9 @@ struct ChatMessage: Identifiable, Hashable {
     var attachments: [ComposerAttachment]
     /// A user message sent during a run that the run has not taken yet.
     var isQueued = false
+    /// The conversation's last reply, with nothing running: it can be asked
+    /// again (`agentRegenerate`).
+    var canRetry = false
     /// A user message another conversation's agent sent: the line shown
     /// over the bubble naming that conversation.
     var sender: String?

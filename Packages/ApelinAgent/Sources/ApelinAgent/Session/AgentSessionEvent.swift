@@ -30,6 +30,10 @@ public enum AgentSessionEvent: Sendable, Hashable, Codable {
     case toolCallPreparing
     /// The assistant message is complete; `text` is all of its text.
     case messageFinished(text: String)
+    /// The app asked to try the last reply again: that reply is out of the
+    /// conversation, and the next turn re-answers from what is left. The app
+    /// drops the row it showed when it reads this.
+    case regenerated
     /// The output tokens the run has received so far (`OutputTally`):
     /// recorded a few times a second while a message streams, and when it
     /// ends, at the provider's count where it gave one.

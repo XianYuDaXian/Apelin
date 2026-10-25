@@ -252,6 +252,7 @@ final class ChatController: UIViewController {
                     let chatID = self?.chat?.id
                     row.attachmentHeightLimit = self?.attachmentHeightLimit ?? 0
                     row.show(message, isStreaming: self?.chat?.isWorking == true)
+                    row.onRetry = { [weak self] in self?.retryLastAnswer() }
                     row.onAttachmentLayoutChanged = { [weak self] in
                         guard let self, chat?.id == chatID else { return }
                         messageList.reconfigureRow(with: message.id)
@@ -665,6 +666,20 @@ extension ChatController {
     func sendPrompt(_ text: String) {
         guard chat != nil else { return }
         onComposerSubmit(draft: ComposerDraft(text: text)) {}
+    }
+
+    /// Asks the session to drop its last reply and answer again; the list
+    /// drops the old row when the session's `regenerated` event arrives.
+    func retryLastAnswer() {
+        guard let chat, !chat.isWorking else { return }
+        let id = chat.id
+        Task {
+            do {
+                try await runtime.regenerate(id)
+            } catch {
+                presentNotice(title: "Unable to Try Again", message: error.readableMessage)
+            }
+        }
     }
 
     /// Files another app opened with Apelin (`SampleInbox`), for this

@@ -355,6 +355,21 @@ public struct AgentCompactRequest: OperationRequest {
     }
 }
 
+/// Drops the last reply and asks the model again from the same context: the
+/// prompt and every tool result before it stay, so the model answers again
+/// without repeating what it did. The app's alone, between runs: refused
+/// `conflict` while a run goes, and when the last thing said is not a reply
+/// or still carries tool calls. The session's task says what happened:
+/// `regenerated`, then the new turn as any other.
+public struct AgentRegenerateRequest: OperationRequest {
+    public typealias Response = Acknowledged
+    public static let operation = AppOperation.agentRegenerate
+    public var sessionID: String
+    public init(sessionID: String) {
+        self.sessionID = sessionID
+    }
+}
+
 /// How a compaction ended: the payload of `compactionFinished`.
 public struct AgentCompactionResult: Codable, Sendable, Hashable {
     public enum Outcome: String, Codable, Sendable, Hashable {
@@ -476,6 +491,10 @@ public extension ApelinService {
 
     func agentCompact(sessionID: String) async throws {
         _ = try await send(AgentCompactRequest(sessionID: sessionID))
+    }
+
+    func agentRegenerate(sessionID: String) async throws {
+        _ = try await send(AgentRegenerateRequest(sessionID: sessionID))
     }
 
     func agentApprove(

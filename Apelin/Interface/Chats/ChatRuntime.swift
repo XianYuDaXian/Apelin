@@ -358,6 +358,14 @@ final class ChatRuntime {
         try await ApelinService.app.agentAbort(sessionID: sessionID)
     }
 
+    /// Drops the conversation's last reply and asks the model again from
+    /// what is left. The session's events remove the old row and stream the
+    /// new turn; nothing is shown here.
+    func regenerate(_ id: UUID) async throws {
+        guard let sessionID = records[id]?.sessionID else { return }
+        try await ApelinService.app.agentRegenerate(sessionID: sessionID)
+    }
+
     /// Between runs only: a session to compact, nothing running, waiting
     /// for an approval or on its way to the host.
     func canCompact(_ id: UUID) -> Bool {
