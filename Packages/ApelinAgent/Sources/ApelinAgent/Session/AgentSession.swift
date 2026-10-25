@@ -183,7 +183,7 @@ public actor AgentSession {
         // The loop fixes the model when the run starts; this reads the live
         // one at every request, so a switch during the answer lands at the
         // next step and nothing in flight is touched.
-        let streamFn: StreamFn = { _, context, given in
+        let streamFn: StreamFn = { loopModel, context, given in
             let live = await liveModel.current()
             var model = live.model
             var options = given ?? StreamOptions()
@@ -204,16 +204,22 @@ public actor AgentSession {
                 options.apiKey = nil
                 options.metadata = nil
             }
-            // The loop built its reasoning level for the model the run
-            // started with; a model that cannot reason must not be sent one.
-            // A level the loop left nil (its final-tool turn) stays nil.
+            // The loop built its reasoning level and tier for the model the
+            // run started with. A model that cannot reason must not be sent
+            // one, and a level the loop left nil (its final-tool turn) stays
+            // nil. Only a switched model changes what the loop built: a
+            // summary call keeps its own level and none of the tier.
+            let switched = model.id != loopModel.id || model.api != loopModel.api
+                || model.provider != loopModel.provider
             if !model.reasoning {
                 options.reasoning = nil
                 options.thinkingBudgets = nil
-            } else if options.reasoning != nil {
-                options.reasoning = live.thinking == .off ? nil : Self.reasoningLevel(live.thinking)
+            } else if switched, options.reasoning != nil {
+                options.reasoning = Self.reasoningLevel(live.thinking)
             }
-            options.serviceTier = live.serviceTier
+            if switched {
+                options.serviceTier = live.serviceTier
+            }
             return try await KWWKAI.stream(model: model, context: context, options: options)
         }
         let agent = Agent(options: AgentOptions(
