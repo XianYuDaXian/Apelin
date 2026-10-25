@@ -31,7 +31,13 @@ private actor LiveModel {
         snapshot
     }
 
-    func update(
+    /// A change that keeps the model, such as the composer's tier.
+    func update(thinking: ThinkingLevel, serviceTier: ServiceTier?) {
+        snapshot.thinking = thinking
+        snapshot.serviceTier = serviceTier
+    }
+
+    func set(
         model: Model,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         thinking: ThinkingLevel,
@@ -177,10 +183,10 @@ public actor AgentSession {
         // The loop fixes the model when the run starts; this reads the live
         // one at every request, so a switch during the answer lands at the
         // next step and nothing in flight is touched.
-        let streamFn: StreamFn = { _, context, options in
+        let streamFn: StreamFn = { _, context, given in
             let live = await liveModel.current()
             var model = live.model
-            var options = options ?? StreamOptions()
+            var options = given ?? StreamOptions()
             if let resolver = live.authResolver {
                 let auth = try await resolver(model, options.sessionId)
                 options.resolvedAuth = auth
@@ -226,6 +232,17 @@ public actor AgentSession {
             authResolver: resolved.authResolver,
         ))
         agent.state.serviceTier = configuration.serviceTier
+        // A stream function of its own costs kwwk's automatic native
+        // compaction; give it back, so a long conversation still compacts
+        // through the provider instead of a summary prompt.
+        agent.autoCompact?.config.nativeCompaction = { model, context, instructions, options in
+            try await KWWKAI.compactNative(
+                model: model,
+                context: context,
+                instructions: instructions,
+                options: options,
+            )
+        }
 
         workspace = root
         resolvedFrom = (configuration.provider, resolved.credentials)
@@ -267,6 +284,7 @@ public actor AgentSession {
             guard runTask == nil else { return }
             agent.state.thinkingLevel = thinking
             agent.state.serviceTier = serviceTier
+            await liveModel.update(thinking: thinking, serviceTier: serviceTier)
             return
         }
         let resolved = try await ProviderResolver.resolve(provider, credentials: credentials)
@@ -275,6 +293,12 @@ public actor AgentSession {
         agent.state.thinkingLevel = thinking
         agent.state.serviceTier = serviceTier
         agent.authResolver = resolved.authResolver
+        await liveModel.set(
+            model: resolved.model,
+            authResolver: resolved.authResolver,
+            thinking: thinking,
+            serviceTier: serviceTier,
+        )
         resolvedFrom = (provider, resolved.credentials)
     }
 
@@ -299,7 +323,7 @@ public actor AgentSession {
             serviceTier: serviceTier,
         )
         // The stream function reads this for the rest of the running turn.
-        await liveModel.update(
+        await liveModel.set(
             model: change.model,
             authResolver: change.authResolver,
             thinking: change.thinking,
