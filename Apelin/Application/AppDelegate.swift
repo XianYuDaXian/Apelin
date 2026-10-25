@@ -1,4 +1,6 @@
 import AlertController
+import ApelinCore
+import ApelinProtocol
 import UIKit
 
 /// Not `@main`: `main.swift` clears saved scenes before `UIApplicationMain`.
@@ -105,11 +107,66 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     /// An `apelin://` link goes to its conversation or project
-    /// (`ApelinLinkRouter`); anything else is a transfer file, and the
-    /// opener refuses what is not one with a notice. One at a time: a
-    /// second sheet could not be presented over the first.
+    /// (`ApelinLinkRouter`); a transfer file is imported by its page; any
+    /// other file was opened with Apelin from Filza, Fila, Files or a share
+    /// sheet, and becomes an attachment on a conversation (`SampleInbox`).
+    /// One link or transfer at a time: a second sheet could not be presented
+    /// over the first.
     private func openURLs(_ contexts: Set<UIOpenURLContext>, in scene: UIWindowScene) {
-        guard let context = contexts.first, !ApelinLinkRouter.open(context.url, in: scene) else { return }
-        TransferOpener.open(context.url, in: scene)
+        var samples: [URL] = []
+        var showedTransfer = false
+        for context in contexts {
+            let url = context.url
+            if ApelinLinkRouter.open(url, in: scene) {
+                continue
+            }
+            if TransferKind(fileName: url.lastPathComponent) != nil {
+                // one page at a time: a second could not be presented over
+                // the first
+                if !showedTransfer {
+                    showedTransfer = true
+                    TransferOpener.open(url, in: scene)
+                }
+                continue
+            }
+            samples.append(url)
+        }
+        guard !samples.isEmpty else { return }
+        receive(samples, in: scene)
+    }
+
+    /// Copies each file out of its opener's shelf first (`SampleInbox`), then
+    /// hands the copies to the conversation page, where they join the shown
+    /// conversation's composer. The copy runs off the main thread: a share
+    /// can be tens of megabytes, and the open call has already returned.
+    private func receive(_ urls: [URL], in scene: UIWindowScene) {
+        guard let root = Self.rootInterface(in: scene) else { return }
+        let folder = DataFolder.app.root
+        Task { @MainActor in
+            var staged: [StagedSample] = []
+            var problems: [String] = []
+            for url in urls {
+                do {
+                    let sample = try await Task.detached(priority: .userInitiated) {
+                        try SampleInbox.stage(url, in: folder)
+                    }.value
+                    staged.append(sample)
+                } catch {
+                    problems.append("\(url.lastPathComponent): \(error.localizedDescription)")
+                }
+            }
+            if !staged.isEmpty {
+                root.receiveSamples(staged)
+            }
+            if !problems.isEmpty {
+                root.presentNotice(title: "Unable to Import File", message: problems.joined(separator: "\n"))
+            }
+        }
+    }
+
+    /// The page that shows the conversations, whichever window carries it.
+    private static func rootInterface(in scene: UIWindowScene) -> RootInterfaceController? {
+        let scenes = [scene] + UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        return scenes.lazy.flatMap(\.windows).compactMap { $0.rootViewController as? RootInterfaceController }.first
     }
 }

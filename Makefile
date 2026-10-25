@@ -393,6 +393,11 @@ harness:
 		"$(ROOT_DIR)/Tests/RoothideRoot/main.swift" \
 		-o "$$harness_dir/roothide-root" && \
 	"$$harness_dir/roothide-root" && echo "ok: RoothideRoot" && \
+xcrun --sdk macosx swiftc -swift-version 5 \
+"$(ROOT_DIR)/Apelin/Application/SampleInbox.swift" \
+"$(ROOT_DIR)/Tests/SampleInbox/main.swift" \
+-o "$$harness_dir/sample-inbox" && \
+"$$harness_dir/sample-inbox" && echo "ok: SampleInbox" && \
 	xcrun --sdk macosx swiftc -swift-version 5 \
 		"$(ROOT_DIR)/Apelin/Interface/Chats/Messages/MessageImageLayout.swift" \
 		"$(ROOT_DIR)/Tests/MessageImageLayout/main.swift" \
