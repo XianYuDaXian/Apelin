@@ -969,7 +969,10 @@ func checkRegenerate() {
     let between = ChatTranscript(events: Array(events.prefix(7))) { _ in nil }
     precondition(between.isWorking)
     precondition(!between.messages.contains { $0.role == .assistant && $0.text.contains("First answer") })
-    precondition(between.messages.contains { $0.role == .thinking })
+    precondition(between.messages.contains { message in
+        if case .thinking = message.role { return true }
+        return false
+    }, "the tools before the dropped reply become a summary")
 
     events += [
         event(7, "regenerated"),
