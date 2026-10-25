@@ -877,7 +877,11 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   first `prompt` and `closeWhenFinished` (the task ends with the first run,
   for headless runs) ride on it. The tier last chosen is kwwk's
   `AgentState.serviceTier` (kwwk 0.1.100), which its loop sends with every
-  turn; the agent keeps kwwk's own stream, so native compaction stays on.
+  turn. The session's stream function reads a live model of its own, so a
+  switch made during a run lands at that run's next request
+  (`agentModelSwitch`); because a stream function of the agent's own costs
+  kwwk's automatic native compaction, the session hands the compactor the
+  provider's native one itself.
   Prompt, steer, abort, compact, regenerate, approve and close go
   to that session's running worker and to no other. `agentCompact` (the
   app's alone, 2026-10-24) compacts the conversation between runs with
