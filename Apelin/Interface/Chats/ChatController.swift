@@ -63,6 +63,8 @@ final class ChatController: UIViewController {
     private var modelLoader: Task<Void, Never>?
     private var selectionCheck: Task<Void, Never>?
     private var attachmentImport: ComposerAttachmentImport?
+    /// A retry is on its way to the session; another tap waits for it.
+    private var isRetrying = false
     private var modelButton: UIButton {
         composer.modelBar.button
     }
@@ -620,9 +622,11 @@ extension ChatController {
     /// Asks the session to drop its last reply and answer again; the list
     /// drops the old row when the session's `regenerated` event arrives.
     func retryLastAnswer() {
-        guard let chat, !chat.isWorking else { return }
+        guard let chat, !chat.isWorking, !isRetrying else { return }
+        isRetrying = true
         let id = chat.id
         Task {
+            defer { isRetrying = false }
             do {
                 try await runtime.regenerate(id)
             } catch {

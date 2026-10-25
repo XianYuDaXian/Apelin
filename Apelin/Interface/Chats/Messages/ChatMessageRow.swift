@@ -50,7 +50,7 @@ final class ChatMessageRow: ListRowView {
     /// Between the reply and its retry button.
     private static let retrySpacing: CGFloat = 6
     /// The button's square.
-    private static let retrySide: CGFloat = 28
+    private static let retrySide: CGFloat = 32
     /// What the button adds to a row.
     static var retryHeight: CGFloat {
         retrySpacing + retrySide
@@ -114,7 +114,7 @@ final class ChatMessageRow: ListRowView {
         addSubview(attachmentsView)
         retryButton.isHidden = true
         retryButton.tintColor = .secondaryLabel
-        let symbol = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        let symbol = UIImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         retryButton.setImage(UIImage(systemName: "arrow.clockwise", withConfiguration: symbol), for: .normal)
         retryButton.accessibilityLabel = String(localized: "Retry")
         retryButton.addAction(UIAction { [weak self] _ in self?.onRetry?() }, for: .touchUpInside)
