@@ -916,7 +916,10 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   `agentRegenerate` (the app's alone, 2026-10-25) drops the last reply and
   answers again from what is left: the prompt and every tool result stay,
   the last assistant message is rewritten out of `transcript.json`, and a
-  new run starts at once. Refused `conflict` while a run or a compaction
+  new run starts at once. The request carries the composer's provider,
+  model, reasoning effort and service tier; the worker configures the
+  session before dropping the reply, so a retry after a switch answers with
+  the new model. Refused `conflict` while a run or a compaction
   goes, when the last thing said is not a reply, and when that reply still
   carries tool calls. Task events: `prompt`, `title` {text},
   `projectNameSuggested` {name} (only a concrete project intent),

@@ -365,7 +365,14 @@ final class ChatRuntime {
     /// the new turn; nothing is shown here.
     func regenerate(_ id: UUID) async throws {
         let opened = try await open(id)
-        try await ApelinService.app.agentRegenerate(sessionID: opened.sessionID)
+        let selection = ComposerModelSelection.current
+        try await ApelinService.app.agentRegenerate(
+            sessionID: opened.sessionID,
+            provider: selection?.provider,
+            model: selection?.model,
+            reasoningEffort: selection?.effort,
+            serviceTier: selection?.tier,
+        )
     }
 
     /// Between runs only: a session to compact, nothing running, waiting
