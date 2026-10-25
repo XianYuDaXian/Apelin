@@ -359,11 +359,13 @@ final class ChatRuntime {
     }
 
     /// Drops the conversation's last reply and asks the model again from
-    /// what is left. The session's events remove the old row and stream the
-    /// new turn; nothing is shown here.
+    /// what is left. The session is reopened first: the host drops one that
+    /// has been idle, and the request has to reach a worker that reads the
+    /// transcript again. The session's events remove the old row and stream
+    /// the new turn; nothing is shown here.
     func regenerate(_ id: UUID) async throws {
-        guard let sessionID = records[id]?.sessionID else { return }
-        try await ApelinService.app.agentRegenerate(sessionID: sessionID)
+        let opened = try await open(id)
+        try await ApelinService.app.agentRegenerate(sessionID: opened.sessionID)
     }
 
     /// Between runs only: a session to compact, nothing running, waiting
