@@ -921,7 +921,12 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   session before dropping the reply, so a retry after a switch answers with
   the new model. Refused `conflict` while a run or a compaction
   goes, when the last thing said is not a reply, and when that reply still
-  carries tool calls. Task events: `prompt`, `title` {text},
+  carries tool calls. `agentModelSwitch` (the app's alone) changes the model
+  of a running turn between model requests: the request in flight finishes
+  with the old model, the next one reads the new one, and the turn goes on.
+  The worker resolves the new provider and credentials, updates the agent's
+  state and the live model its stream function reads, and keeps the choice
+  in `state.modelChoice` for the next open. Task events: `prompt`, `title` {text},
   `projectNameSuggested` {name} (only a concrete project intent),
   `steer`, `queued` {id, text, attachments} (a message sent while a run
   goes, handed to the run as a steer and recorded as its `prompt` of the
