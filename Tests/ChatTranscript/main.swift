@@ -837,7 +837,8 @@ func checkRegenerate() {
 
     // The event alone, before the new turn: the old reply is gone and the
     // turn reads as working.
-    let between = ChatTranscript(events: Array(events.prefix(7))) { _ in nil }
+    events.append(event(7, "regenerated"))
+    let between = ChatTranscript(events: events) { _ in nil }
     precondition(between.isWorking)
     precondition(!between.messages.contains { $0.role == .assistant && $0.text.contains("First answer") })
     precondition(between.messages.contains { message in
@@ -846,7 +847,6 @@ func checkRegenerate() {
     }, "the tools before the dropped reply become a summary")
 
     events += [
-        event(7, "regenerated"),
         event(8, "messageStarted"),
         event(9, "text", ["text": .string("Second answer")]),
         event(10, "message", ["text": .string("Second answer")]),
