@@ -365,8 +365,24 @@ public struct AgentRegenerateRequest: OperationRequest {
     public typealias Response = Acknowledged
     public static let operation = AppOperation.agentRegenerate
     public var sessionID: String
-    public init(sessionID: String) {
+    /// The model the retry answers with, as the composer shows it now: a
+    /// retry after a switch uses the new one, not the session's old one.
+    public var provider: AgentProvider?
+    public var model: String?
+    public var reasoningEffort: AgentReasoningEffort?
+    public var serviceTier: AgentServiceTier?
+    public init(
+        sessionID: String,
+        provider: AgentProvider? = nil,
+        model: String? = nil,
+        reasoningEffort: AgentReasoningEffort? = nil,
+        serviceTier: AgentServiceTier? = nil,
+    ) {
         self.sessionID = sessionID
+        self.provider = provider
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.serviceTier = serviceTier
     }
 }
 
@@ -493,8 +509,20 @@ public extension ApelinService {
         _ = try await send(AgentCompactRequest(sessionID: sessionID))
     }
 
-    func agentRegenerate(sessionID: String) async throws {
-        _ = try await send(AgentRegenerateRequest(sessionID: sessionID))
+    func agentRegenerate(
+        sessionID: String,
+        provider: AgentProvider? = nil,
+        model: String? = nil,
+        reasoningEffort: AgentReasoningEffort? = nil,
+        serviceTier: AgentServiceTier? = nil,
+    ) async throws {
+        _ = try await send(AgentRegenerateRequest(
+            sessionID: sessionID,
+            provider: provider,
+            model: model,
+            reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier,
+        ))
     }
 
     func agentApprove(
