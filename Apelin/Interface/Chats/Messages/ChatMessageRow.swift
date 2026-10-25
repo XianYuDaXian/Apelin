@@ -45,6 +45,16 @@ final class ChatMessageRow: ListRowView {
     private var finishesStreamWhenStill = false
     private var revealObservation: NSKeyValueObservation?
     private let attachmentsView = MessageAttachmentsView()
+    /// Under the last reply, when it can be asked again.
+    private let retryButton = UIButton(type: .system)
+    /// Between the reply and its retry button.
+    private static let retrySpacing: CGFloat = 6
+    /// The button's square.
+    private static let retrySide: CGFloat = 28
+    /// What the button adds to a row.
+    static var retryHeight: CGFloat {
+        retrySpacing + retrySide
+    }
     var attachmentHeightLimit: CGFloat = 0 {
         didSet {
             if attachmentHeightLimit != oldValue {
@@ -60,6 +70,8 @@ final class ChatMessageRow: ListRowView {
     var onAttachmentLayoutChanged: (() -> Void)?
     var onPreview: ((ComposerAttachment) -> Void)?
     var onPreviewImages: (([ComposerAttachment], UUID) -> Void)?
+    /// The last reply's retry button was tapped.
+    var onRetry: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -100,6 +112,13 @@ final class ChatMessageRow: ListRowView {
         attachmentsView.onPreviewImages = { [weak self] items, selectedID in self?.onPreviewImages?(items, selectedID) }
         attachmentsView.onSizeChange = { [weak self] in self?.onAttachmentLayoutChanged?() }
         addSubview(attachmentsView)
+        retryButton.isHidden = true
+        retryButton.tintColor = .secondaryLabel
+        let symbol = UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)
+        retryButton.setImage(UIImage(systemName: "arrow.clockwise", withConfiguration: symbol), for: .normal)
+        retryButton.accessibilityLabel = String(localized: "Retry")
+        retryButton.addAction(UIAction { [weak self] _ in self?.onRetry?() }, for: .touchUpInside)
+        addSubview(retryButton)
         revealObservation = markdownView.streamLabel.observe(\.isAnimating) { [weak self] _, _ in
             // Called while the label is still taking its animation down.
             DispatchQueue.main.async { [weak self] in
@@ -133,6 +152,8 @@ final class ChatMessageRow: ListRowView {
         onAttachmentLayoutChanged = nil
         onPreview = nil
         onPreviewImages = nil
+        onRetry = nil
+        retryButton.isHidden = true
     }
 
     func show(_ message: ChatMessage, isStreaming: Bool = false) {
@@ -193,6 +214,7 @@ final class ChatMessageRow: ListRowView {
         }
         attachments = message.attachments
         attachmentsView.show(attachments, trailing: isUser, animated: isSameMessage)
+        retryButton.isHidden = !message.canRetry
         setNeedsLayout()
     }
 
@@ -246,7 +268,8 @@ final class ChatMessageRow: ListRowView {
             ))
             label.frame = bubble.frame.insetBy(dx: Self.textPadding, dy: Self.textPadding)
         } else {
-            let textHeight = hasText ? max(0, content.height - attachmentHeight - gap) : 0
+            let retryHeight = retryButton.isHidden ? 0 : Self.retryHeight
+            let textHeight = hasText ? max(0, content.height - attachmentHeight - gap - retryHeight) : 0
             markdownView.frame = CGRect(x: content.minX, y: content.minY, width: content.width, height: textHeight)
             markdownView.trackedScrollView = superview as? UIScrollView
             attachmentsView.frame = CGRect(
@@ -255,6 +278,14 @@ final class ChatMessageRow: ListRowView {
                 width: content.width,
                 height: attachmentHeight,
             )
+            if !retryButton.isHidden {
+                retryButton.frame = CGRect(
+                    x: content.minX,
+                    y: content.minY + textHeight + gap + attachmentHeight + Self.retrySpacing,
+                    width: Self.retrySide,
+                    height: Self.retrySide,
+                )
+            }
         }
     }
 
@@ -283,7 +314,8 @@ final class ChatMessageRow: ListRowView {
         )
         let gap = textHeight > 0 && attachmentHeight > 0 ? ChatMarkdownView.blockSpacing : 0
         let senderHeight = user && message.sender != nil ? Self.senderHeight : 0
-        return senderHeight + textHeight + attachmentHeight + gap + insets.top + insets.bottom
+        let retryHeight = !user && message.canRetry ? Self.retryHeight : 0
+        return senderHeight + textHeight + attachmentHeight + gap + retryHeight + insets.top + insets.bottom
     }
 
     private static var senderFont: UIFont {
