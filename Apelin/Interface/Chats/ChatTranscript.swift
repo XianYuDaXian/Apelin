@@ -220,6 +220,21 @@ struct ChatTranscript {
                 add(ChatMessage(id: id, role: .assistant, text: payload?["message"]?.stringValue ?? ""))
             case "received":
                 receivedTokens = payload?["tokens"]?.doubleValue.map { Int($0) }
+            case "regenerated":
+                // The app asked for the last reply again: it is out of the
+                // conversation, and what it worked with stays for the next
+                // one. The reply's row goes; the tools before it become the
+                // summary a new answer tops.
+                finishThinking(at: event.time)
+                if let last = rows.lastIndex(where: { $0.role == .assistant }) {
+                    rows.removeSubrange(last...)
+                    firstRows = Dictionary(uniqueKeysWithValues: firstRows.filter { $0.value < last })
+                    toolRows = Dictionary(uniqueKeysWithValues: toolRows.filter { $0.value < last })
+                }
+                assistant = nil
+                unanswered = rows.last?.id
+                isWorking = true
+                receivedTokens = nil
             case "finished":
                 finishThinking(at: event.time)
                 assistant = nil
@@ -269,6 +284,11 @@ struct ChatTranscript {
             // A running turn takes it at its next step, as the host will say.
             message.isQueued = isWorking
             messages.append(message)
+        }
+        // The last reply, and nothing running or waiting after it: it can be
+        // asked again.
+        if !isWorking, let last = messages.last, last.role == .assistant, !last.text.isEmpty {
+            messages[messages.count - 1].canRetry = true
         }
     }
 

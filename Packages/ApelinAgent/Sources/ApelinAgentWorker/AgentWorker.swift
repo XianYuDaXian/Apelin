@@ -121,6 +121,11 @@ public enum AgentWorker {
                 try await state.session(compact.sessionID).compact()
                 return Acknowledged()
             }
+        case .agentRegenerate:
+            await WorkerMain.serve(AgentRegenerateRequest.self, request) { regenerate in
+                try await state.session(regenerate.sessionID).regenerate()
+                return Acknowledged()
+            }
         case .agentApprove:
             await WorkerMain.serve(AgentApproveRequest.self, request) { approve in
                 try await state.approve(approve)
@@ -515,6 +520,8 @@ actor EventRelay {
             return [("thinking", .object(["text": .string(text)]))]
         case let .messageFinished(text):
             return [("message", .object(["text": .string(text)]))]
+        case .regenerated:
+            return [("regenerated", nil)]
         case let .received(tokens):
             return [("received", .object(["tokens": .number(Double(tokens))]))]
         case let .toolCallStarted(call):
