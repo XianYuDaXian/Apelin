@@ -57,6 +57,47 @@ struct CompactionTests {
     }
 
     @Test(.timeLimit(.minutes(1)))
+    func `summaries retain extended efforts with their own request budget`() async throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        let faux = await registerFauxProvider()
+        defer { faux.unregister() }
+        let long = String(repeating: "The build log says the hook loaded. ", count: 1200)
+        faux.setResponses([
+            .message(fauxAssistantMessage("First: " + long)),
+            .message(fauxAssistantMessage("Second: " + long)),
+            .message(fauxAssistantMessage("Third: " + long)),
+            .factory { context, options, _, model in
+                #expect(context.tools?.isEmpty == true)
+                #expect(options?.reasoning == .xhigh)
+                #expect(options?.serviceTier == nil)
+                #expect(resolveThinkingLevel(model, .xhigh) == "xhigh")
+                return fauxAssistantMessage("The user built a tweak; the hook loads.")
+            },
+        ])
+        var model = faux.getModel()
+        model.reasoning = false
+        model.thinkingLevelMap = nil
+        let session = try await AgentSession(
+            configuration: AgentSessionConfiguration(
+                project: home.project, provider: .registered(model), approval: ApprovalPolicy(mode: .confirm),
+                dataRoot: home.dataRoot, thinking: .xhigh, serviceTier: .priority,
+            ),
+            backend: MockBackend(), digests: MockDigestLedger(), credentials: DeliveredCredentialSource(),
+        )
+        let stream = try await session.events(afterSeq: 0)
+        var events = stream.makeAsyncIterator()
+        for prompt in ["one", "two", "three"] {
+            try await session.prompt(prompt)
+            await session.waitForIdle()
+        }
+        try await session.compact()
+        let result = try #require(await Self.compaction(from: &events))
+        #expect(result.outcome == .compacted)
+        await session.close()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
     func `a short conversation is left as it is`() async throws {
         let home = try TemporaryHome()
         defer { home.remove() }

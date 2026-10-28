@@ -13,8 +13,10 @@ private actor LiveModel {
         var model: Model
         var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
         var thinking: ThinkingLevel
+        var explicitReasoningOff: Bool
         var serviceTier: ServiceTier?
         var transport: Transport?
+        var apiKey: String?
     }
 
     private var snapshot: Snapshot
@@ -23,10 +25,12 @@ private actor LiveModel {
         model: Model,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         thinking: ThinkingLevel,
+        explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier?,
         transport: Transport?,
+        apiKey: String?,
     ) {
-        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier, transport: transport)
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier, transport: transport, apiKey: apiKey)
     }
 
     func current() -> Snapshot {
@@ -34,8 +38,9 @@ private actor LiveModel {
     }
 
     /// A change that keeps the model, such as the composer's tier.
-    func update(thinking: ThinkingLevel, serviceTier: ServiceTier?) {
+    func update(thinking: ThinkingLevel, explicitReasoningOff: Bool, serviceTier: ServiceTier?) {
         snapshot.thinking = thinking
+        snapshot.explicitReasoningOff = explicitReasoningOff
         snapshot.serviceTier = serviceTier
     }
 
@@ -43,10 +48,12 @@ private actor LiveModel {
         model: Model,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         thinking: ThinkingLevel,
+        explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier?,
         transport: Transport?,
+        apiKey: String?,
     ) {
-        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier, transport: transport)
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier, transport: transport, apiKey: apiKey)
     }
 }
 
@@ -192,13 +199,15 @@ public actor AgentSession {
             model: resolved.model,
             authResolver: resolved.authResolver,
             thinking: configuration.thinking,
+            explicitReasoningOff: configuration.explicitReasoningOff,
             serviceTier: configuration.serviceTier,
             transport: ProviderTransport.responses(model: resolved.model, credentials: resolved.credentials),
+            apiKey: resolved.authResolver == nil ? resolved.credentials?.access : nil,
         )
         // The loop fixes the model when the run starts; this reads the live
         // one at every request, so a switch during the answer lands at the
         // next step and nothing in flight is touched.
-        let streamFn: StreamFn = { loopModel, context, given in
+        let streamFn: StreamFn = { _, context, given in
             let live = await liveModel.current()
             var model = live.model
             var options = given ?? StreamOptions()
@@ -217,24 +226,30 @@ public actor AgentSession {
                 }
             } else {
                 options.resolvedAuth = nil
-                options.apiKey = nil
+                options.apiKey = live.apiKey
                 options.metadata = nil
             }
-            // The loop built its reasoning level and tier for the model the
-            // run started with. A model that cannot reason must not be sent
-            // one, and a level the loop left nil (its final-tool turn) stays
-            // nil. Only a switched model changes what the loop built: a
-            // summary call keeps its own level and none of the tier.
-            let switched = model.id != loopModel.id || model.api != loopModel.api
-                || model.provider != loopModel.provider
+            // Conversation requests take the live controls at every tool boundary.
+            // Summary requests keep their own reasoning budget.
+            let conversation = options.sessionId == configuration.id
+            let terminalToolOnly: Bool = {
+                if case .tool? = options.toolChoice, options.parallelToolCalls == false { return true }
+                return false
+            }()
+            if conversation {
+                model = ProviderReasoning.model(
+                    model, level: Self.reasoningLevel(live.thinking), explicitOff: live.explicitReasoningOff,
+                )
+                options.serviceTier = live.serviceTier
+            } else {
+                options.reasoning = options.reasoning ?? Self.reasoningLevel(live.thinking)
+                model = ProviderReasoning.model(model, level: options.reasoning)
+            }
             if !model.reasoning {
                 options.reasoning = nil
                 options.thinkingBudgets = nil
-            } else if switched, options.reasoning != nil {
+            } else if conversation, !terminalToolOnly {
                 options.reasoning = Self.reasoningLevel(live.thinking)
-            }
-            if switched {
-                options.serviceTier = live.serviceTier
             }
             return try await KWWKAI.stream(model: model, context: context, options: options)
         }
@@ -258,9 +273,22 @@ public actor AgentSession {
         // A stream function of its own costs kwwk's automatic native
         // compaction; give it back, so a long conversation still compacts
         // through the provider instead of a summary prompt.
-        agent.autoCompact?.config.nativeCompaction = { model, context, instructions, given in
+        agent.autoCompact?.config.nativeCompaction = { _, context, instructions, given in
             var options = given ?? StreamOptions()
-            options.transport = await liveModel.current().transport
+            let live = await liveModel.current()
+            var model = live.model
+            options.transport = live.transport
+            if let resolver = live.authResolver {
+                let auth = try await resolver(model, options.sessionId)
+                options.resolvedAuth = auth
+                options.apiKey = auth?.token
+                options.metadata = auth?.metadata
+                if let baseURL = auth?.baseURL, !baseURL.isEmpty { model.baseURL = baseURL }
+            } else {
+                options.resolvedAuth = nil
+                options.apiKey = live.apiKey
+                options.metadata = nil
+            }
             return try await KWWKAI.compactNative(
                 model: model,
                 context: context,
@@ -301,6 +329,7 @@ public actor AgentSession {
     public func configure(
         provider: ProviderConfiguration,
         thinking: ThinkingLevel,
+        explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier? = nil,
         credentials: any CredentialSource,
     ) async throws {
@@ -310,7 +339,7 @@ public actor AgentSession {
             guard runTask == nil else { return }
             agent.state.thinkingLevel = thinking
             agent.state.serviceTier = serviceTier
-            await liveModel.update(thinking: thinking, serviceTier: serviceTier)
+            await liveModel.update(thinking: thinking, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier)
             return
         }
         let resolved = try await ProviderResolver.resolve(provider, credentials: credentials)
@@ -323,8 +352,10 @@ public actor AgentSession {
             model: resolved.model,
             authResolver: resolved.authResolver,
             thinking: thinking,
+            explicitReasoningOff: explicitReasoningOff,
             serviceTier: serviceTier,
             transport: ProviderTransport.responses(model: resolved.model, credentials: resolved.credentials),
+            apiKey: resolved.authResolver == nil ? resolved.credentials?.access : nil,
         )
         resolvedFrom = (provider, resolved.credentials)
     }
@@ -338,6 +369,7 @@ public actor AgentSession {
     public func switchModel(
         provider: ProviderConfiguration,
         thinking: ThinkingLevel,
+        explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier? = nil,
         credentials: any CredentialSource,
     ) async throws {
@@ -354,8 +386,10 @@ public actor AgentSession {
             model: change.model,
             authResolver: change.authResolver,
             thinking: change.thinking,
+            explicitReasoningOff: explicitReasoningOff,
             serviceTier: change.serviceTier,
             transport: ProviderTransport.responses(model: change.model, credentials: resolved.credentials),
+            apiKey: resolved.authResolver == nil ? resolved.credentials?.access : nil,
         )
         if runTask == nil {
             apply(change)
@@ -505,6 +539,7 @@ public actor AgentSession {
                         ),
                         options: StreamOptions(
                             maxTokens: 160,
+                            apiKey: auth?.token ?? live.apiKey,
                             transport: live.transport,
                             maxRetryDelayMs: 0,
                             resolvedAuth: auth,

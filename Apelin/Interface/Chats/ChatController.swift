@@ -640,7 +640,7 @@ extension ChatController {
         ComposerModelSelection(
             provider: account.provider,
             model: model,
-            supportedEfforts: (account.reasoningEfforts?[model] ?? []).filter { [.low, .high, .max].contains($0) },
+            supportedEfforts: EnabledModels.reasoningEfforts(for: model, in: account),
             supportedTiers: account.serviceTiers?[model] ?? [],
         )
     }

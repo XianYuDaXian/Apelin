@@ -25,17 +25,11 @@ public enum ProviderKeyVerification {
                         throw ApelinError(.badRequest, "The provider could not be configured.")
                     }
                     let auth = try await resolved.authResolver?(resolved.model, nil)
-                    let response = try await complete(
+                    let response = try await request(
                         model: resolved.model,
-                        context: Context(messages: [.user(UserMessage(text: "Reply with OK."))]),
-                        options: StreamOptions(
-                            maxTokens: 32,
-                            transport: ProviderTransport.responses(model: resolved.model, credentials: credentials),
-                            maxRetryDelayMs: 0,
-                            resolvedAuth: auth,
-                            cancellation: cancellation,
-                            verbose: false,
-                        ),
+                        auth: auth,
+                        credentials: credentials,
+                        cancellation: cancellation,
                     )
                     try Task.checkCancellation()
                     guard response.stopReason == .stop || response.stopReason == .length,
@@ -61,5 +55,26 @@ public enum ProviderKeyVerification {
                 "Unable to verify this provider. Check the API key, endpoint and model, then try again.",
             )
         }
+    }
+
+    static func request(
+        model: Model,
+        auth: ResolvedProviderAuth?,
+        credentials: OAuthCredentials,
+        cancellation: CancellationHandle,
+    ) async throws -> AssistantMessage {
+        try await complete(
+            model: model,
+            context: Context(messages: [.user(UserMessage(text: "Reply with OK."))]),
+            options: StreamOptions(
+                maxTokens: 32,
+                apiKey: auth?.token ?? credentials.access,
+                transport: ProviderTransport.responses(model: model, credentials: credentials),
+                maxRetryDelayMs: 0,
+                resolvedAuth: auth,
+                cancellation: cancellation,
+                verbose: false,
+            ),
+        )
     }
 }

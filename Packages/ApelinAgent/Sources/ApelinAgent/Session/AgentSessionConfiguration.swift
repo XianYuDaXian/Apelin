@@ -14,6 +14,8 @@ public struct AgentSessionConfiguration: Sendable {
     public var dataRoot: ApelinDataRoot
     public var mcpServers: [MCPServerConfiguration]
     public var thinking: ThinkingLevel
+    /// The reader explicitly chose Off in a model capability override.
+    public var explicitReasoningOff: Bool
     /// The processing tier its requests ask for; nil is the provider's default.
     public var serviceTier: ServiceTier?
     /// Hard cap on assistant turns per run; nil for none.
@@ -35,6 +37,7 @@ public struct AgentSessionConfiguration: Sendable {
         dataRoot: ApelinDataRoot = .current,
         mcpServers: [MCPServerConfiguration] = [],
         thinking: ThinkingLevel = .off,
+        explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier? = nil,
         maxTurns: Int? = nil,
         installRoot: String? = nil,
@@ -48,6 +51,7 @@ public struct AgentSessionConfiguration: Sendable {
         self.dataRoot = dataRoot
         self.mcpServers = mcpServers
         self.thinking = thinking
+        self.explicitReasoningOff = explicitReasoningOff
         self.serviceTier = serviceTier
         self.maxTurns = maxTurns
         self.installRoot = installRoot
