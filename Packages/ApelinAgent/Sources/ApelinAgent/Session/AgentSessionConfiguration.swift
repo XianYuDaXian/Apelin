@@ -16,6 +16,9 @@ public struct AgentSessionConfiguration: Sendable {
     public var thinking: ThinkingLevel
     /// The reader explicitly chose Off in a model capability override.
     public var explicitReasoningOff: Bool
+    /// The model's context window from model settings; nil uses its catalog
+    /// or provider default.
+    public var contextWindow: Int?
     /// The processing tier its requests ask for; nil is the provider's default.
     public var serviceTier: ServiceTier?
     /// Hard cap on assistant turns per run; nil for none.
@@ -38,6 +41,7 @@ public struct AgentSessionConfiguration: Sendable {
         mcpServers: [MCPServerConfiguration] = [],
         thinking: ThinkingLevel = .off,
         explicitReasoningOff: Bool = false,
+        contextWindow: Int? = nil,
         serviceTier: ServiceTier? = nil,
         maxTurns: Int? = nil,
         installRoot: String? = nil,
@@ -52,6 +56,7 @@ public struct AgentSessionConfiguration: Sendable {
         self.mcpServers = mcpServers
         self.thinking = thinking
         self.explicitReasoningOff = explicitReasoningOff
+        self.contextWindow = contextWindow
         self.serviceTier = serviceTier
         self.maxTurns = maxTurns
         self.installRoot = installRoot

@@ -540,6 +540,7 @@ do {
         approvalMode: .relaxed,
         reasoningEffort: .high,
         serviceTier: .priority,
+        contextWindow: 256_000,
         prompt: "Write the README",
         closeWhenFinished: true,
         title: "  Docs\nsecond line",
@@ -550,8 +551,8 @@ do {
     check(child.approvalMode == .confirm, "and runs under the opener's mode, never a laxer one it asked for")
     check(
         child.provider == .anthropic && child.model == "claude-sonnet-5-5" && child.reasoningEffort == .high
-            && child.serviceTier == .priority,
-        "provider, model, effort and tier go as sent",
+            && child.serviceTier == .priority && child.contextWindow == 256_000,
+        "provider, model, effort, tier and context window go as sent",
     )
     check(child.prompt == "Write the README" && child.title == "Docs", "the prompt goes as sent, the title on one trimmed line")
     let relaxed = await session("c-relaxed", mode: .relaxed)

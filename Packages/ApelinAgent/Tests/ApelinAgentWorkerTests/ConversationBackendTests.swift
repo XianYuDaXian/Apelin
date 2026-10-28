@@ -41,13 +41,14 @@ struct ConversationBackendTests {
     }
 
     @Test
-    func `create opens in the session's project with the session's provider, model, effort and tier, and does not wait`() async throws {
+    func `create opens in the session's project with its provider, model, effort, tier and context window, and does not wait`() async throws {
         let fixture = try Fixture()
         await fixture.backend.modelChoice.set(
             provider: .openAICodex,
             model: "gpt-6.1-sol",
             reasoningEffort: .high,
             serviceTier: .ultrafast,
+            contextWindow: 256_000,
         )
         fixture.host.on(.agentOpen, reply: AgentOpenResponse(sessionID: Self.child, task: Self.childTask))
         let opened = try await fixture.backend.conversationCreate(ConversationCreateToolRequest(
@@ -60,6 +61,7 @@ struct ConversationBackendTests {
         #expect(sent.projectID == fixture.project.id && sent.projectName == "Hello")
         #expect(sent.provider == .openAICodex && sent.model == "gpt-6.1-sol" && sent.reasoningEffort == .high)
         #expect(sent.serviceTier == .ultrafast)
+        #expect(sent.contextWindow == 256_000)
         #expect(sent.prompt == "Write the README" && sent.title == "Docs")
         #expect(sent.sessionID == nil && sent.temporaryID == nil && sent.closeWhenFinished == nil)
         #expect(opened == ConversationCreateToolResponse(sessionID: Self.child, taskID: "child-task"))

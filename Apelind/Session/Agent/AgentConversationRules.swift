@@ -54,6 +54,7 @@ enum AgentConversationRules {
             approvalMode: opener.mode,
             reasoningEffort: open.reasoningEffort,
             serviceTier: open.serviceTier,
+            contextWindow: open.contextWindow,
             prompt: prompt,
             title: title(open.title),
         )

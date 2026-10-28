@@ -66,6 +66,7 @@ public enum AgentWorker {
                         thinking: .init(rawValue: prompt.reasoningEffort?.rawValue ?? "off") ?? .off,
                         explicitReasoningOff: prompt.reasoningEffort == .off,
                         serviceTier: AgentWorker.serviceTier(prompt.serviceTier),
+                        contextWindow: prompt.contextWindow,
                         credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
                     )
                     await state.modelChoice.set(
@@ -73,6 +74,7 @@ public enum AgentWorker {
                         model: prompt.model,
                         reasoningEffort: prompt.reasoningEffort,
                         serviceTier: prompt.serviceTier,
+                        contextWindow: prompt.contextWindow,
                     )
                 }
                 guard (prompt.attachments?.count ?? 0) <= 8 else {
@@ -133,6 +135,7 @@ public enum AgentWorker {
                         thinking: .init(rawValue: regenerate.reasoningEffort?.rawValue ?? "off") ?? .off,
                         explicitReasoningOff: regenerate.reasoningEffort == .off,
                         serviceTier: AgentWorker.serviceTier(regenerate.serviceTier),
+                        contextWindow: regenerate.contextWindow,
                         credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
                     )
                     await state.modelChoice.set(
@@ -140,6 +143,7 @@ public enum AgentWorker {
                         model: regenerate.model,
                         reasoningEffort: regenerate.reasoningEffort,
                         serviceTier: regenerate.serviceTier,
+                        contextWindow: regenerate.contextWindow,
                     )
                 }
                 try await session.regenerate()
@@ -155,6 +159,7 @@ public enum AgentWorker {
                     thinking: .init(rawValue: change.reasoningEffort?.rawValue ?? "off") ?? .off,
                     explicitReasoningOff: change.reasoningEffort == .off,
                     serviceTier: AgentWorker.serviceTier(change.serviceTier),
+                    contextWindow: change.contextWindow,
                     credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
                 )
                 await state.modelChoice.set(
@@ -162,6 +167,7 @@ public enum AgentWorker {
                     model: change.model,
                     reasoningEffort: change.reasoningEffort,
                     serviceTier: change.serviceTier,
+                    contextWindow: change.contextWindow,
                 )
                 return Acknowledged()
             }
@@ -321,6 +327,7 @@ actor WorkerState {
                     dataRoot: dataRoot,
                     thinking: .init(rawValue: open.reasoningEffort?.rawValue ?? "off") ?? .off,
                     explicitReasoningOff: open.reasoningEffort == .off,
+                    contextWindow: open.contextWindow,
                     serviceTier: AgentWorker.serviceTier(open.serviceTier),
                     installRoot: context.assignment.installRoot,
                 ),
@@ -356,6 +363,7 @@ actor WorkerState {
             model: open.model,
             reasoningEffort: open.reasoningEffort,
             serviceTier: open.serviceTier,
+            contextWindow: open.contextWindow,
         )
 
         let events = try await session.events(afterSeq: 0)

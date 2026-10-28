@@ -100,6 +100,8 @@ public actor AgentSession {
     /// sign-in keep that resolution: resolving again exchanges some
     /// providers' tokens over the network, before the message is recorded.
     private var resolvedFrom: (provider: ProviderConfiguration, credentials: OAuthCredentials?)
+    /// The context window the live model was resolved with.
+    private var resolvedContextWindow: Int?
     private var titleTask: Task<Void, Never>?
     private var hasTitle = false
     /// Title completions that named nothing. Each prompt asks again until
@@ -175,7 +177,9 @@ public actor AgentSession {
         let transcript = try await LegacyToolNames.migrate(log.readTranscript())
         try await Self.closeAbandonedApprovals(log)
 
-        let resolved = try await ProviderResolver.resolve(configuration.provider, credentials: credentials)
+        let resolved = try await ProviderResolver.resolve(
+            configuration.provider, credentials: credentials, contextWindow: configuration.contextWindow,
+        )
         let gate = ApprovalGate { event in _ = try? await log.append(event) }
         let memory = MemoryStore(root: configuration.dataRoot.url)
         let runner = ToolRunner(
@@ -301,6 +305,7 @@ public actor AgentSession {
         workspace = root
         told = snapshot
         resolvedFrom = (configuration.provider, resolved.credentials)
+        resolvedContextWindow = configuration.contextWindow
         self.configuration = configuration
         self.log = log
         self.agent = agent
@@ -332,18 +337,22 @@ public actor AgentSession {
         thinking: ThinkingLevel,
         explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier? = nil,
+        contextWindow: Int? = nil,
         credentials: any CredentialSource,
     ) async throws {
         guard runTask == nil else { return }
         let stored = try await ProviderResolver.storedCredentials(provider, in: credentials)
-        if provider == resolvedFrom.provider, stored == resolvedFrom.credentials {
+        if provider == resolvedFrom.provider, stored == resolvedFrom.credentials,
+           contextWindow == resolvedContextWindow {
             guard runTask == nil else { return }
             agent.state.thinkingLevel = thinking
             agent.state.serviceTier = serviceTier
             await liveModel.update(thinking: thinking, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier)
             return
         }
-        let resolved = try await ProviderResolver.resolve(provider, credentials: credentials)
+        let resolved = try await ProviderResolver.resolve(
+            provider, credentials: credentials, contextWindow: contextWindow,
+        )
         guard runTask == nil else { return }
         agent.state.model = resolved.model
         agent.state.thinkingLevel = thinking
@@ -359,6 +368,7 @@ public actor AgentSession {
             apiKey: resolved.authResolver == nil ? resolved.credentials?.access : nil,
         )
         resolvedFrom = (provider, resolved.credentials)
+        resolvedContextWindow = contextWindow
     }
 
     // MARK: - Control
@@ -372,10 +382,14 @@ public actor AgentSession {
         thinking: ThinkingLevel,
         explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier? = nil,
+        contextWindow: Int? = nil,
         credentials: any CredentialSource,
     ) async throws {
-        let resolved = try await ProviderResolver.resolve(provider, credentials: credentials)
+        let resolved = try await ProviderResolver.resolve(
+            provider, credentials: credentials, contextWindow: contextWindow,
+        )
         resolvedFrom = (provider, resolved.credentials)
+        resolvedContextWindow = contextWindow
         let change = PendingSwitch(
             model: resolved.model,
             authResolver: resolved.authResolver,
