@@ -295,12 +295,16 @@ public actor AgentSession {
                 options.apiKey = live.apiKey
                 options.metadata = nil
             }
-            return try await KWWKAI.compactNative(
-                model: model,
-                context: context,
-                instructions: instructions,
-                options: options,
-            )
+            do {
+                return try await KWWKAI.compactNative(
+                    model: model,
+                    context: context,
+                    instructions: instructions,
+                    options: options,
+                )
+            } catch where NativeCompactionFallback.returnedNoSummary(error) {
+                return nil
+            }
         }
 
         workspace = root

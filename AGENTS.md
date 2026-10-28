@@ -924,7 +924,7 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   in place of the summary — falls back to kwwk's own summary, where kwwk
   alone failed the compaction and, with the context full, the run ("context
   is too large and compaction failed: …"); a status, a transport failure, a
-  refusal and anything kwwk retries stay errors.   message sent meanwhile until it ends, and stops on `agentAbort`.
+  refusal and anything kwwk retries stay errors.
   `agentRegenerate` (the app's alone, 2026-10-25) drops the last reply and
   answers again from what is left: the prompt and every tool result stay,
   the last assistant message is rewritten out of `transcript.json`, and a
