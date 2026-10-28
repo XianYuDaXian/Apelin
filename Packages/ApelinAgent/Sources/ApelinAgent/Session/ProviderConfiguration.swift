@@ -76,6 +76,28 @@ public enum ProviderTransport {
     }
 }
 
+/// A selected effort is an explicit capability declared in the model settings.
+enum ProviderReasoning {
+    static func model(_ model: Model, level: ReasoningLevel?, explicitOff: Bool = false) -> Model {
+        guard level != nil || explicitOff else { return model }
+        var selected = model
+        selected.reasoning = true
+        var mapping = selected.thinkingLevelMap ?? [:]
+        // Keep provider-specific wire values; custom levels use their own name.
+        let key = level?.rawValue ?? "off"
+        if (mapping[key] ?? nil) == nil {
+            mapping[key] = level?.rawValue ?? "none"
+        }
+        selected.thinkingLevelMap = mapping
+        if selected.api == "openai-completions" {
+            var compat = selected.compat ?? ModelCompat()
+            compat.supportsReasoningEffort = true
+            selected.compat = compat
+        }
+        return selected
+    }
+}
+
 enum ProviderResolver {
     /// Registers the provider on kwwk's registry from `credentials`, through
     /// kwwk's own stored-provider code, and returns the model to use.

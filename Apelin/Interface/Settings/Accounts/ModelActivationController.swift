@@ -10,6 +10,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
     private var models: [String]
     private var custom: Set<String>
     private var hidden: Set<String>
+    private var reasoningEfforts: [String: [AgentReasoningEffort]]
     private var loader: Task<Void, Never>?
     private var saving = false
     private var verification: TaskHandle?
@@ -21,6 +22,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
         let enabled = EnabledModels.ids(for: account.provider)
         custom = Set(EnabledModels.customIDs(for: account.provider))
         hidden = account.isAPIKeyAccount ? EnabledModels.hiddenIDs(for: account.provider) : []
+        reasoningEfforts = EnabledModels.reasoningEffortOverrides(for: account.provider)
         selected = account.isAPIKeyAccount ? enabled.subtracting(hidden) : enabled.intersection(available)
         models = account.isAPIKeyAccount
             ? Array(Set(available).union(custom).union(selected).subtracting(hidden)).sorted()
@@ -64,13 +66,18 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
         search.searchBar.autocapitalizationType = .none
         navigationItem.searchController = search
         definesPresentationContext = true
-        tableView.register(UITableViewCell.self, forCellReuseIdentifier: "model")
+        tableView.register(ModelActivationCell.self, forCellReuseIdentifier: "model")
         updateRows()
     }
 
     private struct ModelRow: Equatable {
         let id: String
         let selected: Bool
+        let efforts: [AgentReasoningEffort]
+    }
+
+    private func efforts(for model: String) -> [AgentReasoningEffort] {
+        reasoningEfforts[model] ?? account.reasoningEfforts?[model] ?? []
     }
 
     private lazy var dataSource = TableDataSource<Int, String, ModelRow>(
@@ -84,7 +91,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
         dataSource.headerTitle = { [weak self] _ in self.map { $0.account.account ?? $0.account.provider.displayName } }
         dataSource.footerTitle = { _ in String(localized: "Choose the models to show in the chat model picker. You can change this later in Model Providers.") }
         dataSource.allowsEditing = usesAPIKey
-        dataSource.update([(0, shown.map { ModelRow(id: $0, selected: selected.contains($0)) })], reconfigure: true)
+        dataSource.update([(0, shown.map { ModelRow(id: $0, selected: selected.contains($0), efforts: efforts(for: $0)) })], reconfigure: true)
     }
 
     private var usesAPIKey: Bool {
@@ -116,24 +123,84 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
     }
 
     private func cell(in tableView: UITableView, at indexPath: IndexPath, row: ModelRow) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "model", for: indexPath)
+        let cell = tableView.dequeueReusableCell(withIdentifier: "model", for: indexPath) as! ModelActivationCell
         let model = row.id
+        let summary = row.efforts.isEmpty ? String(localized: "None") : row.efforts.map(Self.title(for:)).joined(separator: " · ")
         var content = cell.defaultContentConfiguration()
         content.text = model
         content.textProperties.numberOfLines = 0
+        let configuration = usesAPIKey ? effortButton(for: model, summary: summary) : nil
+        if usesAPIKey {
+            content.secondaryText = summary
+            content.secondaryTextProperties.numberOfLines = 0
+            content.image = UIImage(systemName: row.selected ? "checkmark.circle.fill" : "circle")
+        }
         cell.contentConfiguration = content
-        cell.accessoryType = row.selected ? .checkmark : .none
-        cell.accessibilityTraits = row.selected ? [.button, .selected] : [.button]
+        cell.accessoryView = configuration
+        cell.accessoryType = !usesAPIKey && row.selected ? .checkmark : .none
+        cell.configureAccessibility(
+            model: model,
+            summary: usesAPIKey ? summary : nil,
+            selected: row.selected,
+            configuration: configuration,
+        ) { [weak self] in self?.toggleModel(model) }
         return cell
     }
 
-    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
-        tableView.deselectRow(at: indexPath, animated: true)
-        guard !saving, let model = dataSource.itemIdentifier(for: indexPath) else { return }
+    private func effortButton(for model: String, summary: String) -> UIButton {
+        let button = UIButton(type: .system)
+        button.setImage(UIImage(systemName: "slider.horizontal.3"), for: .normal)
+        button.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
+        button.accessibilityLabel = String(localized: "Reasoning Effort")
+        button.accessibilityValue = "\(model): \(summary)"
+        button.showsMenuAsPrimaryAction = true
+        button.menu = UIMenu(title: String(localized: "Reasoning Effort"), children: [
+            UIDeferredMenuElement.uncached { [weak self] completion in
+                guard let self else { completion([]); return }
+                completion(AgentReasoningEffort.allCases.map { effort in
+                    UIAction(
+                        title: Self.title(for: effort),
+                        attributes: saving ? .disabled : [],
+                        state: efforts(for: model).contains(effort) ? .on : .off,
+                    ) { [weak self] _ in
+                        guard let self, !saving else { return }
+                        var supported = Set(efforts(for: model))
+                        if !supported.insert(effort).inserted {
+                            supported.remove(effort)
+                        }
+                        reasoningEfforts[model] = AgentReasoningEffort.allCases.filter { supported.contains($0) }
+                        updateRows()
+                    }
+                })
+            },
+        ])
+        return button
+    }
+
+    private static func title(for effort: AgentReasoningEffort) -> String {
+        switch effort {
+        case .off: String(localized: "Off")
+        case .minimal: String(localized: "Minimal")
+        case .low: String(localized: "Low")
+        case .medium: String(localized: "Medium")
+        case .high: String(localized: "High")
+        case .xhigh: String(localized: "Extra High")
+        case .max: String(localized: "Maximum")
+        }
+    }
+
+    private func toggleModel(_ model: String) {
+        guard !saving else { return }
         if !selected.insert(model).inserted {
             selected.remove(model)
         }
         updateRows()
+    }
+
+    override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        guard let model = dataSource.itemIdentifier(for: indexPath) else { return }
+        toggleModel(model)
     }
 
     override func tableView(
@@ -251,7 +318,51 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
     }
 
     private func finishSaving() {
-        EnabledModels.save(selected, custom: custom, hidden: hidden, for: account.provider)
+        EnabledModels.save(
+            selected,
+            custom: custom,
+            hidden: hidden,
+            reasoningEfforts: reasoningEfforts,
+            for: account.provider,
+        )
         dismiss(animated: true)
+    }
+}
+
+private final class ModelActivationCell: UITableViewCell {
+    private final class ModelElement: UIAccessibilityElement {
+        var activate: (() -> Void)?
+
+        override func accessibilityActivate() -> Bool {
+            guard let activate else { return false }
+            activate()
+            return true
+        }
+    }
+
+    private lazy var modelElement = ModelElement(accessibilityContainer: self)
+
+    func configureAccessibility(
+        model: String,
+        summary: String?,
+        selected: Bool,
+        configuration: UIButton?,
+        activate: @escaping () -> Void,
+    ) {
+        isAccessibilityElement = false
+        modelElement.accessibilityLabel = model
+        modelElement.accessibilityValue = summary
+        modelElement.accessibilityTraits = selected ? [.button, .selected] : [.button]
+        modelElement.activate = activate
+        if let configuration {
+            accessibilityElements = [modelElement, configuration]
+        } else {
+            accessibilityElements = [modelElement]
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        modelElement.accessibilityFrameInContainerSpace = contentView.frame
     }
 }

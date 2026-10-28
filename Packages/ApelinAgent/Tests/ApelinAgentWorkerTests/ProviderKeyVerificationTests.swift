@@ -1,3 +1,4 @@
+import ApelinAgent
 @testable import ApelinAgentWorker
 import ApelinProtocol
 import Foundation
@@ -57,7 +58,7 @@ struct ProviderKeyVerificationTests {
     }
 
     @Test
-    func `Responses HTTP verification posts directly without a WebSocket handshake`() async throws {
+    func `Responses HTTP verification posts directly and isolates candidate auth from another registration`() async throws {
         let parameters = NWParameters.tcp
         parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
         let server = try NWListener(using: parameters)
@@ -100,6 +101,21 @@ struct ProviderKeyVerificationTests {
             "baseUrl": .string("http://127.0.0.1:\(port)/v1"), "responsesTransport": .string("sse"),
         ])
         try await ProviderKeyVerification.verify(.openAI, credentials, modelOverride: "verification-model")
+
+        let manager = OAuthManager(source: DeliveredCredentialSource([AgentProvider.openAI.storeID: credentials]))
+        let resolved = try #require(await registerStored(storeId: AgentProvider.openAI.storeID, manager: manager, modelOverride: "verification-model"))
+        let auth = try await resolved.authResolver?(resolved.model, nil)
+        // Another account replaces the shared provider's default key before this request.
+        let otherCredentials = OAuthCredentials(access: "other-account-secret", refresh: "", expires: .max)
+        let otherManager = OAuthManager(source: DeliveredCredentialSource([AgentProvider.openAI.storeID: otherCredentials]))
+        _ = try #require(await registerStored(storeId: AgentProvider.openAI.storeID, manager: otherManager, modelOverride: "other-model"))
+        let response = try await ProviderKeyVerification.request(
+            model: resolved.model,
+            auth: auth,
+            credentials: credentials,
+            cancellation: CancellationHandle(),
+        )
+        #expect(response.stopReason == .stop)
     }
 
     private static func respond(_ connection: NWConnection, status: Int, body: String, path: String = "/v1/chat/completions", received: Data = Data()) {

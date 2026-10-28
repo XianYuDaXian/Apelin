@@ -766,12 +766,17 @@ struct AccountDeskTests {
             let recorder = SignInRecorder()
             try await desk.start(AgentSignInRequest(provider: provider), taskID: TaskID("k-\(id)"), reporter: recorder.reporter)
             try await recorder.waitFor { !$0.events.isEmpty }
-            guard case let .array(fields)? = recorder.events.first?.payload?["fields"], fields.count == 2 else {
+            let expectedFieldCount = provider == .openAI ? 3 : 2
+            guard case let .array(fields)? = recorder.events.first?.payload?["fields"], fields.count == expectedFieldCount else {
                 Issue.record("\(provider) asked for \(String(describing: recorder.events.first?.payload))")
                 continue
             }
             #expect(fields[1]["key"] == .string("baseUrl"))
             #expect(fields[1]["defaultValue"] == .string("https://\(host)"))
+            if provider == .openAI {
+                #expect(fields[2]["key"] == .string("responsesTransport"))
+                #expect(fields[2]["defaultValue"] == .string("auto"))
+            }
             try await desk.respond(AgentSignInRespondRequest(taskID: TaskID("k-\(id)"), fields: [.apiKey: "key-SECRET"]))
             try await recorder.waitFor { $0.state != nil }
             #expect(recorder.state == .succeeded)

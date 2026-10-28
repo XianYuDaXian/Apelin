@@ -1692,9 +1692,18 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   land in a newly cleared draft. The model control is below the input, with
   the exact FlowDown BlockButton geometry and original editor SVGs, with
   reasoning choices from kwwk's supported-thinking-level metadata; High is
-  selected by default when supported. The UI offers only supported Low,
-  High and Max levels, never Off. Unknown
-  custom models do not get guessed levels. Beside it, Speed (a bolt) offers
+  selected by default when supported. API-key model settings let the reader
+  choose each model's supported efforts: Off, Minimal, Low, Medium, High,
+  Extra High and Maximum. Overrides are device preferences saved with model
+  activation; an empty list hides the chat effort menu. Catalog defaults
+  apply until an override is saved, including for custom model IDs. The chat
+  lists every supported effort. A selected custom level gets an explicit
+  kwwk thinking-level mapping so extended levels reach the endpoint;
+  provider-specific wire mappings stay intact. Requests retain an explicit
+  Off pick separately from an absent effort, so a custom endpoint can accept
+  Off even when its model ID matches a catalog model that omits it. Summary
+  requests normalize their own supplied effort through the same mappings.
+  Beside it, Speed (a bolt) offers
   Standard and the faster tiers kwwk's catalog lists for the model
   (`AgentAccount.serviceTiers`: Codex's `priority`, shown as Fast, and
   `ultrafast`); a model that lists none shows no Speed, and Standard sends
@@ -1740,7 +1749,7 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   `DeviceOwnerCheck` before `agentApprove` carries `ownerVerified`; on a
   failed or cancelled check nothing is sent and the request stays pending
   (an `SPIndicator` says so). Deny never checks.
-  The runtime reads that mode when opening a session, and reads the global model, effort and tier on each send (changes apply between runs). The transport's explicit approval mode and host safeguards remain authoritative. A single summary groups consecutive thinking and tool steps, with body-size labels at 50% label
+  The runtime reads that mode when opening a session, and reads the global model, effort and tier on each send. During a run, changes to model, effort or tier update the live request snapshot. The current response finishes, and the next request after a tool call reads the new values. Summary and reserved final-tool requests keep their own reasoning budgets. The transport's explicit approval mode and host safeguards remain authoritative. A single summary groups consecutive thinking and tool steps, with body-size labels at 50% label
   colour; an unfinished thought shimmers unless Reduce Motion is on, a
   finished one names seconds and tool count. Tapping opens a live-updating trace form sheet with the thinking, tool calls and approval records, all without icons and aligned to the text margin; a thought's text and a call's arguments and output are plain, selectable body text (Litext's `TextLabelView`, never Markdown). A call's arguments arrive as one line of JSON, so they are decoded for the row (`ToolCallDetail`, tested in `Tests/ChatTranscript`): each argument's name on a line of its own, set smaller in the secondary colour, its value under it — a string as itself, line breaks and quotes and all, so a written file reads as the file, anything else as compact JSON —, the reason first unless it only repeats the title, then the short values, then the long ones, by name within each, and last the result under "Result". Arguments that are not a JSON object show as they came. `TraceBody` builds the text and measures it once per text, text size and width, for `height(for:)` and the layout alike, so a long file is decoded and laid out once, never cut short. Main transcript headers have no icons either, except the count on the turn's latest summary: at the trailing end of its title line, the output tokens the run has received (`received`; `ReceivedTokensView`), grouped as the locale groups them, its digits one width, then a plain `arrow.down` drawn at the figure's font — "653 ↓" at the row's right edge (owner, 2026-10-25) —, both at the title's 50% label colour; right to left the arrow is at the left edge and the figure on its right. The title's first line fades out over 20 pt before it (a mask on the title's own container, the shimmer staying the title's mask), so a long title runs under the count instead of into it. The figure climbs rather than jumps (`TokenClimb`, tested in `Tests/TokenClimb`): straight from what it shows to each new count, arriving five seconds after the count came while the summary runs, and half a second once the reply after it has begun — the transcript keeps the count on the summary above the reply the run is writing (`ChatMessage.receivedSettles`) until the run ends —; it is drawn again at most ten times a second with Litext's numeric roll, starts from nothing when it appears on the same summary, and on another summary, off screen or under Reduce Motion is there at once. It fades in and out with the summary's run, and is the title's `accessibilityValue` ("1,234 tokens received", the count it is climbing to), the view itself hidden from VoiceOver. A session from before the count shows none. Under a running summary, the line of its newest call (Live chat and project UI ▸ `ToolCallBannerView`). Only provider-supplied reasoning
   belongs in those entries. `ChatMarkdownView` uses a 16 pt block gap shared with the gap between cells,

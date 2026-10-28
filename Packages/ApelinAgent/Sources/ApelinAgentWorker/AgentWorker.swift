@@ -64,6 +64,7 @@ public enum AgentWorker {
                     try await session.configure(
                         provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: prompt.model)),
                         thinking: .init(rawValue: prompt.reasoningEffort?.rawValue ?? "off") ?? .off,
+                        explicitReasoningOff: prompt.reasoningEffort == .off,
                         serviceTier: AgentWorker.serviceTier(prompt.serviceTier),
                         credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
                     )
@@ -130,6 +131,7 @@ public enum AgentWorker {
                     try await session.configure(
                         provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: regenerate.model)),
                         thinking: .init(rawValue: regenerate.reasoningEffort?.rawValue ?? "off") ?? .off,
+                        explicitReasoningOff: regenerate.reasoningEffort == .off,
                         serviceTier: AgentWorker.serviceTier(regenerate.serviceTier),
                         credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
                     )
@@ -151,6 +153,7 @@ public enum AgentWorker {
                 try await session.switchModel(
                     provider: AgentWorker.provider(AgentOpenRequest(provider: change.provider, model: change.model)),
                     thinking: .init(rawValue: change.reasoningEffort?.rawValue ?? "off") ?? .off,
+                    explicitReasoningOff: change.reasoningEffort == .off,
                     serviceTier: AgentWorker.serviceTier(change.serviceTier),
                     credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
                 )
@@ -317,6 +320,7 @@ actor WorkerState {
                     approval: ApprovalPolicy(mode: AgentWorker.approvalMode(open.approvalMode)),
                     dataRoot: dataRoot,
                     thinking: .init(rawValue: open.reasoningEffort?.rawValue ?? "off") ?? .off,
+                    explicitReasoningOff: open.reasoningEffort == .off,
                     serviceTier: AgentWorker.serviceTier(open.serviceTier),
                     installRoot: context.assignment.installRoot,
                 ),
