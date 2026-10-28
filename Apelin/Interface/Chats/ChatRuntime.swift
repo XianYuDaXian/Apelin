@@ -330,6 +330,7 @@ final class ChatRuntime {
                 model: selection?.model,
                 reasoningEffort: selection?.effort,
                 serviceTier: selection?.tier,
+                contextWindow: selection?.contextWindow,
                 approvalMode: AgentPermissions.mode,
             ),
             descriptors: descriptors,
@@ -372,6 +373,7 @@ final class ChatRuntime {
             model: selection?.model,
             reasoningEffort: selection?.effort,
             serviceTier: selection?.tier,
+            contextWindow: selection?.contextWindow,
         )
     }
 
@@ -387,6 +389,7 @@ final class ChatRuntime {
             model: selection.model,
             reasoningEffort: selection.effort,
             serviceTier: selection.tier,
+            contextWindow: selection.contextWindow,
         )
     }
 
@@ -451,6 +454,7 @@ final class ChatRuntime {
             approvalMode: mode,
             reasoningEffort: selected?.effort,
             serviceTier: selected?.tier,
+            contextWindow: selected?.contextWindow,
         )
         if request.temporaryID != nil {
             try DataFolder.app.makeLevels(to: DataFolder.app.root.appendingPathComponent("Temporary/" + id.uuidString))

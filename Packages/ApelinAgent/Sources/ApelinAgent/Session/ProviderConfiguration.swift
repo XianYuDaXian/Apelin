@@ -76,6 +76,21 @@ public enum ProviderTransport {
     }
 }
 
+/// The context window chosen for a model in the app's model settings.
+enum ProviderModelWindow {
+    static func apply(_ contextWindow: Int?, to model: Model) -> Model {
+        guard let contextWindow, contextWindow > 0, contextWindow <= 10_000_000 else { return model }
+        var selected = model
+        selected.contextWindow = contextWindow
+        // Output tokens are part of the window, never an allowance on top;
+        // kwwk's 0 means "omit the field", not a one-token cap.
+        if selected.maxTokens > 0 {
+            selected.maxTokens = min(selected.maxTokens, contextWindow)
+        }
+        return selected
+    }
+}
+
 /// A selected effort is an explicit capability declared in the model settings.
 enum ProviderReasoning {
     static func model(_ model: Model, level: ReasoningLevel?, explicitOff: Bool = false) -> Model {
@@ -104,11 +119,14 @@ enum ProviderResolver {
     static func resolve(
         _ configuration: ProviderConfiguration,
         credentials: any CredentialSource,
+        contextWindow: Int? = nil,
     ) async throws -> ResolvedProvider {
         let stored = try await storedCredentials(configuration, in: credentials)
         guard let storeID = configuration.storeID else {
             if case let .registered(model) = configuration {
-                return ResolvedProvider(model: model, authResolver: nil)
+                return ResolvedProvider(
+                    model: ProviderModelWindow.apply(contextWindow, to: model), authResolver: nil,
+                )
             }
             preconditionFailure("unreachable")
         }
@@ -123,7 +141,11 @@ enum ProviderResolver {
         ) else {
             throw ProviderResolutionError.missingCredentials(storeID)
         }
-        return ResolvedProvider(model: resolved.model, authResolver: resolved.authResolver, credentials: stored)
+        return ResolvedProvider(
+            model: ProviderModelWindow.apply(contextWindow, to: resolved.model),
+            authResolver: resolved.authResolver,
+            credentials: stored,
+        )
     }
 
     /// The stored sign-in `configuration` needs, nil for one that needs

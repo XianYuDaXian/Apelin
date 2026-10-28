@@ -1724,7 +1724,15 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   Off pick separately from an absent effort, so a custom endpoint can accept
   Off even when its model ID matches a catalog model that omits it. Summary
   requests normalize their own supplied effort through the same mappings.
-  Beside it, Speed (a bolt) offers
+  The same API-key model settings button chooses each model's context length:
+  Default (its catalog or provider default), 32K, 64K, 128K, 200K, 256K,
+  400K, 1M, or a custom 1–10,000,000 tokens. That override is a device
+  preference saved with model activation and travels as `contextWindow` on
+  open, prompt, regenerate and model switch, so a running turn's next request
+  reads it like an effort change. The worker sets `Model.contextWindow` and
+  caps a positive `maxTokens` to it, so output is budgeted inside the window
+  rather than on top; kwwk's zero keeps omitting the field. Conversations an agent opens inherit the same window. Beside it,
+  Speed (a bolt) offers
   Standard and the faster tiers kwwk's catalog lists for the model
   (`AgentAccount.serviceTiers`: Codex's `priority`, shown as Fast, and
   `ultrafast`); a model that lists none shows no Speed, and Standard sends
@@ -1745,8 +1753,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   type takes the catalog's levels and tiers for the saved model again.
   Model, effort, Speed and Stop blocks fade and reposition on the composer's spring, including
   when the import panel hides or restores the row; Reduce Motion applies
-  changes immediately. `AgentOpenRequest.reasoningEffort` and
-  `serviceTier` reach the worker's session configuration. The stop control's icon, text
+  changes immediately. `AgentOpenRequest.reasoningEffort`, `serviceTier`
+  and `contextWindow` reach the worker's session configuration. The stop control's icon, text
   and border are red. It takes a
   live output cancellation callback and stays hidden without one. Settings stores a global `AgentPermissions.mode`,
   default relaxed, one of Strict / Relaxed / Full (严格 / 宽松 / 完全), with a

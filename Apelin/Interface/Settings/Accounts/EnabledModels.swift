@@ -11,6 +11,10 @@ enum EnabledModels {
         "enabledModels.\(provider.rawValue)"
     }
 
+    private static func contextWindowKey(_ provider: AgentProvider) -> String {
+        "modelContextWindows.\(provider.rawValue)"
+    }
+
     static func ids(for provider: AgentProvider) -> Set<String> {
         Set(UserDefaults.standard.stringArray(forKey: key(provider)) ?? [])
     }
@@ -20,6 +24,7 @@ enum EnabledModels {
         custom: Set<String>,
         hidden: Set<String>,
         reasoningEfforts: [String: [AgentReasoningEffort]],
+        contextWindows: [String: Int],
         for provider: AgentProvider,
     ) {
         UserDefaults.standard.set(models.sorted(), forKey: key(provider))
@@ -31,6 +36,7 @@ enum EnabledModels {
             },
             forKey: "modelReasoningEfforts.\(provider.rawValue)",
         )
+        UserDefaults.standard.set(contextWindows, forKey: contextWindowKey(provider))
         NotificationCenter.default.post(name: .enabledModelsChanged, object: nil)
     }
 
@@ -39,6 +45,7 @@ enum EnabledModels {
         UserDefaults.standard.removeObject(forKey: "customModels.\(provider.rawValue)")
         UserDefaults.standard.removeObject(forKey: "hiddenModels.\(provider.rawValue)")
         UserDefaults.standard.removeObject(forKey: "modelReasoningEfforts.\(provider.rawValue)")
+        UserDefaults.standard.removeObject(forKey: contextWindowKey(provider))
         NotificationCenter.default.post(name: .enabledModelsChanged, object: nil)
     }
 
@@ -63,6 +70,21 @@ enum EnabledModels {
             return override
         }
         return account.reasoningEfforts?[model] ?? []
+    }
+
+    /// The context windows chosen in model settings, keyed by model ID.
+    static func contextWindowOverrides(for provider: AgentProvider) -> [String: Int] {
+        let stored = UserDefaults.standard.dictionary(forKey: contextWindowKey(provider)) ?? [:]
+        return stored.compactMapValues { value in
+            guard let tokens = value as? Int, (1...10_000_000).contains(tokens) else { return nil }
+            return tokens
+        }
+    }
+
+    /// A model's saved context window; only an API-key account keeps one,
+    /// anything else uses the provider's.
+    static func contextWindow(for model: String, in account: AgentAccount) -> Int? {
+        account.isAPIKeyAccount ? contextWindowOverrides(for: account.provider)[model] : nil
     }
 
     static func accounts(from accounts: [AgentAccount]) -> [AgentAccount] {

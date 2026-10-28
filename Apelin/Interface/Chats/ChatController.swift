@@ -71,7 +71,7 @@ final class ChatController: UIViewController {
     private var isRetrying = false
     /// The model switch already sent to the running turn, so a selection
     /// notification does not send it twice.
-    private var appliedSwitch: (provider: AgentProvider, model: String, effort: AgentReasoningEffort?, tier: AgentServiceTier?)?
+    private var appliedSwitch: (provider: AgentProvider, model: String, effort: AgentReasoningEffort?, tier: AgentServiceTier?, context: Int?)?
     private var modelButton: UIButton {
         composer.modelBar.button
     }
@@ -549,7 +549,7 @@ final class ChatController: UIViewController {
     /// answer in flight is not interrupted. Idle, the next prompt carries it.
     private func applyModelWhileWorking(_ selection: ComposerModelSelection?) {
         guard let chat, chat.isWorking, let selection else { return }
-        let key = (selection.provider, selection.model, selection.effort, selection.tier)
+        let key = (selection.provider, selection.model, selection.effort, selection.tier, selection.contextWindow)
         if let appliedSwitch, appliedSwitch == key { return }
         appliedSwitch = key
         let id = chat.id
@@ -642,6 +642,7 @@ extension ChatController {
             model: model,
             supportedEfforts: EnabledModels.reasoningEfforts(for: model, in: account),
             supportedTiers: account.serviceTiers?[model] ?? [],
+            contextWindow: EnabledModels.contextWindow(for: model, in: account),
         )
     }
 

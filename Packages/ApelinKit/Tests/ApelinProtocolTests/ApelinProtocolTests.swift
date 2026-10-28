@@ -71,6 +71,34 @@ final class OperationTableTests: XCTestCase {
         XCTAssertNil(plain.imageCheck, "the image list is not read unless asked")
     }
 
+    /// A model's context window travels with every request that can change it.
+    func testContextWindowTravelsWithModelRequests() throws {
+        let open = try JSONCoding.decode(
+            AgentOpenRequest.self, from: JSONCoding.encode(AgentOpenRequest(contextWindow: 64_000)),
+        )
+        XCTAssertEqual(open.contextWindow, 64_000)
+        let prompt = try JSONCoding.decode(
+            AgentPromptRequest.self,
+            from: JSONCoding.encode(AgentPromptRequest(sessionID: "s", text: "hi", contextWindow: 128_000)),
+        )
+        XCTAssertEqual(prompt.contextWindow, 128_000)
+        let regenerate = try JSONCoding.decode(
+            AgentRegenerateRequest.self,
+            from: JSONCoding.encode(AgentRegenerateRequest(sessionID: "s", contextWindow: 256_000)),
+        )
+        XCTAssertEqual(regenerate.contextWindow, 256_000)
+        let switched = try JSONCoding.decode(
+            AgentModelSwitchRequest.self,
+            from: JSONCoding.encode(AgentModelSwitchRequest(
+                sessionID: "s", provider: .openAI, model: "m", contextWindow: 1_000_000,
+            )),
+        )
+        XCTAssertEqual(switched.contextWindow, 1_000_000)
+        // A request written before the setting decodes with no window.
+        let old = try JSONCoding.decode(AgentOpenRequest.self, from: Data(#"{"approvalMode":"confirm"}"#.utf8))
+        XCTAssertNil(old.contextWindow)
+    }
+
     /// Full is a new mode; old stored and wire values still decode, and a
     /// shell_run request carries `asRoot` and the approve request
     /// `ownerVerified` through the wire.

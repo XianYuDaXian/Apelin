@@ -11,6 +11,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
     private var custom: Set<String>
     private var hidden: Set<String>
     private var reasoningEfforts: [String: [AgentReasoningEffort]]
+    private var contextWindows: [String: Int]
     private var loader: Task<Void, Never>?
     private var saving = false
     private var verification: TaskHandle?
@@ -23,6 +24,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
         custom = Set(EnabledModels.customIDs(for: account.provider))
         hidden = account.isAPIKeyAccount ? EnabledModels.hiddenIDs(for: account.provider) : []
         reasoningEfforts = EnabledModels.reasoningEffortOverrides(for: account.provider)
+        contextWindows = EnabledModels.contextWindowOverrides(for: account.provider)
         selected = account.isAPIKeyAccount ? enabled.subtracting(hidden) : enabled.intersection(available)
         models = account.isAPIKeyAccount
             ? Array(Set(available).union(custom).union(selected).subtracting(hidden)).sorted()
@@ -74,6 +76,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
         let id: String
         let selected: Bool
         let efforts: [AgentReasoningEffort]
+        let contextWindow: Int?
     }
 
     private func efforts(for model: String) -> [AgentReasoningEffort] {
@@ -91,7 +94,14 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
         dataSource.headerTitle = { [weak self] _ in self.map { $0.account.account ?? $0.account.provider.displayName } }
         dataSource.footerTitle = { _ in String(localized: "Choose the models to show in the chat model picker. You can change this later in Model Providers.") }
         dataSource.allowsEditing = usesAPIKey
-        dataSource.update([(0, shown.map { ModelRow(id: $0, selected: selected.contains($0), efforts: efforts(for: $0)) })], reconfigure: true)
+        dataSource.update([(0, shown.map {
+            ModelRow(
+                id: $0,
+                selected: selected.contains($0),
+                efforts: efforts(for: $0),
+                contextWindow: contextWindows[$0],
+            )
+        })], reconfigure: true)
     }
 
     private var usesAPIKey: Bool {
@@ -125,11 +135,11 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
     private func cell(in tableView: UITableView, at indexPath: IndexPath, row: ModelRow) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "model", for: indexPath) as! ModelActivationCell
         let model = row.id
-        let summary = row.efforts.isEmpty ? String(localized: "None") : row.efforts.map(Self.title(for:)).joined(separator: " · ")
+        let summary = Self.summary(for: row)
         var content = cell.defaultContentConfiguration()
         content.text = model
         content.textProperties.numberOfLines = 0
-        let configuration = usesAPIKey ? effortButton(for: model, summary: summary) : nil
+        let configuration = usesAPIKey ? settingsButton(for: model, summary: summary) : nil
         if usesAPIKey {
             content.secondaryText = summary
             content.secondaryTextProperties.numberOfLines = 0
@@ -147,34 +157,129 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
         return cell
     }
 
-    private func effortButton(for model: String, summary: String) -> UIButton {
+    private static func summary(for row: ModelRow) -> String {
+        let context = row.contextWindow.map(title(forContextWindow:)) ?? String(localized: "Default")
+        let efforts = row.efforts.isEmpty ? String(localized: "None") : row.efforts.map(title(for:)).joined(separator: " · ")
+        return "\(context) · \(efforts)"
+    }
+
+    private func settingsButton(for model: String, summary: String) -> UIButton {
         let button = UIButton(type: .system)
         button.setImage(UIImage(systemName: "slider.horizontal.3"), for: .normal)
         button.frame = CGRect(x: 0, y: 0, width: 44, height: 44)
-        button.accessibilityLabel = String(localized: "Reasoning Effort")
-        button.accessibilityValue = "\(model): \(summary)"
+        button.accessibilityLabel = String(localized: "Model Settings")
+        button.accessibilityValue = summary
         button.showsMenuAsPrimaryAction = true
-        button.menu = UIMenu(title: String(localized: "Reasoning Effort"), children: [
+        button.menu = UIMenu(title: String(localized: "Model Settings"), children: [
             UIDeferredMenuElement.uncached { [weak self] completion in
                 guard let self else { completion([]); return }
-                completion(AgentReasoningEffort.allCases.map { effort in
-                    UIAction(
-                        title: Self.title(for: effort),
-                        attributes: self.saving ? .disabled : [],
-                        state: self.efforts(for: model).contains(effort) ? .on : .off,
-                    ) { [weak self] _ in
-                        guard let self, !saving else { return }
-                        var supported = Set(efforts(for: model))
-                        if !supported.insert(effort).inserted {
-                            supported.remove(effort)
-                        }
-                        reasoningEfforts[model] = AgentReasoningEffort.allCases.filter { supported.contains($0) }
-                        updateRows()
-                    }
-                })
+                completion([contextMenu(for: model), effortMenu(for: model)])
             },
         ])
         return button
+    }
+
+    private func contextMenu(for model: String) -> UIMenu {
+        let chosen = contextWindows[model]
+        let attributes: UIMenuElement.Attributes = saving ? .disabled : []
+        let presets = Self.contextPresets.map { tokens in
+            UIAction(
+                title: Self.title(forContextWindow: tokens),
+                attributes: attributes,
+                state: chosen == tokens ? .on : .off,
+            ) { [weak self] _ in
+                self?.setContextWindow(tokens, for: model)
+            }
+        }
+        let standard = UIAction(
+            title: String(localized: "Default"),
+            attributes: attributes,
+            state: chosen == nil ? .on : .off,
+        ) { [weak self] _ in
+            self?.setContextWindow(nil, for: model)
+        }
+        let custom = UIAction(
+            title: String(localized: "Custom…"),
+            attributes: attributes,
+            state: (chosen.map { !Self.contextPresets.contains($0) } ?? false) ? .on : .off,
+        ) { [weak self] _ in
+            self?.editContextWindow(for: model)
+        }
+        return UIMenu(
+            title: String(localized: "Context Length"),
+            children: [standard] + presets + [custom],
+        )
+    }
+
+    private func effortMenu(for model: String) -> UIMenu {
+        UIMenu(title: String(localized: "Reasoning Effort"), children: AgentReasoningEffort.allCases.map { effort in
+            UIAction(
+                title: Self.title(for: effort),
+                attributes: saving ? .disabled : [],
+                state: efforts(for: model).contains(effort) ? .on : .off,
+            ) { [weak self] _ in
+                guard let self, !saving else { return }
+                var supported = Set(efforts(for: model))
+                if !supported.insert(effort).inserted {
+                    supported.remove(effort)
+                }
+                reasoningEfforts[model] = AgentReasoningEffort.allCases.filter { supported.contains($0) }
+                updateRows()
+            }
+        })
+    }
+
+    private func setContextWindow(_ tokens: Int?, for model: String) {
+        guard !saving else { return }
+        if let tokens {
+            contextWindows[model] = tokens
+        } else {
+            contextWindows.removeValue(forKey: model)
+        }
+        updateRows()
+    }
+
+    private func editContextWindow(for model: String) {
+        guard !saving else { return }
+        let alert = AlertInputViewController(
+            title: "Context Length",
+            message: "Enter a token count from 1 to 10,000,000.",
+            placeholder: "Tokens",
+            text: contextWindows[model].map(String.init) ?? "",
+            doneButtonText: "Save",
+        ) { [weak self] value in
+            guard let self else { return }
+            let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard text.allSatisfy(\.isNumber),
+                  let tokens = Int(text),
+                  Self.contextWindowRange.contains(tokens)
+            else {
+                presentNotice(
+                    title: "Invalid Context Length",
+                    message: "Enter a token count from 1 to 10,000,000.",
+                )
+                return
+            }
+            contextWindows[model] = tokens
+            updateRows()
+        }
+        present(alert, animated: true)
+    }
+
+    private static let contextPresets = [
+        32_000, 64_000, 128_000, 200_000, 256_000, 400_000, 1_000_000,
+    ]
+
+    private static let contextWindowRange = 1...10_000_000
+
+    private static func title(forContextWindow tokens: Int) -> String {
+        if tokens.isMultiple(of: 1_000_000) {
+            return "\(tokens / 1_000_000)M"
+        }
+        if tokens.isMultiple(of: 1_000) {
+            return "\(tokens / 1_000)K"
+        }
+        return tokens.formatted()
     }
 
     private static func title(for effort: AgentReasoningEffort) -> String {
@@ -323,6 +428,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
             custom: custom,
             hidden: hidden,
             reasoningEfforts: reasoningEfforts,
+            contextWindows: contextWindows,
             for: account.provider,
         )
         dismiss(animated: true)

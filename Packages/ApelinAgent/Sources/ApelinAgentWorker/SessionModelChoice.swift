@@ -1,6 +1,6 @@
 import ApelinProtocol
 
-/// The provider, model, effort and tier a session runs with now: what its
+/// The provider, model, effort, tier and context window a session runs with now: what its
 /// open request named, then what each of the app's prompts named. A
 /// conversation the session opens starts with the same.
 public actor SessionModelChoice {
@@ -9,6 +9,7 @@ public actor SessionModelChoice {
         public var model: String?
         public var reasoningEffort: AgentReasoningEffort?
         public var serviceTier: AgentServiceTier?
+        public var contextWindow: Int?
     }
 
     public private(set) var current = Choice()
@@ -18,8 +19,12 @@ public actor SessionModelChoice {
         model: String? = nil,
         reasoningEffort: AgentReasoningEffort? = nil,
         serviceTier: AgentServiceTier? = nil,
+        contextWindow: Int? = nil,
     ) {
-        current = Choice(provider: provider, model: model, reasoningEffort: reasoningEffort, serviceTier: serviceTier)
+        current = Choice(
+            provider: provider, model: model, reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier, contextWindow: contextWindow,
+        )
     }
 
     public func set(
@@ -27,7 +32,11 @@ public actor SessionModelChoice {
         model: String?,
         reasoningEffort: AgentReasoningEffort?,
         serviceTier: AgentServiceTier?,
+        contextWindow: Int? = nil,
     ) {
-        current = Choice(provider: provider, model: model, reasoningEffort: reasoningEffort, serviceTier: serviceTier)
+        current = Choice(
+            provider: provider, model: model, reasoningEffort: reasoningEffort,
+            serviceTier: serviceTier, contextWindow: contextWindow,
+        )
     }
 }

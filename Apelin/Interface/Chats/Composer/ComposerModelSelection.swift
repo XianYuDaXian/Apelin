@@ -19,6 +19,9 @@ struct ComposerModelSelection: Codable, Equatable {
     /// The tiers the model offers, from the same snapshot; absent in a
     /// selection saved before there were any.
     var supportedTiers: [AgentServiceTier]?
+    /// The model's context window from model settings; nil uses its catalog
+    /// or provider default. Absent in a selection saved before there was one.
+    var contextWindow: Int?
 
     /// The effort sent: the reader's where the model offers it, else High,
     /// else its strongest; nil for a model that offers none.

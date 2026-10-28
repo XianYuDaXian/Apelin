@@ -201,6 +201,8 @@ public struct AgentOpenRequest: OperationRequest {
     public var approvalMode: ApprovalMode
     public var reasoningEffort: AgentReasoningEffort?
     public var serviceTier: AgentServiceTier?
+    /// The context window chosen for this model in model settings; nil uses the provider's.
+    public var contextWindow: Int?
     /// A first prompt, submitted as soon as the session is open.
     public var prompt: String?
     /// End the session (its task) when the first run finishes: `succeeded`
@@ -222,6 +224,7 @@ public struct AgentOpenRequest: OperationRequest {
         approvalMode: ApprovalMode = .confirm,
         reasoningEffort: AgentReasoningEffort? = nil,
         serviceTier: AgentServiceTier? = nil,
+        contextWindow: Int? = nil,
         prompt: String? = nil,
         closeWhenFinished: Bool? = nil,
         title: String? = nil,
@@ -235,6 +238,7 @@ public struct AgentOpenRequest: OperationRequest {
         self.approvalMode = approvalMode
         self.reasoningEffort = reasoningEffort
         self.serviceTier = serviceTier
+        self.contextWindow = contextWindow
         self.prompt = prompt
         self.closeWhenFinished = closeWhenFinished
         self.title = title
@@ -285,6 +289,7 @@ public struct AgentPromptRequest: OperationRequest {
     public var model: String?
     public var reasoningEffort: AgentReasoningEffort?
     public var serviceTier: AgentServiceTier?
+    public var contextWindow: Int?
     public var attachments: [AgentInputAttachment]?
     public var approvalMode: ApprovalMode?
     /// The session whose agent sent this, written by the host for an
@@ -301,6 +306,7 @@ public struct AgentPromptRequest: OperationRequest {
         model: String? = nil,
         reasoningEffort: AgentReasoningEffort? = nil,
         serviceTier: AgentServiceTier? = nil,
+        contextWindow: Int? = nil,
         approvalMode: ApprovalMode? = nil,
         fromSessionID: String? = nil,
     ) {
@@ -311,6 +317,7 @@ public struct AgentPromptRequest: OperationRequest {
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.serviceTier = serviceTier
+        self.contextWindow = contextWindow
         self.attachments = attachments
         self.approvalMode = approvalMode
         self.fromSessionID = fromSessionID
@@ -366,18 +373,21 @@ public struct AgentModelSwitchRequest: OperationRequest {
     public var model: String
     public var reasoningEffort: AgentReasoningEffort?
     public var serviceTier: AgentServiceTier?
+    public var contextWindow: Int?
     public init(
         sessionID: String,
         provider: AgentProvider,
         model: String,
         reasoningEffort: AgentReasoningEffort? = nil,
         serviceTier: AgentServiceTier? = nil,
+        contextWindow: Int? = nil,
     ) {
         self.sessionID = sessionID
         self.provider = provider
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.serviceTier = serviceTier
+        self.contextWindow = contextWindow
     }
 }
 
@@ -397,18 +407,21 @@ public struct AgentRegenerateRequest: OperationRequest {
     public var model: String?
     public var reasoningEffort: AgentReasoningEffort?
     public var serviceTier: AgentServiceTier?
+    public var contextWindow: Int?
     public init(
         sessionID: String,
         provider: AgentProvider? = nil,
         model: String? = nil,
         reasoningEffort: AgentReasoningEffort? = nil,
         serviceTier: AgentServiceTier? = nil,
+        contextWindow: Int? = nil,
     ) {
         self.sessionID = sessionID
         self.provider = provider
         self.model = model
         self.reasoningEffort = reasoningEffort
         self.serviceTier = serviceTier
+        self.contextWindow = contextWindow
     }
 }
 
@@ -541,6 +554,7 @@ public extension ApelinService {
         model: String? = nil,
         reasoningEffort: AgentReasoningEffort? = nil,
         serviceTier: AgentServiceTier? = nil,
+        contextWindow: Int? = nil,
     ) async throws {
         _ = try await send(AgentRegenerateRequest(
             sessionID: sessionID,
@@ -548,6 +562,7 @@ public extension ApelinService {
             model: model,
             reasoningEffort: reasoningEffort,
             serviceTier: serviceTier,
+            contextWindow: contextWindow,
         ))
     }
 
@@ -557,6 +572,7 @@ public extension ApelinService {
         model: String,
         reasoningEffort: AgentReasoningEffort? = nil,
         serviceTier: AgentServiceTier? = nil,
+        contextWindow: Int? = nil,
     ) async throws {
         _ = try await send(AgentModelSwitchRequest(
             sessionID: sessionID,
@@ -564,6 +580,7 @@ public extension ApelinService {
             model: model,
             reasoningEffort: reasoningEffort,
             serviceTier: serviceTier,
+            contextWindow: contextWindow,
         ))
     }
 
