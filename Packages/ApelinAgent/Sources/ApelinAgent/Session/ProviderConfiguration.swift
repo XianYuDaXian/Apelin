@@ -1,3 +1,4 @@
+import ApelinProtocol
 import Foundation
 import KWWKAI
 
@@ -62,6 +63,17 @@ struct ResolvedProvider: Sendable {
     var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
     /// The stored sign-in it was resolved from; nil for one that needs none.
     var credentials: OAuthCredentials?
+}
+
+/// The account's Responses transport applies to every completion using it.
+public enum ProviderTransport {
+    public static func responses(model: Model, credentials: OAuthCredentials?) -> Transport? {
+        guard model.api == "openai-responses" || model.api == "openai-codex-responses",
+              case let .string(value)? = credentials?.extras[AgentSignInField.responsesTransport.rawValue],
+              let selection = AgentResponsesTransport(rawValue: value)
+        else { return nil }
+        return Transport(rawValue: selection.rawValue)
+    }
 }
 
 enum ProviderResolver {

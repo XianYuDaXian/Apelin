@@ -118,6 +118,17 @@ extension AgentSignInField {
         case .baseURL: String(localized: "Base URL")
         case .defaultModel: String(localized: "Model")
         case .callbackURL: String(localized: "Redirect Address")
+        case .responsesTransport: String(localized: "Responses Transport")
+        }
+    }
+}
+
+extension AgentResponsesTransport {
+    var title: String {
+        switch self {
+        case .auto: String(localized: "Automatic")
+        case .sse: String(localized: "HTTP (SSE)")
+        case .websocket: String(localized: "WebSocket")
         }
     }
 }

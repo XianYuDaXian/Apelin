@@ -564,6 +564,52 @@ struct AccountDeskTests {
         }
     }
 
+    @Test
+    func `Responses transport survives verification storage and configuration editing`() async throws {
+        for transport in ["auto", "sse", "websocket"] {
+            let store = DeliveredCredentialSource()
+            let desk = AccountDesk(store: store, verifyKey: { provider, credentials, _ in
+                #expect(provider == .openAI)
+                #expect(credentials.extras["responsesTransport"] == .string(transport))
+            })
+            let recorder = SignInRecorder()
+            let task = TaskID("responses-\(transport)")
+            try await desk.start(AgentSignInRequest(provider: .openAI), taskID: task, reporter: recorder.reporter)
+            try await recorder.waitFor { !$0.events.isEmpty }
+            try await desk.respond(AgentSignInRespondRequest(taskID: task, values: [
+                "apiKey": "candidate-secret", "baseUrl": "https://responses.example.invalid/v1",
+                "responsesTransport": transport,
+            ]))
+            try await recorder.waitFor { $0.state != nil }
+            #expect(recorder.state == .succeeded)
+            #expect(try await store.credentials(for: "openai-api-key")?.extras["responsesTransport"] == .string(transport))
+            #expect(try await desk.apiConfiguration(for: .openAI).values["responsesTransport"] == transport)
+            #expect(!recorder.transcript.contains("candidate-secret"))
+        }
+    }
+
+    @Test
+    func `Responses transport defaults for old accounts and refuses invalid choices`() async throws {
+        let previous = OAuthCredentials(access: "previous-secret", refresh: "", expires: .max)
+        let store = DeliveredCredentialSource(["openai-api-key": previous])
+        let desk = AccountDesk(store: store, verifyKey: { _, _, _ in })
+        #expect(try await desk.apiConfiguration(for: .openAI).values["responsesTransport"] == "auto")
+        let recorder = SignInRecorder()
+        let task = TaskID("responses-invalid")
+        try await desk.start(AgentSignInRequest(provider: .openAI), taskID: task, reporter: recorder.reporter)
+        try await recorder.waitFor { !$0.events.isEmpty }
+        await #expect(throws: ApelinError.self) {
+            try await desk.respond(AgentSignInRespondRequest(taskID: task, values: [
+                "apiKey": "candidate-secret", "responsesTransport": "unsupported-secret",
+            ]))
+        }
+        #expect(try await store.credentials(for: "openai-api-key") == previous)
+        #expect(recorder.state == nil)
+        #expect(!recorder.transcript.contains("secret"))
+        _ = await desk.cancel(task)
+        try await recorder.waitFor { $0.state != nil }
+    }
+
     /// KWWKCli's API-key forms, as mirrored: the key first and secure, each
     /// form only the fields `agentSignInRespond` knows.
     @Test

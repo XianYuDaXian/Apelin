@@ -1339,7 +1339,15 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   Edit Configuration form receives the stored API key and endpoint in a direct
   reply, keeps the key secure while editing, and prefills every saved field.
   Account lists and task events remain secret-free; the console refuses this
-  operation before sending it, so no key reaches its output or logs. DeepSeek's official
+  operation before sending it, so no key reaches its output or logs. OpenAI API
+  accounts add a Responses Transport menu: Automatic, HTTP (SSE), or WebSocket.
+  Its `responsesTransport` credential extra is `auto`, `sse`, or `websocket`;
+  missing on an older account means automatic. HTTP skips WebSocket entirely;
+  the other choices retain kwwk's WebSocket fallback policy. The credential
+  worker validates and saves the selection, and the configuration editor
+  prefills it. `ProviderTransport` maps it only for Responses models; key/model
+  verification, each live request (including retries and mid-turn switches),
+  title completions and native compaction read the same preference. DeepSeek's official
   Anthropic-compatible endpoint maps to the DeepSeek model family, not the
   Claude catalog; API-key discovery reads the endpoint's model-list API.
   `EnabledModels` owns only local, non-secret selections and custom IDs;
@@ -1388,7 +1396,7 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   kwwk polls and for Kiro, whose listener is kwwk's own}, `input` {fields:
   [{key, required, secure, defaultValue?, placeholder?}]}, then `state`.
   `agentSignInRespond{taskID, values}` hands back, once, the typed fields
-  (`apiKey`, `baseUrl`, `defaultModel`) or a pasted `callbackURL`; the host
+  (`apiKey`, `baseUrl`, `defaultModel`, `responsesTransport`) or a pasted `callbackURL`; the host
   checks the task is a running sign-in and forwards it to the running
   worker without keeping or logging it; a value that will not do is
   refused `badRequest` naming the field, never quoting it, and the flow

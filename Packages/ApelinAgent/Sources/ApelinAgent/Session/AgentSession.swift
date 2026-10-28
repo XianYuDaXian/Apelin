@@ -14,6 +14,7 @@ private actor LiveModel {
         var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
         var thinking: ThinkingLevel
         var serviceTier: ServiceTier?
+        var transport: Transport?
     }
 
     private var snapshot: Snapshot
@@ -23,8 +24,9 @@ private actor LiveModel {
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         thinking: ThinkingLevel,
         serviceTier: ServiceTier?,
+        transport: Transport?,
     ) {
-        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier)
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier, transport: transport)
     }
 
     func current() -> Snapshot {
@@ -42,8 +44,9 @@ private actor LiveModel {
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         thinking: ThinkingLevel,
         serviceTier: ServiceTier?,
+        transport: Transport?,
     ) {
-        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier)
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, serviceTier: serviceTier, transport: transport)
     }
 }
 
@@ -190,6 +193,7 @@ public actor AgentSession {
             authResolver: resolved.authResolver,
             thinking: configuration.thinking,
             serviceTier: configuration.serviceTier,
+            transport: ProviderTransport.responses(model: resolved.model, credentials: resolved.credentials),
         )
         // The loop fixes the model when the run starts; this reads the live
         // one at every request, so a switch during the answer lands at the
@@ -198,6 +202,7 @@ public actor AgentSession {
             let live = await liveModel.current()
             var model = live.model
             var options = given ?? StreamOptions()
+            options.transport = live.transport
             if let resolver = live.authResolver {
                 let auth = try await resolver(model, options.sessionId)
                 options.resolvedAuth = auth
@@ -253,8 +258,10 @@ public actor AgentSession {
         // A stream function of its own costs kwwk's automatic native
         // compaction; give it back, so a long conversation still compacts
         // through the provider instead of a summary prompt.
-        agent.autoCompact?.config.nativeCompaction = { model, context, instructions, options in
-            try await KWWKAI.compactNative(
+        agent.autoCompact?.config.nativeCompaction = { model, context, instructions, given in
+            var options = given ?? StreamOptions()
+            options.transport = await liveModel.current().transport
+            return try await KWWKAI.compactNative(
                 model: model,
                 context: context,
                 instructions: instructions,
@@ -317,6 +324,7 @@ public actor AgentSession {
             authResolver: resolved.authResolver,
             thinking: thinking,
             serviceTier: serviceTier,
+            transport: ProviderTransport.responses(model: resolved.model, credentials: resolved.credentials),
         )
         resolvedFrom = (provider, resolved.credentials)
     }
@@ -347,6 +355,7 @@ public actor AgentSession {
             authResolver: change.authResolver,
             thinking: change.thinking,
             serviceTier: change.serviceTier,
+            transport: ProviderTransport.responses(model: change.model, credentials: resolved.credentials),
         )
         if runTask == nil {
             apply(change)
@@ -475,9 +484,10 @@ public actor AgentSession {
     public func generateTitle(for text: String) {
         guard (!hasTitle && titleMisses < Self.maximumTitleMisses) || projectStillNeedsName,
               titleTask == nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        let model = agent.state.model
-        let authResolver = agent.authResolver
-        titleTask = Task { [weak self] in
+        titleTask = Task { [weak self, liveModel] in
+            let live = await liveModel.current()
+            let model = live.model
+            let authResolver = live.authResolver
             let cancellation = CancellationHandle()
             let timeout = Task {
                 do { try await Task.sleep(for: .seconds(20)) } catch { return }
@@ -495,6 +505,7 @@ public actor AgentSession {
                         ),
                         options: StreamOptions(
                             maxTokens: 160,
+                            transport: live.transport,
                             maxRetryDelayMs: 0,
                             resolvedAuth: auth,
                             // only a model that reasons is asked to reason

@@ -51,6 +51,12 @@ public enum AgentSignInMethod: String, Codable, Sendable {
     case apiKey
 }
 
+/// How a Responses API account receives its streamed answers. HTTP uses SSE;
+/// automatic and WebSocket follow the provider's connection fallback policy.
+public enum AgentResponsesTransport: String, Codable, Sendable, CaseIterable {
+    case auto, sse, websocket
+}
+
 /// The values `agentSignInRespond` carries, by their wire names.
 public enum AgentSignInField: String, Codable, Sendable, CaseIterable {
     /// The key itself (kwwk's `access`).
@@ -60,6 +66,8 @@ public enum AgentSignInField: String, Codable, Sendable, CaseIterable {
     /// The model an OpenAI-compatible endpoint serves by default (kwwk's
     /// `defaultModel` extra).
     case defaultModel
+    /// The Responses stream transport, stored with an API-key account.
+    case responsesTransport
     /// The address the browser was sent back to, pasted by the user when
     /// the loopback listener could not be reached.
     case callbackURL

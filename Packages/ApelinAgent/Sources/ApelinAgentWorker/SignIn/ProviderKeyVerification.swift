@@ -30,6 +30,7 @@ public enum ProviderKeyVerification {
                         context: Context(messages: [.user(UserMessage(text: "Reply with OK."))]),
                         options: StreamOptions(
                             maxTokens: 32,
+                            transport: ProviderTransport.responses(model: resolved.model, credentials: credentials),
                             maxRetryDelayMs: 0,
                             resolvedAuth: auth,
                             cancellation: cancellation,
