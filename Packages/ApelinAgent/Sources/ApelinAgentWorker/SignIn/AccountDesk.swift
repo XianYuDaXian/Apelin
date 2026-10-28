@@ -343,6 +343,10 @@ public actor AccountDesk {
                 guard value.count <= 256, !value.unicodeScalars.contains(where: Self.isSpaceOrControl) else {
                     throw ApelinError(.badRequest, "Enter a valid model ID without spaces or line breaks.")
                 }
+            case .responsesTransport:
+                guard AgentResponsesTransport(rawValue: value) != nil else {
+                    throw ApelinError(.badRequest, "Choose a valid Responses transport.")
+                }
             case .callbackURL:
                 throw ApelinError(.badRequest, "\(provider.rawValue) does not ask for \(field.field.rawValue)")
             }
@@ -357,6 +361,7 @@ public actor AccountDesk {
         case .apiKey: "Enter an API key."
         case .baseURL: "Enter the endpoint address."
         case .defaultModel: "Enter a model ID."
+        case .responsesTransport: "Choose a Responses transport."
         case .callbackURL: "Paste the address the browser opened."
         }
     }
@@ -369,7 +374,7 @@ public actor AccountDesk {
     /// `access`, no refresh token, never expiring, the rest as extras.
     static func apiKeyCredentials(_ values: [AgentSignInField: String]) -> OAuthCredentials {
         var credentials = OAuthCredentials(access: values[.apiKey] ?? "", refresh: "", expires: .max)
-        for field in [AgentSignInField.baseURL, .defaultModel] {
+        for field in [AgentSignInField.baseURL, .defaultModel, .responsesTransport] {
             if let value = values[field] {
                 credentials.extras[field.rawValue] = .string(value)
             }

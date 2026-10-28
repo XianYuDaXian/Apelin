@@ -115,6 +115,7 @@ enum SignInKeyForms {
         Form(provider: .openAI, fields: [
             KeyField(field: .apiKey, required: true, placeholder: "sk-proj-…"),
             KeyField(field: .baseURL, required: false, defaultValue: "https://api.openai.com"),
+            KeyField(field: .responsesTransport, required: false, defaultValue: "auto"),
         ]),
         Form(provider: .google, fields: [
             KeyField(field: .apiKey, required: true, placeholder: "AIza…"),

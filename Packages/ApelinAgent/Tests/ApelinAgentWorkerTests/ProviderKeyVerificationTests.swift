@@ -56,14 +56,60 @@ struct ProviderKeyVerificationTests {
         }
     }
 
-    private static func respond(_ connection: NWConnection, status: Int, body: String, received: Data = Data()) {
+    @Test
+    func `Responses HTTP verification posts directly without a WebSocket handshake`() async throws {
+        let parameters = NWParameters.tcp
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        let server = try NWListener(using: parameters)
+        defer { server.cancel() }
+        let (ports, ready) = AsyncStream<UInt16>.makeStream()
+        server.stateUpdateHandler = { state in
+            switch state {
+            case .ready:
+                if let port = server.port { ready.yield(port.rawValue) }
+                ready.finish()
+            case .waiting, .failed, .cancelled: ready.finish()
+            default: break
+            }
+        }
+        let answer = """
+        data: {"type":"response.created","response":{"id":"verify","status":"in_progress"}}
+
+        data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","role":"assistant","content":[]}}
+
+        data: {"type":"response.content_part.added","output_index":0,"content_index":0,"part":{"type":"output_text","text":""}}
+
+        data: {"type":"response.output_text.delta","output_index":0,"content_index":0,"delta":"OK"}
+
+        data: {"type":"response.content_part.done","output_index":0,"content_index":0,"part":{"type":"output_text","text":"OK"}}
+
+        data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}
+
+        data: {"type":"response.completed","response":{"id":"verify","status":"completed","usage":{"input_tokens":2,"output_tokens":1}}}
+
+
+        """
+        server.newConnectionHandler = { connection in
+            connection.start(queue: DispatchQueue(label: "responses-verification-connection"))
+            Self.respond(connection, status: 200, body: answer, path: "/v1/responses")
+        }
+        server.start(queue: DispatchQueue(label: "responses-verification-listener"))
+        var iterator = ports.makeAsyncIterator()
+        let port = try #require(await iterator.next())
+        let credentials = OAuthCredentials(access: "candidate-secret", refresh: "", expires: .max, extras: [
+            "baseUrl": .string("http://127.0.0.1:\(port)/v1"), "responsesTransport": .string("sse"),
+        ])
+        try await ProviderKeyVerification.verify(.openAI, credentials, modelOverride: "verification-model")
+    }
+
+    private static func respond(_ connection: NWConnection, status: Int, body: String, path: String = "/v1/chat/completions", received: Data = Data()) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { data, _, ended, error in
             let request = received + (data ?? Data())
             guard let separator = request.range(of: Data("\r\n\r\n".utf8)) else {
                 if ended || error != nil {
                     connection.cancel(); return
                 }
-                respond(connection, status: status, body: body, received: request)
+                respond(connection, status: status, body: body, path: path, received: request)
                 return
             }
             let header = String(decoding: request[..<separator.lowerBound], as: UTF8.self)
@@ -74,10 +120,10 @@ struct ProviderKeyVerificationTests {
                 if ended || error != nil {
                     connection.cancel(); return
                 }
-                respond(connection, status: status, body: body, received: request)
+                respond(connection, status: status, body: body, path: path, received: request)
                 return
             }
-            #expect(header.hasPrefix("POST /v1/chat/completions HTTP/1.1"))
+            #expect(header.hasPrefix("POST \(path) HTTP/1.1"))
             #expect(header.lowercased().contains("authorization: bearer candidate-secret"))
             let payload = try? JSONSerialization.jsonObject(with: Data(request[separator.upperBound...])) as? [String: Any]
             #expect(payload?["model"] as? String == "verification-model")

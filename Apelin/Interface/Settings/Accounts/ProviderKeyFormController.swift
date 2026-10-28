@@ -20,6 +20,12 @@ final class ProviderKeyFormController: TableController {
     private let initialValues: [String: String]
     private var fields: [AgentSignInField: UITextField] = [:]
     private var cells: [AgentSignInField: UITableViewCell] = [:]
+    private var responsesTransport: AgentResponsesTransport = .auto
+    private var responsesTransportButton: UIButton?
+    private var textKeys: [SignInProgress.KeyField] {
+        keys.filter { $0.field != .responsesTransport }
+    }
+
     private enum Row: Hashable {
         case field(AgentSignInField)
         case method(AgentSignInMethod)
@@ -59,7 +65,7 @@ final class ProviderKeyFormController: TableController {
         tableView.keyboardDismissMode = .interactive
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 52
-        for (index, key) in keys.enumerated() {
+        for (index, key) in textKeys.enumerated() {
             let field = UITextField()
             field.font = .preferredFont(forTextStyle: .body)
             field.adjustsFontForContentSizeCategory = true
@@ -72,7 +78,7 @@ final class ProviderKeyFormController: TableController {
             field.isSecureTextEntry = key.secure
             field.textContentType = key.field == .baseURL ? .URL : nil
             field.keyboardType = key.field == .baseURL ? .URL : .asciiCapable
-            field.returnKeyType = index == keys.count - 1 ? .go : .next
+            field.returnKeyType = index == textKeys.count - 1 ? .go : .next
             field.accessibilityLabel = key.field.title
             field.text = initialValues[key.field.rawValue] ?? key.defaultValue
             field.placeholder = key.placeholder
@@ -81,6 +87,32 @@ final class ProviderKeyFormController: TableController {
             field.addAction(UIAction { [weak self] _ in self?.advance(from: index) }, for: .editingDidEndOnExit)
             fields[key.field] = field
             cells[key.field] = cell(containing: field)
+        }
+        if let key = keys.first(where: { $0.field == .responsesTransport }) {
+            responsesTransport = initialValues[key.field.rawValue].flatMap(AgentResponsesTransport.init(rawValue:))
+                ?? key.defaultValue.flatMap(AgentResponsesTransport.init(rawValue:))
+                ?? .auto
+            let button = UIButton(type: .system)
+            var configuration = UIButton.Configuration.plain()
+            configuration.image = UIImage(systemName: "chevron.up.chevron.down")
+            configuration.imagePlacement = .trailing
+            configuration.imagePadding = 8
+            configuration.contentInsets = .zero
+            configuration.titleLineBreakMode = .byWordWrapping
+            configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
+                var attributes = attributes
+                attributes.font = .preferredFont(forTextStyle: .body)
+                return attributes
+            }
+            button.configuration = configuration
+            button.titleLabel?.numberOfLines = 0
+            button.titleLabel?.adjustsFontForContentSizeCategory = true
+            button.contentHorizontalAlignment = .leading
+            button.showsMenuAsPrimaryAction = true
+            button.accessibilityLabel = key.field.title
+            responsesTransportButton = button
+            cells[key.field] = cell(containing: button)
+            updateResponsesTransport()
         }
         submitItem.tintColor = .tintColor
         submitItem.accessibilityLabel = String(localized: "Fetch Models")
@@ -100,7 +132,7 @@ final class ProviderKeyFormController: TableController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        if !isSubmitting, let first = keys.first {
+        if !isSubmitting, let first = textKeys.first {
             fields[first.field]?.becomeFirstResponder()
         }
     }
@@ -122,6 +154,21 @@ final class ProviderKeyFormController: TableController {
         return cell
     }
 
+    private func updateResponsesTransport() {
+        guard let button = responsesTransportButton else { return }
+        button.configuration?.title = responsesTransport.title
+        button.accessibilityValue = responsesTransport.title
+        button.menu = UIMenu(options: .singleSelection, children: AgentResponsesTransport.allCases.map { transport in
+            UIAction(title: transport.title, state: transport == responsesTransport ? .on : .off) { [weak self] _ in
+                guard let self, !isSubmitting else { return }
+                responsesTransport = transport
+                updateResponsesTransport()
+                updateSubmit()
+                tableView.performBatchUpdates(nil)
+            }
+        })
+    }
+
     private var values: [AgentSignInField: String] {
         // The model selector owns defaultModel; editing a key or endpoint
         // must preserve that saved field even though this form hides it.
@@ -129,23 +176,28 @@ final class ProviderKeyFormController: TableController {
         if let defaultModel = initialValues[AgentSignInField.defaultModel.rawValue] {
             result[.defaultModel] = defaultModel
         }
+        if responsesTransportButton != nil {
+            result[.responsesTransport] = responsesTransport.rawValue
+        }
         return result.merging(fields.mapValues { $0.text ?? "" }) { _, edited in edited }
     }
 
     private var isReady: Bool {
-        keys.allSatisfy {
-            !$0.required || !(fields[$0.field]?.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let currentValues = values
+        return keys.allSatisfy {
+            !$0.required || !(currentValues[$0.field] ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
     }
 
     private func updateSubmit() {
         submitItem.isEnabled = isReady && !isSubmitting
         fields.values.forEach { $0.isEnabled = !isSubmitting }
+        responsesTransportButton?.isEnabled = !isSubmitting
     }
 
     private func advance(from index: Int) {
-        if index + 1 < keys.count {
-            fields[keys[index + 1].field]?.becomeFirstResponder()
+        if index + 1 < textKeys.count {
+            fields[textKeys[index + 1].field]?.becomeFirstResponder()
         } else {
             submit()
         }
