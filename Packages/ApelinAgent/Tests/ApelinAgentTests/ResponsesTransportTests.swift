@@ -115,6 +115,12 @@ struct ResponsesTransportTests {
         #expect(selected.compat?.supportsReasoningEffort == true)
         #expect(resolveThinkingLevel(selected, .max) == "max")
         #expect(ProviderReasoning.model(custom, level: nil) == custom)
+        var compat = ModelCompat()
+        compat.supportsReasoningEffort = false
+        let providerSpecific = Model(
+            id: "provider-specific", api: "openai-completions", provider: "test", reasoning: true, compat: compat,
+        )
+        #expect(ProviderReasoning.model(providerSpecific, level: .high).compat?.supportsReasoningEffort == false)
     }
 
     @Test

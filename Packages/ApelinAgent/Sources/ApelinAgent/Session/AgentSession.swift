@@ -242,7 +242,9 @@ public actor AgentSession {
                 )
                 options.serviceTier = live.serviceTier
             } else {
-                options.reasoning = options.reasoning ?? Self.reasoningLevel(live.thinking)
+                if options.reasoning == nil, !model.reasoning {
+                    options.reasoning = Self.reasoningLevel(live.thinking)
+                }
                 model = ProviderReasoning.model(model, level: options.reasoning)
             }
             if !model.reasoning {

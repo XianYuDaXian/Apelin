@@ -160,8 +160,8 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
                 completion(AgentReasoningEffort.allCases.map { effort in
                     UIAction(
                         title: Self.title(for: effort),
-                        attributes: saving ? .disabled : [],
-                        state: efforts(for: model).contains(effort) ? .on : .off,
+                        attributes: self.saving ? .disabled : [],
+                        state: self.efforts(for: model).contains(effort) ? .on : .off,
                     ) { [weak self] _ in
                         guard let self, !saving else { return }
                         var supported = Set(efforts(for: model))

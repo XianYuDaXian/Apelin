@@ -89,7 +89,7 @@ enum ProviderReasoning {
             mapping[key] = level?.rawValue ?? "none"
         }
         selected.thinkingLevelMap = mapping
-        if selected.api == "openai-completions" {
+        if selected.api == "openai-completions", selected.compat?.supportsReasoningEffort == nil {
             var compat = selected.compat ?? ModelCompat()
             compat.supportsReasoningEffort = true
             selected.compat = compat
