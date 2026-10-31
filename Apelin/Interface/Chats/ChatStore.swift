@@ -73,7 +73,7 @@ struct SessionReplay: Codable, Sendable {
         if ChatTranscript.endsTask(event) {
             // A terminal state with a retry after it belongs to the same
             // conversation; the retry, not the stop, ends this replay.
-            return (retries ?? 0) == 0
+            return (retries ?? 0) > 0
         }
         if event.kind == Self.compactionKind {
             guard let remaining = compactions, remaining > 0 else { return false }
