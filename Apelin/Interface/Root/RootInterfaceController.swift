@@ -2,17 +2,20 @@ import Litext
 import Then
 import UIKit
 
-/// The root, laid out as ChatGPT and FlowDown lay out theirs. Wide, as an
-/// iPad full screen, the sidebar sits beside the detail column, and the
-/// button first on the detail bar hides it or brings it back. Narrow, as on
-/// an iPhone, the detail column is the screen and the sidebar a drawer under
-/// it: the same button, or a pan toward the trailing side on a page at the
-/// root of the column, slides the page aside to show it; a tap or a pan
-/// back on what is left of the page, or picking a conversation, slides it
-/// back. A drawer always has a conversation behind it, never the icon.
-/// While the sidebar is out of sight, a new conversation is the last item
-/// on the detail bar. Right to left, all of it is mirrored: the sidebar is
-/// on the right and the drawer comes out from there.
+/// The root, laid out as ChatGPT and FlowDown lay out theirs. Wide (a
+/// regular width with room for the sidebar beside an iPhone-wide page: an
+/// iPad full screen, an iPhone Duo's inner display held sideways), the
+/// sidebar sits beside the detail column, and the button first on the detail
+/// bar hides it or brings it back. Narrow (a compact width, or a regular one
+/// without that room: an iPhone, an iPhone Duo's outer display or its inner
+/// one held upright), the detail column is the screen and the sidebar a
+/// drawer under it: the same button, or a pan toward the trailing side on a
+/// page at the root of the column, slides the page aside to show it; a tap
+/// or a pan back on what is left of the page, or picking a conversation,
+/// slides it back. A drawer always has a conversation behind it, never the
+/// icon. While the sidebar is out of sight, a new conversation is the last
+/// item on the detail bar. Right to left, all of it is mirrored: the sidebar
+/// is on the right and the drawer comes out from there.
 final class RootInterfaceController: UIViewController {
     /// The detail column's stack.
     let navigator = DetailNavigator()
@@ -33,14 +36,21 @@ final class RootInterfaceController: UIViewController {
     private var isDeliveringSamples = false
     private lazy var sidebarNavigation = UINavigationController(rootViewController: sidebar)
     /// The conversation page, made once and handed each conversation picked.
+    /// Its Delete Conversation… goes through the sidebar's Delete, which
+    /// leaves the page to what is picked next.
     private lazy var chatController: ChatController = {
         let page = ChatController()
         page.runtime = chatRuntime
+        page.onDelete = { [weak self, weak page] id in
+            self?.sidebar.delete(id, from: .moreMenu, presenter: page)
+        }
         return page
     }()
 
     /// Beside the page, the sidebar is always this wide.
     private static let sidebarWidth: CGFloat = 340
+    /// The narrowest page the sidebar goes beside: an iPhone's width.
+    private static let minimumPageWidth: CGFloat = 402
     /// What an open drawer leaves of the page, to tap or pan it back.
     private static let drawerMargin: CGFloat = 64
     /// The widest a drawer gets, in an iPhone's landscape.
@@ -60,8 +70,17 @@ final class RootInterfaceController: UIViewController {
     /// The layout last applied, to notice the window crossing between the two.
     private var laidOutAsDrawer: Bool?
 
+    /// Narrow: a compact width, or a regular one without the room for the
+    /// sidebar beside a page an iPhone's width. A regular width is not
+    /// always an iPad's: an iPhone Duo's inner display held upright is
+    /// 669 pt wide, and beside the sidebar its page was 329. There the
+    /// sidebar comes out over the page, as a split view's does in an iPad's
+    /// portrait. Read on every layout: the window changes width under the
+    /// running app.
     private var isDrawer: Bool {
-        traitCollection.horizontalSizeClass == .compact
+        let width = viewIfLoaded?.bounds.width ?? 0
+        return traitCollection.horizontalSizeClass == .compact
+            || (width > 0 && width < Self.sidebarWidth + Self.minimumPageWidth)
     }
 
     private var drawerWidth: CGFloat {
@@ -93,6 +112,9 @@ final class RootInterfaceController: UIViewController {
         }
         ChatWidgetPublisher.shared.attach(chatRuntime)
         chatRuntime.onDraftRestored = { [weak self] id in self?.chatController.restoreDraft(for: id) }
+        chatRuntime.onUnsentReturned = { [weak self] id, returned in
+            self?.chatController.unsentReturned(returned, to: id)
+        }
         chatRuntime.onError = { [weak self] error in
             self?.presentNotice(title: "Unable to Load Chats", message: error.readableMessage)
         }
@@ -101,6 +123,10 @@ final class RootInterfaceController: UIViewController {
             StorageWarning.saveFailed(error, from: self)
         }
         chatRuntime.onSaveRecovered = { StorageWarning.saveRecovered() }
+        chatRuntime.onBuildsCompleted = { [weak self] count in
+            guard let self else { return }
+            StarPrompt.buildsCompleted(count, from: self)
+        }
     }
 
     /// A restored chat already names its project. A fresh phone chat must
@@ -142,6 +168,12 @@ final class RootInterfaceController: UIViewController {
             self,
             selector: #selector(enteredForeground),
             name: UIApplication.willEnterForegroundNotification,
+            object: nil,
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(enteredBackground),
+            name: UIApplication.didEnterBackgroundNotification,
             object: nil,
         )
 
@@ -186,6 +218,15 @@ final class RootInterfaceController: UIViewController {
     @objc private func enteredForeground() {
         chatRuntime.retryUnsaved()
         StorageWarning.checkFreeSpace(from: self)
+    }
+
+    /// What streamed or was typed since the last write goes to disk before
+    /// the app is suspended, rather than at the end of its interval.
+    @objc private func enteredBackground() {
+        let task = UIApplication.shared.beginBackgroundTask(withName: "Save Chats")
+        chatRuntime.saveNow {
+            UIApplication.shared.endBackgroundTask(task)
+        }
     }
 
     func presentWelcome() {

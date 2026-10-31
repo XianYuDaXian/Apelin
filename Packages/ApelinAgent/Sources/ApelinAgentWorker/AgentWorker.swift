@@ -60,6 +60,9 @@ public enum AgentWorker {
                 if let mode = prompt.approvalMode {
                     await session.setApprovalMode(AgentWorker.approvalMode(mode))
                 }
+                if let asks = prompt.asksBeforeScreen {
+                    await session.setAsksBeforeScreen(asks)
+                }
                 if let provider = prompt.provider {
                     try await session.configure(
                         provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: prompt.model)),
@@ -257,8 +260,8 @@ public enum AgentWorker {
 
     /// The kwwk provider configuration for an open request. The first four
     /// keep their own cases (and need a model named, as they always have);
-    /// every other provider is kwwk's stored provider of its store id, with
-    /// kwwk's default model when none is named.
+    /// every other provider uses its credential store id and the default
+    /// model chosen by ProviderRegistration when none is named.
     static func provider(_ open: AgentOpenRequest) throws -> ProviderConfiguration {
         let model = open.model.flatMap { $0.isEmpty ? nil : $0 }
         let provider = open.provider ?? .githubCopilot
@@ -275,7 +278,7 @@ public enum AgentWorker {
             guard let model else { throw ApelinError(.badRequest, "name the model for \(provider.rawValue)") }
             return .openAICompatible(model: model)
         case .openAICodex, .cursor, .devin, .kiro, .qoder, .qoderCN, .workBuddy, .workBuddyAI, .kimiCoding, .xai,
-             .zai, .zaiCodingCN, .openRouter, .openAI, .google:
+             .zai, .zaiCodingCN, .openRouter, .openAI, .google, .deepSeek:
             return .stored(storeID: provider.storeID, model: model)
         }
     }
@@ -286,6 +289,10 @@ actor WorkerState {
     /// What the session runs with now, which a conversation it opens starts with.
     let modelChoice = SessionModelChoice()
     private var session: AgentSession?
+    /// An open is under way. It takes the place before its first
+    /// suspension, so an open the host sends meanwhile is refused rather
+    /// than served by a second session writing the same log.
+    private var opening = false
     private var taskID: TaskID?
     private var context: WorkerContext?
     private var relay: Task<Void, Never>?
@@ -293,7 +300,9 @@ actor WorkerState {
     private var finished = false
 
     func open(_ open: AgentOpenRequest, taskID: TaskID, context: WorkerContext) async throws {
-        guard session == nil else { throw ApelinError(.conflict, "this process already serves a session") }
+        guard session == nil, !opening else {
+            throw ApelinError(.conflict, "this process already serves or is opening a session")
+        }
         guard let sessionID = context.assignment.sessionID, SessionEventLog.isValidSessionID(sessionID) else {
             throw ApelinError(.badRequest, "an agent session needs a session id from the host")
         }
@@ -310,6 +319,9 @@ actor WorkerState {
         let dataRoot = ApelinDataRoot(home: home)
         let projectURL = dataRoot.workspace(for: identity.name, temporaryID: open.temporaryID)
 
+        opening = true
+        // one that fails leaves the place free for the host to try again
+        defer { opening = false }
         // Credentials the owner dropped in the inbox are taken first.
         let keychain = KeychainCredentialSource(accessGroup: AgentWorker.keychainAccessGroup)
         let imported = await CredentialInbox(home: context.assignment.home).importAll(into: keychain)
@@ -323,13 +335,17 @@ actor WorkerState {
                     project: identity,
                     temporaryID: open.temporaryID,
                     provider: AgentWorker.provider(open),
-                    approval: ApprovalPolicy(mode: AgentWorker.approvalMode(open.approvalMode)),
+                    approval: ApprovalPolicy(
+                        mode: AgentWorker.approvalMode(open.approvalMode),
+                        asksBeforeScreen: ScreenConsent.asks(open.asksBeforeScreen),
+                    ),
                     dataRoot: dataRoot,
                     thinking: .init(rawValue: open.reasoningEffort?.rawValue ?? "off") ?? .off,
                     explicitReasoningOff: open.reasoningEffort == .off,
                     contextWindow: open.contextWindow,
                     serviceTier: AgentWorker.serviceTier(open.serviceTier),
                     installRoot: context.assignment.installRoot,
+                    hostRestarted: open.hostRestarted == true,
                 ),
                 backend: ChannelHostBackend(
                     service: context.host,
@@ -560,6 +576,10 @@ actor EventRelay {
             return [("steer", .object(["text": .string(text)]))]
         case .messageStarted:
             return [("messageStarted", nil)]
+        case .messageDiscarded:
+            return [("messageDiscarded", nil)]
+        case .reconnecting:
+            return [("reconnecting", nil)]
         case .toolCallPreparing:
             return [("toolCallPreparing", nil)]
         case let .textDelta(text):
@@ -672,8 +692,68 @@ actor EventRelay {
             payload["detail"] = .object(["skillChange": (try? ApelinCore.JSONValue(encoding: change)) ?? .null])
         case let .projectRename(rename):
             payload["detail"] = .object(["projectRename": (try? ApelinCore.JSONValue(encoding: rename)) ?? .null])
+        // The issue the host matches an agent's feedbackSend to
+        // (AgentFeedbackRules).
+        case let .feedback(feedback):
+            payload["detail"] = .object(["feedback": (try? ApelinCore.JSONValue(encoding: feedback)) ?? .null])
+        // The issue, the new text and what it was made against, which the
+        // host matches an agent's feedbackEdit to (AgentFeedbackRules); a
+        // field that stays is left out.
+        case let .feedbackEdit(edit):
+            payload["detail"] = .object(["feedbackEdit": (try? ApelinCore.JSONValue(encoding: edit)) ?? .null])
+        // The repository the host matches an agent's gitRepositoryCreate to
+        // (AgentRepositoryCreateRules).
+        case let .repositoryCreate(repository):
+            payload["detail"] = .object(["repositoryCreate": (try? ApelinCore.JSONValue(encoding: repository)) ?? .null])
+        // The repository and issue the host matches an agent's
+        // gitIssueCreate to (AgentIssueCreateRules).
+        case let .issueCreate(issue):
+            payload["detail"] = .object(["issueCreate": (try? ApelinCore.JSONValue(encoding: issue)) ?? .null])
+        // The project the host matches an agent's projectDelete to
+        // (AgentProjectDeleteRules).
+        case let .projectDelete(deletion):
+            payload["detail"] = .object(["projectDelete": (try? ApelinCore.JSONValue(encoding: deletion)) ?? .null])
+        // The repository, files and digests the host matches an agent's
+        // distributionPublish to (AgentPublishRules).
+        case let .packagePublish(publication):
+            payload["detail"] = .object(["packagePublish": (try? ApelinCore.JSONValue(encoding: publication)) ?? .null])
+        // What the host matches an agent's readUITree, uiAction or
+        // agentRunCode to while Ask Before Using the Screen is on
+        // (AgentScreenRules).
+        case let .screenControl(use):
+            payload["detail"] = .object(screenDetail(use))
         }
         return .object(payload)
+    }
+
+    /// `detail` of a screen card: `screenControl` {operation, request?},
+    /// the tree read or the action as `ChannelHostBackend` sends it to the
+    /// host, and a command's own `command` — `rootCommand` as root — as any
+    /// shell_run card has it, which the app's card shows. A request that
+    /// would not reach the host (an element with nothing to tap it by) is
+    /// left out, so no approval covers it.
+    static func screenDetail(_ use: ScreenControlApproval) -> [String: ApelinCore.JSONValue] {
+        func marker(_ operation: AppOperation, request: ApelinCore.JSONValue? = nil) -> ApelinCore.JSONValue {
+            var marker: [String: ApelinCore.JSONValue] = ["operation": .string(operation.rawValue)]
+            marker["request"] = request
+            return .object(marker)
+        }
+        switch use {
+        case let .readTree(targetID):
+            let request = try? ApelinCore.JSONValue(encoding: ApelinProtocol.ReadUITreeRequest(targetID: targetID))
+            return [ScreenConsent.detailKey: marker(.readUITree, request: request)]
+        case let .interact(targetID, action):
+            let request = (try? ChannelHostBackend.action(action)).flatMap { wire in
+                try? ApelinCore.JSONValue(encoding: ApelinProtocol.UIActionRequest(targetID: targetID, action: wire))
+            }
+            return [ScreenConsent.detailKey: marker(.uiAction, request: request)]
+        case let .command(invocation, asRoot):
+            let key = asRoot ? RunCodeApproval.rootCommandDetail : "command"
+            return [
+                ScreenConsent.detailKey: marker(.agentRunCode),
+                key: (try? ApelinCore.JSONValue(encoding: invocation)) ?? .null,
+            ]
+        }
     }
 
     static func decisionName(_ decision: ApelinAgent.ApprovalDecision) -> String {

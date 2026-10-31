@@ -14,6 +14,10 @@ public struct Diagnostics: LogEvidenceSource, LiveLogSource {
     /// (`settledForegroundApp`), and how often it asks.
     public var settleTimeout: TimeInterval = 3
     public var settleInterval: TimeInterval = 0.25
+    /// How long an element tap waits for its element to be in the tree (a
+    /// menu still animating in), and how often icli looks.
+    public var elementTimeout: TimeInterval = 3
+    public var elementInterval: TimeInterval = 0.3
 
     public init(icli: any IcliSurface) {
         self.icli = icli
@@ -317,17 +321,28 @@ public struct Diagnostics: LogEvidenceSource, LiveLogSource {
     /// target (`foregroundApp().verified`); this does not re-decide that.
     /// `settled` is as for `uiTree`: an element tap waits for the foreground
     /// to settle only when the caller has not.
+    ///
+    /// A wake is the way back from a locked device or a dark screen, so it
+    /// alone needs neither, and it answers the lock state it left: a device
+    /// with a passcode stays on its lock screen until the user unlocks it.
+    /// A `type` answers what it left in the fields (`typeReadingBack`).
+    /// Every other action answers nil.
+    @discardableResult
     public func perform(
         _ action: UIAction,
         settled: ForegroundApp? = nil,
-    ) throws {
+    ) throws -> UIActionOutcome? {
         try action.validate()
+        if action == .press(.wake) {
+            return try UIActionOutcome(lock: Self.decodeLock(icli.pressButton(HardwareButton.wake.icliName)))
+        }
         try requireUnlocked()
         switch action {
         case let .tap(point):
             _ = try icli.tap(x: point.x, y: point.y)
         case let .tapElement(selector):
             try requireSettledForeground(settled)
+            try waitForElement(selector)
             _ = try icli.tapElement(
                 text: selector.text,
                 identifier: selector.identifier,
@@ -338,15 +353,80 @@ public struct Diagnostics: LogEvidenceSource, LiveLogSource {
         case let .swipe(from, to, seconds):
             _ = try icli.swipe(x1: from.x, y1: from.y, x2: to.x, y2: to.y, seconds: seconds)
         case let .type(text, delay):
-            _ = try icli.typeText(text, delayMS: delay)
+            return try typeReadingBack(text, delayMilliseconds: delay).map { UIActionOutcome(typed: $0) }
+        case let .press(button):
+            // Home and the side button; the wake went above.
+            _ = try icli.pressButton(button.icliName)
+        }
+        return nil
+    }
+
+    /// An element a tap names may not be in the tree yet: a menu or sheet
+    /// still animating in. Waits for it up to `elementTimeout`, and taps
+    /// once, after, so a tap is never sent twice.
+    private func waitForElement(_ selector: UIElementSelector) throws {
+        let wait = try icli.waitForElement(
+            text: selector.text,
+            identifier: selector.identifier,
+            role: selector.role,
+            match: selector.match.rawValue,
+            index: selector.index,
+            appear: true,
+            timeout: elementTimeout,
+            interval: elementInterval,
+        )
+        guard wait["found"] as? Bool == true else {
+            let name = selector.identifier ?? selector.text ?? ""
+            throw DiagnosticsError.failed("element \"\(name)\" did not appear within \(Int(elementTimeout)) s; read the UI tree again")
         }
     }
 
-    private func requireUnlocked() throws {
-        let lock = icli.lockState()
-        if lock["locked"] as? Bool == true || lock["screen_off"] as? Bool == true {
-            throw DiagnosticsError.locked
+    /// Types `text`, then reads the frontmost app's values back
+    /// (`TypedText`). The read after is taken again, `settleInterval` apart,
+    /// until a value holds the text, two reads agree or `settleTimeout`
+    /// passes, so a read taken while the app is still taking the last
+    /// characters is not the answer. Nil when either read fails or reads
+    /// another app (an app switch, a foreground icli cannot verify): the
+    /// text is typed all the same.
+    private func typeReadingBack(_ text: String, delayMilliseconds: Double) throws -> TypedText? {
+        let before = try? visibleTree()
+        _ = try icli.typeText(text, delayMS: delayMilliseconds)
+        guard let before else { return nil }
+        let deadline = Date().addingTimeInterval(settleTimeout)
+        var previous: [String]?
+        while true {
+            guard let after = try? visibleTree(), after.pid == before.pid else { return nil }
+            let values = after.elements.map(\.value)
+            let typed = TypedText(typed: text, before: before.elements.map(\.value), after: values)
+            if typed.matches || values == previous || Date() >= deadline {
+                return typed
+            }
+            previous = values
+            Thread.sleep(forTimeInterval: settleInterval)
         }
+    }
+
+    /// Every visible element, as many as icli reads: the field typed into
+    /// can be anywhere in the tree.
+    private func visibleTree() throws -> UITree {
+        try Self.decodeTree(icli.uiElements(
+            maxElements: UITreeRequest.maxElementsRange.upperBound,
+            visibleOnly: true,
+            clickableOnly: false,
+        ))
+    }
+
+    private func requireUnlocked() throws {
+        let lock = Self.decodeLock(icli.lockState())
+        guard lock.allowsInput else {
+            throw DiagnosticsError.locked(screenOff: lock.screenOff)
+        }
+    }
+
+    /// icli's `locked` and `screen_off`, from `lockState()` or a wake; a
+    /// field it leaves out reads as false.
+    static func decodeLock(_ raw: [String: Any]) -> LockState {
+        LockState(locked: raw["locked"] as? Bool ?? false, screenOff: raw["screen_off"] as? Bool ?? false)
     }
 
     // MARK: Apps
@@ -362,12 +442,18 @@ public struct Diagnostics: LogEvidenceSource, LiveLogSource {
     /// element taps refuse with "frontmost application could not be
     /// verified". Gives up after `settleTimeout` and answers the last read,
     /// verified or not.
-    public func settledForegroundApp() -> ForegroundApp {
+    ///
+    /// With `expecting`, only that app settles it: the app a switch is
+    /// leaving can be the verified front on two reads in a row, which says
+    /// nothing of the app an action is bound to (one bound to Fila, sent
+    /// right after Fila was opened, was refused while the front went
+    /// between Fila and Apelin).
+    public func settledForegroundApp(expecting bundleIdentifier: String? = nil) -> ForegroundApp {
         let deadline = Date().addingTimeInterval(settleTimeout)
         var previous: ForegroundApp?
         while true {
             let front = foregroundApp()
-            if front.verified, front == previous {
+            if front.verified, front == previous, bundleIdentifier.map({ $0 == front.bundleIdentifier }) ?? true {
                 return front
             }
             previous = front.verified ? front : nil

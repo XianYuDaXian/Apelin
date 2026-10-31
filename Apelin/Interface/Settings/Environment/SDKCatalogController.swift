@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 /// SDKs ▸ plus: the iOS versions the enabled sources offer, newest first,
 /// laid out as the Command Line Tools page is — a Version heading, one line
-/// each, a plus or a tick at the end — and one picked downloads. The other ways in (the
+/// each, a tick on installed versions — and one picked downloads. The other ways in (the
 /// inbox, a link, a file) are in the menu at the top. An import is a task
 /// the session host runs; this page starts it and hands over to
 /// `EnvironmentTaskController`.
@@ -35,8 +35,8 @@ final class SDKCatalogController: TableController {
 
     private func updateRows(changedItems: Set<String> = []) {
         dataSource.headerTitle = { [weak self] id in
-            guard let self, metrics.isStacked else { return nil }
-            return sections.count > 1 ? sections.first { $0.id == id }?.source.name : String(localized: "Available")
+            guard let self else { return nil }
+            return sections.count > 1 ? sections.first { $0.id == id }?.source.name : String(localized: "Version")
         }
         dataSource.footerTitle = { [weak self] id in
             guard let self else { return nil }
@@ -85,10 +85,6 @@ final class SDKCatalogController: TableController {
             image: UIImage(systemName: "ellipsis"),
             menu: importMenu(),
         ).then { $0.accessibilityLabel = String(localized: "Other Ways to Import") }
-        tableView.register(
-            ColumnTableHeaderView.self,
-            forHeaderFooterViewReuseIdentifier: ColumnTableHeaderView.reuseIdentifier,
-        )
         tableView.register(ColumnTableCell.self, forCellReuseIdentifier: ColumnTableCell.reuseIdentifier)
         tableView.backgroundView = LoadingView()
         updateRows()
@@ -140,7 +136,8 @@ final class SDKCatalogController: TableController {
             ? nil
             : EmptyStateView(
                 symbolName: "tray",
-                text: String(localized: "No SDKs available. Import one from a link or a file in the menu above."),
+                title: String(localized: "No SDKs Yet"),
+                text: String(localized: "Use “From Link…” or “From Files…” in the menu to import an SDK."),
             )
         updateRows()
     }
@@ -149,29 +146,13 @@ final class SDKCatalogController: TableController {
         sections = []
         tableView.backgroundView = EmptyStateView(
             symbolName: "exclamationmark.triangle",
+            title: String(localized: "Error"),
             text: ToolchainController.unavailableText(error),
         )
         updateRows()
     }
 
     // MARK: - Table
-
-    // The heading row names the column; a stacked layout has none, and a
-    // source is named only when there is more than one.
-
-    override func tableView(_ tableView: UITableView, viewForHeaderInSection _: Int) -> UIView? {
-        guard !metrics.isStacked,
-              let header = tableView.dequeueReusableHeaderFooterView(
-                  withIdentifier: ColumnTableHeaderView.reuseIdentifier,
-              ) as? ColumnTableHeaderView
-        else { return nil }
-        header.configure(columns: [], metrics: metrics, nameTitle: String(localized: "Version"))
-        return header
-    }
-
-    override func tableView(_: UITableView, heightForHeaderInSection _: Int) -> CGFloat {
-        metrics.isStacked ? UITableView.automaticDimension : ceil(metrics.titleFont.lineHeight) + 24
-    }
 
     override func tableView(_: UITableView, heightForRowAt _: IndexPath) -> CGFloat {
         metrics.rowHeight
@@ -182,7 +163,7 @@ final class SDKCatalogController: TableController {
     private func cell(in tableView: UITableView, at indexPath: IndexPath, entry: Entry) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: ColumnTableCell.reuseIdentifier, for: indexPath)
         guard let cell = cell as? ColumnTableCell else { return cell }
-        // drawn only (check, plus): the spoken name says it
+        // The installed mark is also included in the spoken name.
         let spoken = entry.installed
             ? String(localized: "iOS \(entry.version), Installed")
             : String(localized: "iOS \(entry.version)")
@@ -192,8 +173,8 @@ final class SDKCatalogController: TableController {
             values: [],
             columns: [],
             metrics: metrics,
-            symbol: UIImage(systemName: entry.installed ? "checkmark.circle.fill" : "plus.circle"),
-            symbolTint: entry.installed ? .secondaryLabel : .tintColor,
+            symbol: entry.installed ? UIImage(systemName: "checkmark") : nil,
+            symbolTint: .secondaryLabel,
         )
         cell.accessibilityTraits = entry.installed ? .staticText : .button
         return cell
@@ -221,39 +202,30 @@ final class SDKCatalogController: TableController {
     private func importMenu() -> UIMenu {
         UIMenu(children: [
             UIDeferredMenuElement.uncached { [weak self] completion in
-                completion(self?.inboxItems() ?? [])
+                completion(self?.importMenuItems() ?? [])
             },
-            UIMenu(options: .displayInline, children: [
-                UIAction(title: String(localized: "From Link…"), image: UIImage(systemName: "link")) { [weak self] _ in
-                    self?.askForLink()
-                },
-                UIAction(
-                    title: String(localized: "From Files…"),
-                    image: UIImage(systemName: "folder"),
-                ) { [weak self] _ in
-                    self?.pickFile()
-                },
-            ]),
         ])
     }
 
-    /// What is in the inbox now, one entry each, or a line saying where to
-    /// put one.
-    private func inboxItems() -> [UIMenuElement] {
+    private func importMenuItems() -> [UIMenuElement] {
+        let otherSources: [UIMenuElement] = [
+            UIAction(title: String(localized: "From Link…"), image: UIImage(systemName: "link")) { [weak self] _ in
+                self?.askForLink()
+            },
+            UIAction(title: String(localized: "From Files…"), image: UIImage(systemName: "folder")) { [weak self] _ in
+                self?.pickFile()
+            },
+        ]
         let names = (try? FileManager.default.contentsOfDirectory(atPath: inbox.path))?
             .filter { !$0.hasPrefix(".") }
             .sorted() ?? []
         guard !names.isEmpty else {
-            // the folder as it is spelled on disk, never translated
+            // Explanatory copy belongs in the section header; action titles truncate.
             let folder = "Documents/wiki.qaq.apelin/inbox"
             return [UIMenu(
-                title: String(localized: "Put an SDK archive or folder in the inbox folder, then open this menu again."),
+                title: String(localized: "Put an SDK in \(folder), then reopen this menu."),
                 options: .displayInline,
-                children: [UIAction(
-                    title: String(localized: "Inbox Is Empty"),
-                    subtitle: folder,
-                    attributes: .disabled,
-                ) { _ in }],
+                children: otherSources,
             )]
         }
         let items = names.map { name in
@@ -261,7 +233,10 @@ final class SDKCatalogController: TableController {
                 self?.importSDK(.inbox(path: name))
             }
         }
-        return [UIMenu(title: String(localized: "From Inbox"), options: .displayInline, children: items)]
+        return [
+            UIMenu(title: String(localized: "From Inbox"), options: .displayInline, children: items),
+            UIMenu(options: .displayInline, children: otherSources),
+        ]
     }
 
     private func askForLink() {

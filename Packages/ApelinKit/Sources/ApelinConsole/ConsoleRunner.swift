@@ -235,6 +235,11 @@ public actor ConsoleRunner {
         guard operation != .gitCredentialSet else {
             throw ApelinError(.denied, "A git credential is saved only in Settings ▸ Git.")
         }
+        // A star is the reader's, given on their GitHub account by a tap in
+        // the app; a script never gives one for them.
+        guard operation != .feedbackStar else {
+            throw ApelinError(.denied, "Apelin is starred only from the app, when the reader taps Star Now.")
+        }
         // A command as root runs only after the device owner's check in the
         // app: approving one carries the owner mark, and Full runs one
         // without asking. A script file cannot stand in for that check, so

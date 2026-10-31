@@ -50,11 +50,11 @@ extension ApelinError.Code {
             String(localized: "The request timed out. Try again.")
         case .backendUnavailable:
             String(localized: """
-            This needs Apelin's background service, which is not running on this device. Reinstall \
+            This needs Apelin’s background service, which is not running on this device. Reinstall \
             Apelin with your preferred package manager to set it up again.
             """)
         case .unavailable:
-            String(localized: "Apelin's background service could not be reached. Try again in a moment.")
+            String(localized: "Apelin’s background service could not be reached. Try again in a moment.")
         case .internal:
             String(localized: "Something went wrong. Try again.")
         }

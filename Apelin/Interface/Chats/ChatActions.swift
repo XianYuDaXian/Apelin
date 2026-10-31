@@ -6,7 +6,9 @@ import UIKit
 /// The chat page's `…` menu: Rename… and Compact… for the conversation,
 /// then its project's actions (`ProjectActions`). General Chat has no
 /// project, so after them come Open in iGhostVT and Open in Fila for the
-/// conversation's own working folder, `Temporary/<conversation>/`.
+/// conversation's own working folder, `Temporary/<conversation>/`. Last,
+/// in a group of its own, Delete Conversation…, which `onDelete` asks
+/// about and carries out as the sidebar's Delete does (`ChatDeletion`).
 @MainActor
 enum ChatActions {
     static func menu(
@@ -15,12 +17,14 @@ enum ChatActions {
         from presenter: UIViewController,
         anchor: UIBarButtonItem,
         onPrepareDistribution: @escaping (String) -> Void,
+        onDelete: @escaping (UUID) -> Void,
         completion: @escaping ([UIMenuElement]) -> Void,
     ) {
         let chatActions = [
             renameAction(for: chat.id, runtime: runtime, from: presenter),
             compactAction(for: chat.id, runtime: runtime, from: presenter),
         ]
+        let deletion = UIMenu(options: .displayInline, children: [deleteAction(for: chat.id, onDelete: onDelete)])
         guard let projectName = chat.projectName else {
             let folders = ProjectActions.folderActions(from: presenter, failureTitle: "Unable to Open Folder") {
                 try ProjectActions.temporaryDirectory(of: chat.id)
@@ -28,6 +32,7 @@ enum ChatActions {
             completion([
                 UIMenu(options: .displayInline, children: chatActions),
                 UIMenu(options: .displayInline, children: folders),
+                deletion,
             ])
             return
         }
@@ -39,15 +44,26 @@ enum ChatActions {
                 completion([])
                 return
             }
-            completion(ProjectActions.menu(
+            let projectActions = ProjectActions.menu(
                 projectName: projectName,
                 from: presenter,
                 anchor: anchor,
                 distributionBlocker: (project?.buildMethod ?? .missingDescription).shortBlocker,
                 chatActions: chatActions,
                 onPrepareDistribution: onPrepareDistribution,
-            ).children)
+            )
+            completion(projectActions.children + [deletion])
         }
+    }
+
+    /// Asked about first, whatever state the conversation is in when it is
+    /// picked: one still working is stopped before it goes.
+    private static func deleteAction(for id: UUID, onDelete: @escaping (UUID) -> Void) -> UIKit.UIAction {
+        UIKit.UIAction(
+            title: String(localized: "Delete Conversation…"),
+            image: UIImage(systemName: "trash"),
+            attributes: .destructive,
+        ) { _ in onDelete(id) }
     }
 
     /// The conversation's name, typed into the alert Rename Project… uses.
@@ -82,18 +98,18 @@ enum ChatActions {
         from presenter: UIViewController,
     ) -> UIKit.UIAction {
         UIKit.UIAction(
-            title: String(localized: "Compact…"),
-            image: UIImage(systemName: "arrow.down.right.and.arrow.up.left"),
+            title: String(localized: "Compact Context…"),
+            image: UIImage(systemName: "doc.text"),
             attributes: runtime.canCompact(id) ? [] : .disabled,
         ) { [weak presenter, weak runtime] _ in
             guard let presenter else { return }
             presenter.presentConfirmation(
-                title: "Compact Chat?",
+                title: "Compact Context?",
                 message: """
                 Your agent will continue from a summary of the earlier messages, which frees room for new work. \
                 The messages stay in this chat.
                 """,
-                confirmTitle: "Compact",
+                confirmTitle: "Compact Context",
             ) { [weak presenter, weak runtime] in
                 guard let presenter, let runtime else { return }
                 Task { await compact(id, runtime: runtime, from: presenter) }

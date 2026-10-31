@@ -4,8 +4,11 @@
 /// `sessionID` may send it; the host refuses it from anyone else, and
 /// re-decides the approval itself under Confirm, and for root in every mode.
 public enum RunCodeSpec: Codable, Sendable, Equatable {
-    /// An executable name (no path) resolved in the bootstrap's `bin`
-    /// directories, then its arguments.
+    /// An executable, then its arguments: a name looked up where the run's
+    /// shell would, on its `PATH` with the prepared toolchain's tools first
+    /// (a preset and a run as root: the bootstrap's and the system's `bin`
+    /// directories alone), or a path, read from the working directory
+    /// unless absolute.
     case argv([String])
     /// Source handed to `sh`, `bash`, `zsh`, `python3` or `perl`.
     case script(interpreter: String, source: String)

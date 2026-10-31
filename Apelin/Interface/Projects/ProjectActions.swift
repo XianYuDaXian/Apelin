@@ -7,7 +7,7 @@ import UIKit
 /// identities; links are made from their canonical path, never an install prefix.
 @MainActor
 enum ProjectActions {
-    /// `chatActions` lead the first group, above Rename Project…;
+    /// `chatActions` form the first group;
     /// `distributionBlocker` says why a project with no build description
     /// or script (`ProjectBuildMethod`), which has nothing to package,
     /// cannot be distributed.
@@ -25,7 +25,7 @@ enum ProjectActions {
             try directory(named: projectName)
         }
         let renameAction = UIAction(
-            title: String(localized: "Rename Project…"),
+            title: String(localized: "Rename…"),
             image: UIImage(systemName: "pencil"),
         ) { [weak presenter] _ in
             guard let presenter else { return }
@@ -55,9 +55,9 @@ enum ProjectActions {
             )
         }
         return UIMenu(children: [
-            UIMenu(options: .displayInline, children: chatActions + [renameAction]),
+            UIMenu(options: .displayInline, children: chatActions),
             UIMenu(options: .displayInline, children: folders),
-            UIMenu(options: .displayInline, children: [export, distribute]),
+            UIMenu(title: String(localized: "Project"), options: .displayInline, children: [renameAction, export, distribute]),
         ])
     }
 
@@ -141,7 +141,7 @@ enum ProjectActions {
               let path = CanonicalPath.resolve(folder.path),
               path == root + "/Temporary/" + id.uuidString
         else {
-            throw ApelinError(.notFound, String(localized: "The chat's folder is not available."))
+            throw ApelinError(.notFound, String(localized: "The chat’s folder is not available."))
         }
         return path
     }

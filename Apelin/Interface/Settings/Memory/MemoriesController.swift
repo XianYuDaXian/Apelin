@@ -62,7 +62,7 @@ final class MemoriesController: TableController {
         tableView.register(UITableViewCell.self, forCellReuseIdentifier: "Memory")
         dataSource = DataSource(tableView: tableView) { [weak self] tableView, indexPath, row in
             let cell = tableView.dequeueReusableCell(withIdentifier: "Memory", for: indexPath)
-            var content = cell.defaultContentConfiguration()
+            var content = UIListContentConfiguration.stackedValueCell()
             if case let .memory(id) = row, let record = self?.memories?.records.first(where: { $0.id == id }) {
                 content.text = record.title
                 content.secondaryText = record.body
@@ -139,8 +139,13 @@ final class MemoriesController: TableController {
             )
         }
         if value.records.isEmpty {
-            snapshot.appendItems([.empty], toSection: .allChats)
+            snapshot.deleteAllItems()
         }
+        tableView.backgroundView = value.records.isEmpty ? EmptyStateView(
+            symbolName: "brain",
+            title: String(localized: "No Memories Yet"),
+            text: String(localized: "Tap “+” to add a memory."),
+        ) : nil
         snapshot.reconfigureItems(snapshot.itemIdentifiers.filter {
             guard case let .memory(id) = $0 else { return false }
             return changedIDs.contains(id) && previous.indexOfItem($0) != nil
@@ -159,9 +164,8 @@ final class MemoriesController: TableController {
 
     private func open(_ record: MemoryRecord?) {
         guard let memories else { return }
-        let scope = record?.projectID.map { dataSource.name(for: $0) } ?? String(localized: "All Chats")
         navigationController?.pushViewController(
-            MemoryEditorController(store: store, record: record, revision: memories.revision, scope: scope),
+            MemoryEditorController(store: store, record: record, revision: memories.revision),
             animated: true,
         )
     }
@@ -207,7 +211,7 @@ extension UIViewController {
         case .changed:
             presentNotice(title: "Memory Changed", message: "A chat or another window changed these memories. Reopen the memory to review the latest version before editing.")
         case .invalidContent:
-            presentNotice(title: "Check This Memory", message: "Enter a title of up to \(MemoryStore.maximumTitleLength.formatted()) characters and text of up to \(MemoryStore.maximumBodyLength.formatted()) characters.")
+            presentNotice(title: "Check This Memory", message: "Enter a title and memory text. The title must be a single line.")
         case .full:
             presentNotice(title: "Memory Is Full", message: "Shorten or delete an older memory before adding more.")
         default:

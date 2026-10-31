@@ -179,10 +179,12 @@ public struct ConfirmLoaded: Sendable {
 
     // MARK: Pure evaluation, one per evidence
 
-    /// The image evidence, always.
+    /// The image evidence, always. It names no iOS version: it holds on
+    /// every one, and an agent on iOS 17 read "the iOS 27 kernel" as a
+    /// rule for another system.
     public static let imageNotRead = ImageEvidence(
         status: .notRead,
-        detail: "The image list is not read: reading another process's image list panicked the iOS 27 kernel.",
+        detail: "The target's image list is never read, on any iOS version: reading it panicked the kernel on a test device.",
     )
 
     public static func evaluateMarker(

@@ -12,6 +12,30 @@ import Foundation
 /// bound to what the host reads, `detail.command` or `detail.rootCommand`
 /// and the working directory.
 enum ApprovalCardText {
+    struct Section: Hashable {
+        var title: String?
+        var text: String
+        var isCode = false
+    }
+
+    static func sections(_ payload: JSONValue?, title: String, callReason: String?) -> [Section] {
+        let root = isRoot(payload)
+        var result = [callReason, root ? nil : payload?["reason"]?.stringValue]
+            .compactMap(\.self).filter { !$0.isEmpty }.map { Section(text: $0) }
+        if let diff = payload?["detail"]?["descriptionChanged"]?["diff"]?.stringValue, !diff.isEmpty {
+            result.append(Section(text: diff, isCode: true))
+        }
+        if let json = payload?["arguments"]?.stringValue {
+            let shell = AgentToolName.canonical(payload?["tool"]?.stringValue ?? "") == .shellRun
+            result += argumentsDetail(json, payload: payload, title: title, root: root).sections.map { part in
+                let command = shell && ["argv", "command", "script"].contains(part.name ?? "")
+                return Section(title: command ? String(localized: "Command") : part.name,
+                               text: part.value, isCode: command)
+            }
+        }
+        return result
+    }
+
     /// Whether an `approvalRequested` is for a command that runs as root: the
     /// host binds such an approval to its own `detail.rootCommand` key,
     /// never the ordinary `detail.command`, so the key alone tells them apart.
@@ -40,9 +64,19 @@ enum ApprovalCardText {
     /// an argv reads as its command line, and a root card's `root` flag is
     /// left out.
     static func argumentsText(_ json: String, payload: JSONValue?, title: String, root: Bool) -> String {
+        argumentsDetail(json, payload: payload, title: title, root: root).text
+    }
+
+    private static func argumentsDetail(_ json: String, payload: JSONValue?, title: String, root: Bool) -> ToolCallDetail {
+        if let published = publishedPackages(payload) {
+            return ToolCallDetail(detail: published, title: title)
+        }
+        if let edited = editedIssue(payload) {
+            return ToolCallDetail(detail: edited, title: title)
+        }
         guard AgentToolName.canonical(payload?["tool"]?.stringValue ?? "") == .shellRun,
               case var .object(values)? = try? JSONCoding.decode(JSONValue.self, from: Data(json.utf8))
-        else { return ToolCallDetail(detail: json, title: title).text }
+        else { return ToolCallDetail(detail: json, title: title) }
         if root {
             values["root"] = nil
         }
@@ -62,9 +96,47 @@ enum ApprovalCardText {
             values["cwd"] = directory.isEmpty || directory == "." ? nil : .string(directory)
         }
         guard let encoded = try? JSONCoding.encode(JSONValue.object(values)) else {
-            return ToolCallDetail(detail: json, title: title).text
+            return ToolCallDetail(detail: json, title: title)
         }
-        return ToolCallDetail(detail: String(decoding: encoded, as: UTF8.self), title: title).text
+        return ToolCallDetail(detail: String(decoding: encoded, as: UTF8.self), title: title)
+    }
+
+    /// An apelin_package_publish card's arguments: not the build IDs the
+    /// call names but what the approval is bound to, its
+    /// `detail.packagePublish` — the repository, then each package by its
+    /// ID, version and architecture with the digest it is held to. Nil for
+    /// any other request.
+    private static func publishedPackages(_ payload: JSONValue?) -> String? {
+        guard let detail = payload?["detail"]?["packagePublish"],
+              let repository = detail["repository"]?.stringValue,
+              case let .array(packages)? = detail["packages"]
+        else { return nil }
+        var shown: [String: JSONValue] = ["repository": .string(repository)]
+        for package in packages {
+            guard let id = package["packageID"]?.stringValue, let version = package["version"]?.stringValue,
+                  let architecture = package["architecture"]?.stringValue, let digest = package["digest"]?.stringValue
+            else { return nil }
+            shown["\(id) \(version) (\(architecture))"] = .string(digest)
+        }
+        return (try? JSONCoding.encode(JSONValue.object(shown))).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// An apelin_feedback_edit card's arguments: not the call's, which carry
+    /// the revision it was read at, but what the approval is bound to, its
+    /// `detail.feedbackEdit` — the repository, the issue, and the new title
+    /// or body in full, each only when it changes. Nil for any other request.
+    private static func editedIssue(_ payload: JSONValue?) -> String? {
+        guard let detail = payload?["detail"]?["feedbackEdit"],
+              let repository = detail["repository"]?.stringValue,
+              let number = detail["number"]?.doubleValue
+        else { return nil }
+        var shown: [String: JSONValue] = ["repository": .string(repository), "issue": .string("#\(Int(number))")]
+        for field in ["title", "body"] {
+            if let text = detail[field]?.stringValue {
+                shown[field] = .string(text)
+            }
+        }
+        return (try? JSONCoding.encode(JSONValue.object(shown))).map { String(decoding: $0, as: UTF8.self) }
     }
 
     /// A bound invocation, in the shape apelin-agent writes it

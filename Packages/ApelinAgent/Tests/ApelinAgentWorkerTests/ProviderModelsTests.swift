@@ -1,9 +1,21 @@
+import ApelinAgent
 @testable import ApelinAgentWorker
 import ApelinProtocol
 import KWWKAI
 import Testing
 
 struct ProviderModelsTests {
+    @Test
+    func `DeepSeek offers its own models and discovery with only an API key`() throws {
+        let key = OAuthCredentials(access: "key", refresh: "", expires: .max)
+        #expect(ProviderModels.list(.deepSeek, credentials: key) == ["deepseek-flash", "deepseek-v4-pro"])
+        #expect(ProviderModels.reasoningEfforts(.deepSeek, credentials: key)["deepseek-flash"]?.contains(.high) == true)
+        let request = try #require(ProviderModels.modelRequest(.deepSeek, credentials: key))
+        #expect(request.url?.absoluteString == "https://api.deepseek.com/models")
+        #expect(request.value(forHTTPHeaderField: "Authorization") == "Bearer key")
+        #expect(try AgentWorker.provider(.init(provider: .deepSeek)) == .stored(storeID: CredentialProviderID.deepSeek, model: nil))
+    }
+
     @Test
     func `DeepSeek's Anthropic endpoint lists its real models, not Claude aliases`() {
         let credentials = OAuthCredentials(access: "test", refresh: "", expires: .max, extras: [

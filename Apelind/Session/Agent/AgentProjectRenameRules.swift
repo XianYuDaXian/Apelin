@@ -3,11 +3,12 @@ import ApelinProtocol
 import Foundation
 
 /// An agent's `projectRename` (apelin_project_rename, owner, 2026-10-24):
-/// its own session's project's displayName in either mode — a label the
+/// its own session's project's displayName in every mode — a label the
 /// file tools may write there anyway and no approval digest counts —, and
 /// another project's under Confirm only by spending an approval the app
 /// gave that session for exactly that project and name
-/// (`detail.projectRename`), once, never for the session. A temporary chat
+/// (`detail.projectRename`), once, never for the session; Relaxed and Full
+/// rename it without one, as the agent's gate lets them. A temporary chat
 /// has no project to rename, and an automatic rename (`onlyIfAutomatic`)
 /// is the session's own project's alone.
 enum AgentProjectRenameRules {
@@ -41,9 +42,7 @@ enum AgentProjectRenameRules {
         if rename.onlyIfAutomatic {
             return ApelinError(.badRequest, "an automatic rename is for the session's own project")
         }
-        if entry.mode == .relaxed {
-            return nil
-        }
+        guard entry.mode.asks else { return nil }
         let approved = await AgentApprovals.spend(entry: entry, registry: registry) { covers(rename, target: target, asked: $0) }
         guard approved else {
             return ApelinError(

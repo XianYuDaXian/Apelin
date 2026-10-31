@@ -8,10 +8,12 @@ private struct LicenseEntry: Decodable, Equatable {
     let url: String
     let text: String
 
-    /// What the list shows: the license alone. A version, often a commit
-    /// hash, is the collector's to keep, not the reader's.
     var summary: String {
-        license
+        switch license {
+        case "MIT": String(localized: "MIT License")
+        case "Apache-2.0": String(localized: "Apache 2.0")
+        default: license
+        }
     }
 }
 
@@ -62,13 +64,9 @@ final class LicensesViewController: TableController {
     private func cell(in tableView: UITableView, entry: LicenseEntry) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "license")
             ?? UITableViewCell(style: .value1, reuseIdentifier: "license")
-        var content = UIListContentConfiguration.valueCell()
+        var content = UIListContentConfiguration.stackedValueCell()
         content.text = entry.name
-        content.textProperties.numberOfLines = 1
         content.secondaryText = entry.summary
-        content.secondaryTextProperties.numberOfLines = 1
-        content.secondaryTextProperties.color = .secondaryLabel
-        content.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
         cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
         return cell

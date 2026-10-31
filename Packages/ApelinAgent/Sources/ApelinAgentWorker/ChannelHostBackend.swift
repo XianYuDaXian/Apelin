@@ -12,7 +12,9 @@ import Foundation
 /// Mapping (tool → host operation):
 /// apelin_project_build → `buildStart`, then its task read to the end;
 /// apelin_package_install → `installPackage` likewise; apelin_package_remove →
-/// `removePackage`; apelin_device_respring → `respring`; apelin_package_confirm_loaded → a `confirmLoaded` task with the session's
+/// `removePackage`; apelin_package_list (and apelin_package_remove's package id)
+/// → `installationList`, every project's;
+/// apelin_device_respring → `respring`; apelin_package_confirm_loaded → a `confirmLoaded` task with the session's
 /// project (and `trigger: respring` when asked), read to its end, the image
 /// list never asked for;
 /// apelin_log_read → a bounded `logStream` read to its end; apelin_crash_list →
@@ -24,7 +26,8 @@ import Foundation
 /// which the host runs as mobile in the project (as root, with `asRoot`, when
 /// Full mode or the user's approval of that root request lets it); apelin_template_list →
 /// `extensionList`, isolated extensions left out; apelin_project_create →
-/// `projectCreate`; git_status / git_diff / git_stage / git_unstage /
+/// `projectCreate`; apelin_project_rename → `projectRename`;
+/// apelin_project_delete → `projectDelete`; git_status / git_diff / git_stage / git_unstage /
 /// git_commit, git_init → `gitStatus` / `gitDiff` / `gitStage` /
 /// `gitUnstage` / `gitCommit` / `gitInit` on the session's project (no
 /// author: the host's settings);
@@ -39,7 +42,15 @@ import Foundation
 /// keeps them to this session's project, and to another one only as the
 /// user approved. apelin_toolchain_list, apelin_sdk_list, apelin_toolchain_setup,
 /// apelin_toolchain_self_test, apelin_sdk_import and apelin_project_set_environment's check:
-/// ChannelHostBackend+Environment.
+/// ChannelHostBackend+Environment. apelin_feedback_send → `feedbackSend`;
+/// apelin_feedback_read → `feedbackRead`; apelin_feedback_edit →
+/// `feedbackRead`, then `feedbackEdit` against what it read;
+/// apelin_git_create_repository → `gitRepositoryCreate`;
+/// apelin_git_create_issue → `gitIssueCreate`;
+/// apelin_package_publish → `distributionPublish` with each file's digest
+/// and the repository, read to its end (ChannelHostBackend+Publish). An
+/// agent tool extension's tools → `toolHostOpen`, `toolHostCall` and
+/// `toolHostClose`: ChannelHostBackend+ToolExtensions.
 public struct ChannelHostBackend: AgentHostBackend {
     public let service: ApelinService
     public let sessionID: String
@@ -55,6 +66,8 @@ public struct ChannelHostBackend: AgentHostBackend {
     static let logExcerptBytes = 8 * 1024
     /// git_diff hands the model at most this much; a path narrows it.
     public static let maximumDiffBytes = 64 * 1024
+    /// apelin_package_list hands the model at most this many installations.
+    public static let maximumInstallations = 50
 
     /// apelin_conversation_read hands the model at most this much text.
     public static let maximumConversationBytes = 32 * 1024
@@ -134,12 +147,17 @@ public struct ChannelHostBackend: AgentHostBackend {
         let check = await configuration == .release && bootstrap != nil
             ? (try? distributionCheck(bootstrap: bootstrap))
             : nil
-        let warnings = (check?.diagnostics ?? []).filter(Self.isDistributionWarning).map(Self.diagnostic)
-        let handle = try await service.buildStart(
-            projectID: project.id,
-            configuration: configuration,
-            bootstrap: bootstrap,
-        )
+        let warnings = (check?.diagnostics ?? []).filter(Self.isDistributionWarning)
+        let handle: TaskHandle
+        do {
+            handle = try await service.buildStart(
+                projectID: project.id,
+                configuration: configuration,
+                bootstrap: bootstrap,
+            )
+        } catch let refusal as ApelinError {
+            throw await unreadProjectRefusal() ?? refusal
+        }
         var buildID = handle.taskID.rawValue
         var diagnostics = warnings
         var artifacts: [ApelinAgent.BuildArtifact] = []
@@ -148,7 +166,7 @@ public struct ChannelHostBackend: AgentHostBackend {
             switch event.kind {
             case "diagnostic":
                 if let diagnostic = try? event.payload?.decode(ProjectDiagnostic.self) {
-                    diagnostics.append(Self.diagnostic(diagnostic))
+                    diagnostics.append(diagnostic)
                 }
             case "artifact":
                 if let artifact = try? event.payload?.decode(ApelinProtocol.BuildArtifact.self) {
@@ -185,10 +203,28 @@ public struct ChannelHostBackend: AgentHostBackend {
         return BuildResponse(
             buildID: buildID,
             succeeded: end.state == .succeeded,
-            diagnostics: diagnostics,
+            diagnostics: Self.diagnostics(diagnostics),
             artifacts: artifacts,
             logExcerpt: log.text,
         )
+    }
+
+    /// A project file that does not read is refused before its build
+    /// starts: by apelin-build, its errors run together, or in Strict mode
+    /// by the host, which then has no description to match and says only
+    /// that approval is required. The check names each error's field, and
+    /// the refusal where the schema is; nil when the file reads, so the
+    /// refusal stands as it came.
+    private func unreadProjectRefusal() async -> ApelinError? {
+        guard let check = try? await service.projectCheck(projectID: project.id) else { return nil }
+        let unread = check.diagnostics.filter { Self.unreadProjectCodes.contains($0.code) }
+        guard !unread.isEmpty else { return nil }
+        var message = "apelin-project.json does not read, so the build did not start: "
+            + unread.map(Self.fieldAndMessage).joined(separator: "; ")
+        if unread.contains(where: { $0.code == Self.schemaErrorCode }) {
+            message += ". " + Self.schemaPointer
+        }
+        return ApelinError(.badRequest, message)
     }
 
     // MARK: distribution
@@ -200,10 +236,9 @@ public struct ChannelHostBackend: AgentHostBackend {
     public func checkDistribution(_ request: DistributionCheckRequest) async throws -> DistributionCheckResponse {
         let check = try await distributionCheck(bootstrap: Self.bootstrap(request.bootstrap))
         let issues = check.diagnostics.filter { $0.severity == .error || Self.isDistributionWarning($0) }
-            .map(Self.diagnostic)
         return DistributionCheckResponse(
             ready: issues.isEmpty,
-            issues: issues,
+            issues: Self.diagnostics(issues),
             note: check.buildSystem == .external
                 ? "This workspace's package is checked when its build script writes it: a release build lists what it finds among its diagnostics."
                 : nil,
@@ -252,10 +287,25 @@ public struct ChannelHostBackend: AgentHostBackend {
                 case let .string(text): .string(text)
                 case let .boolean(flag): .bool(flag)
                 case let .integer(number): .number(Double(number))
+                case let .list(items): .array(items.map(ApelinCore.JSONValue.string))
                 }
             },
         ))
-        return ProjectCreateToolResponse(projectID: created.projectID, name: created.name)
+        return ProjectCreateToolResponse(
+            projectID: created.projectID,
+            name: created.name,
+            identifierHint: createdRoot(created.name).flatMap(PlaceholderIdentifiers.createHint),
+        )
+    }
+
+    /// The folder `projectCreate` just made under `Projects/`, as mobile
+    /// reads it; nil when it is not there or leads elsewhere.
+    private func createdRoot(_ name: String) -> ScopedRoot? {
+        guard let projects = try? ScopedRoot(projectsURL),
+              let path = try? projects.resolveExisting(name),
+              projects.relative(path) == name
+        else { return nil }
+        return try? ScopedRoot(URL(fileURLWithPath: path, isDirectory: true))
     }
 
     public func renameProject(_ request: ProjectRenameToolRequest) async throws -> ProjectRenameToolResponse {
@@ -272,11 +322,19 @@ public struct ChannelHostBackend: AgentHostBackend {
         )
     }
 
+    /// The project the card named, in the folder it named.
+    public func deleteProject(_ request: ProjectDeleteToolRequest) async throws -> ProjectDeleteToolResponse {
+        let deleted = try await service.projectDelete(ProjectDeleteRequest(projectID: request.projectID, projectName: request.folder))
+        return ProjectDeleteToolResponse(projectID: deleted.projectID, folder: deleted.projectName)
+    }
+
     static func templateValue(_ value: ApelinCore.JSONValue) -> TemplateValue? {
         switch value {
         case let .string(text): .string(text)
         case let .bool(flag): .boolean(flag)
         case let .number(number) where number.rounded() == number && abs(number) < 1e15: .integer(Int(number))
+        // A list kind's default, such as the tweak's filterBundles.
+        case let .array(items) where items.allSatisfy { $0.stringValue != nil }: .list(items.compactMap(\.stringValue))
         default: nil
         }
     }
@@ -302,16 +360,47 @@ public struct ChannelHostBackend: AgentHostBackend {
             severity: severity,
             file: diagnostic.file,
             line: diagnostic.line,
+            column: diagnostic.column,
+            field: diagnostic.field,
             message: diagnostic.message,
         )
+    }
+
+    /// Each finding with its field, and after a schema error a note saying
+    /// where the schema is.
+    static func diagnostics(_ found: [ProjectDiagnostic]) -> [BuildDiagnostic] {
+        var diagnostics = found.map(diagnostic)
+        if found.contains(where: { $0.code == schemaErrorCode }) {
+            diagnostics.append(BuildDiagnostic(severity: .note, file: "apelin-project.json", message: schemaPointer))
+        }
+        return diagnostics
+    }
+
+    /// What apelin-build's check reports when `apelin-project.json` did not
+    /// read: the file itself, its JSON, or its schema.
+    static let unreadProjectCodes: Set = ["project.unreadable", "project.json", schemaErrorCode]
+    /// A member the schema does not allow, lacks or types wrongly; its field
+    /// says which.
+    static let schemaErrorCode = "project.invalid"
+
+    static let schemaPointer = "apelin-project.json does not match its schema; each error's field is the member to fix. Read the apelin-project-description skill and its file apelin-project.schema.json (apelin_skill_read) before editing it."
+
+    /// A finding as the check first wrote it, its field in front:
+    /// `/configurations/Debug/linkerFlags: unknown member`.
+    static func fieldAndMessage(_ diagnostic: ProjectDiagnostic) -> String {
+        diagnostic.field.map { "\($0): \(diagnostic.message)" } ?? diagnostic.message
     }
 
     public func install(_ request: InstallRequest) async throws -> InstallResponse {
         let handle = try await service.installPackage(artifactID: request.artifactID, digest: request.artifactDigest)
         var result: InstallResult?
+        var conflicts: [InstallConflict] = []
         let end = try await read(handle) { event in
             if event.kind == "result", let decoded = try? event.payload?.decode(InstallResult.self) {
                 result = decoded
+            }
+            if event.kind == "conflict", let conflict = try? event.payload?.decode(InstallConflict.self) {
+                conflicts.append(conflict)
             }
         }
         return InstallResponse(
@@ -321,6 +410,7 @@ public struct ChannelHostBackend: AgentHostBackend {
             version: result?.version ?? "",
             succeeded: end.state == .succeeded,
             message: end.message ?? "",
+            conflicts: conflicts.isEmpty ? nil : conflicts,
         )
     }
 
@@ -331,6 +421,31 @@ public struct ChannelHostBackend: AgentHostBackend {
             transactionID: handle.taskID.rawValue,
             succeeded: end.state == .succeeded,
             message: end.message ?? "",
+        )
+    }
+
+    /// The host's rows, with the folder each project is under now, which is
+    /// what the model names a project by.
+    public func installations(_ request: InstallationListToolRequest) async throws -> InstallationListToolResponse {
+        let listed = try await service.installationList(packageID: request.packageID, projectID: request.projectID)
+            .installations
+        let known = await (try? projects().projects) ?? []
+        let folders = Dictionary(known.map { ($0.projectID, $0.folder) }, uniquingKeysWith: { first, _ in first })
+        return InstallationListToolResponse(
+            installations: listed.prefix(Self.maximumInstallations).map { row in
+                ListedInstallation(
+                    installationID: row.installationID,
+                    packageID: row.packageID,
+                    version: row.version,
+                    projectID: row.projectID,
+                    project: row.projectID.flatMap { folders[$0] },
+                    buildID: row.buildID,
+                    installedAt: row.installedAt,
+                    removable: row.removable,
+                    reason: row.reason,
+                )
+            },
+            truncated: listed.count > Self.maximumInstallations,
         )
     }
 
@@ -356,7 +471,6 @@ public struct ChannelHostBackend: AgentHostBackend {
             trigger: request.respring ? .respring : nil,
         )
         let marker = response.evidence.first { $0.kind == "log" }
-        let image = response.evidence.first { $0.kind == "image" }
         let filter = response.evidence.first { $0.kind == "filter" }
         let filterMatches: Bool? = filter.flatMap { evidence in
             if evidence.passed {
@@ -364,13 +478,15 @@ public struct ChannelHostBackend: AgentHostBackend {
             }
             return evidence.detail.hasPrefix("absent") ? false : nil
         }
+        // The image evidence is always `notRead`; the answer's `basis` says
+        // so once.
+        let notes = response.evidence.filter { $0.kind != "image" }.map { "\($0.kind): \($0.detail)" }
         return ApelinAgent.ConfirmLoadedResponse(
+            loaded: response.loaded,
             markerLogged: marker?.passed ?? false,
-            imageLoaded: image?.passed ?? false,
             filterMatches: filterMatches,
             logEvidence: marker.map { [$0.detail] } ?? [],
-            imageEvidence: image.flatMap { $0.passed ? [LoadedImage(path: $0.detail)] : nil } ?? [],
-            notes: response.evidence.map { "\($0.kind): \($0.detail)" }.joined(separator: "\n"),
+            notes: notes.joined(separator: "\n"),
         )
     }
 
@@ -456,11 +572,13 @@ public struct ChannelHostBackend: AgentHostBackend {
     }
 
     public func gitPush(_ request: GitRemoteToolRequest) async throws -> GitTaskToolResponse {
-        try await gitTask("git push") {
+        let host = request.url.flatMap { URLComponents(string: $0)?.host }
+        return try await gitTask("git push", host: host) {
             try await service.gitPush(GitPushRequest(
                 projectID: project.id,
                 remote: request.remote,
                 branch: request.branch,
+                url: request.url,
             ))
         }
     }
@@ -500,6 +618,124 @@ public struct ChannelHostBackend: AgentHostBackend {
         try await git("git remove credential") { try await service.gitCredentialRemove(host: request.host) }
         return try await gitSettings(context: request.context)
     }
+
+    // MARK: apelin_git_create_repository
+
+    /// Without a github.com sign-in, or with one GitHub refused, the model
+    /// hears where the user signs in, read from the reply's reason; any
+    /// other refusal is GitHub's or the host's, in their words.
+    public func createRepository(_ request: RepositoryCreateToolRequest) async throws -> RepositoryCreateToolResponse {
+        let response: GitRepositoryCreateResponse
+        do {
+            response = try await service.gitRepositoryCreate(GitRepositoryCreateRequest(
+                name: request.name,
+                visibility: request.visibility,
+                owner: request.owner,
+                description: request.description,
+            ))
+        } catch let error as ApelinError where error.reason == .authenticationRequired {
+            throw GitToolFailure(message: Self.repositorySignInNeeded)
+        }
+        return RepositoryCreateToolResponse(
+            fullName: response.fullName,
+            cloneURL: response.cloneURL,
+            url: response.url,
+            next: "It is empty. To publish the project there, git_push with url \(response.cloneURL): it adds the remote as origin (or as the remote you name, when the user wants another), and asks the user in Strict mode as every push does.",
+        )
+    }
+
+    static let repositorySignInNeeded = "Nothing was created: GitHub authorization is needed. Ask the user to Sign In with GitHub in Settings ▸ Git, then try again."
+
+    // MARK: apelin_git_create_issue
+
+    /// Without a github.com sign-in, or with one GitHub refused, the model
+    /// hears where the user signs in, read from the reply's reason; any
+    /// other refusal is GitHub's or the host's, in their words, with what
+    /// the model must not do instead.
+    public func createIssue(_ request: IssueCreateToolRequest) async throws -> IssueCreateToolResponse {
+        let response: GitIssueCreateResponse
+        do {
+            response = try await service.gitIssueCreate(repository: request.repository, title: request.title, body: request.body)
+        } catch let error as ApelinError where error.reason == .authenticationRequired {
+            throw GitToolFailure(message: Self.issueSignInNeededToPost)
+        } catch let error as ApelinError {
+            throw GitToolFailure(message: Self.issueRefused(error.message, repository: request.repository))
+        }
+        return IssueCreateToolResponse(repository: response.repository, issue: response.number, url: response.url)
+    }
+
+    static let issueSignInNeededToPost = "Nothing was posted: GitHub authorization is needed. Ask the user to Sign In with GitHub in Settings ▸ Git, then try again."
+
+    static func issueRefused(_ message: String, repository: String) -> String {
+        let words = message.hasSuffix(".") ? message : message + "."
+        return "Nothing was posted on \(repository): \(words) Tell the user what blocks it; never post it to another repository, or through a browser or the screen, instead."
+    }
+
+    // MARK: apelin_feedback_send
+
+    /// Without a github.com sign-in, or with one GitHub refused, the model
+    /// hears where the user signs in, read from the reply's reason.
+    public func sendFeedback(_ request: FeedbackToolRequest) async throws -> FeedbackToolResponse {
+        let response: FeedbackSendResponse
+        do {
+            response = try await service.feedbackSend(title: request.title, body: request.body)
+        } catch let error as ApelinError where error.reason == .authenticationRequired {
+            throw FeedbackToolFailure(message: Self.gitHubSignInNeeded)
+        }
+        return FeedbackToolResponse(repository: FeedbackRules.repository, issue: response.number, url: response.url)
+    }
+
+    static let gitHubSignInNeeded = "Nothing was posted: GitHub authorization is needed. Ask the user to Sign In with GitHub in Settings ▸ Git, then send again."
+
+    // MARK: apelin_feedback_read, apelin_feedback_edit
+
+    public func readFeedback(_ request: FeedbackReadToolRequest) async throws -> FeedbackReadToolResponse {
+        let issue: FeedbackReadResponse
+        do {
+            issue = try await service.feedbackRead(number: request.number)
+        } catch let error as ApelinError where error.reason == .authenticationRequired {
+            throw FeedbackToolFailure(message: Self.issueSignInNeeded)
+        }
+        return FeedbackReadToolResponse(
+            repository: FeedbackRules.repository,
+            issue: issue.number,
+            url: issue.url,
+            title: issue.title,
+            state: issue.state,
+            author: issue.author,
+            openedByUser: issue.isAuthor,
+            body: issue.body,
+            footer: issue.footer,
+        )
+    }
+
+    /// apelin-environment's refusals are in words the model acts on: an
+    /// issue that changed since it was read, another account's.
+    public func editFeedback(_ request: FeedbackEditToolRequest) async throws -> FeedbackEditToolResponse {
+        let response: FeedbackEditResponse
+        do {
+            response = try await service.feedbackEdit(FeedbackEditRequest(
+                number: request.number,
+                title: request.title,
+                body: request.body,
+                expectedTitle: request.expectedTitle,
+                expectedBody: request.expectedBody,
+            ))
+        } catch let error as ApelinError where error.reason == .authenticationRequired {
+            throw FeedbackToolFailure(message: "Nothing was changed: " + Self.issueSignInNeeded)
+        }
+        let changed: [String] = [request.title.map { _ in "title" }, request.body.map { _ in "body" }].compactMap(\.self)
+        return FeedbackEditToolResponse(
+            repository: FeedbackRules.repository,
+            issue: response.number,
+            url: response.url,
+            changed: changed,
+            title: response.title,
+            body: response.body,
+        )
+    }
+
+    static let issueSignInNeeded = "GitHub authorization is needed. Ask the user to Sign In with GitHub in Settings ▸ Git, then try again."
 
     static func settings(_ response: GitSettingsResponse) -> GitSettingsToolResponse {
         GitSettingsToolResponse(

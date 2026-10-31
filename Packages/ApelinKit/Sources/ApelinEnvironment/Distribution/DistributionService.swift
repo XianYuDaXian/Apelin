@@ -1,6 +1,4 @@
 import ApelinCore
-import ApelinDebArchive
-import ApelinDebian
 import ApelinGit
 import ApelinProject
 import ApelinProtocol
@@ -25,7 +23,6 @@ public struct DistributionService: Sendable {
 
     /// GitHub refuses a file over 100 MB in a push.
     static let maximumPackageBytes = 100 << 20
-    static let maximumPackagesPerPublish = 16
 
     public init(layout: EnvironmentLayout, git: GitService, credentials: any GitCredentialStore) {
         self.layout = layout
@@ -91,13 +88,13 @@ public struct DistributionService: Sendable {
     /// a free project name, and a github.com credential to make it with.
     public func prepareCreate(_ request: DistributionRepositoryCreateRequest) throws -> String {
         let name = request.name.trimmingCharacters(in: .whitespaces)
-        guard Self.isRepositoryName(name) else {
+        guard GitHubName.isRepository(name) else {
             throw ApelinError(
                 .badRequest,
                 "Use letters, digits, hyphens, underscores and periods for the repository's name, at most 100.",
             )
         }
-        if let owner = request.owner, !Self.isOwnerName(owner) {
+        if let owner = request.owner, !GitHubName.isLogin(owner) {
             throw ApelinError(.badRequest, "Name the organization by its GitHub login.")
         }
         _ = try git.projects.newProjectRoot(named: name)
@@ -121,7 +118,10 @@ public struct DistributionService: Sendable {
         let created = try await api.createRepository(
             name: name,
             description: request.description ?? "Packages for jailbroken iOS, published with Apelin.",
+            isPrivate: false,
             organization: organization,
+            // Issues for its users; neither a wiki nor a project board.
+            features: ["has_issues": true, "has_wiki": false, "has_projects": false],
         )
         do {
             try reporter.checkCancelled()
@@ -160,7 +160,7 @@ public struct DistributionService: Sendable {
     /// Checked before the task is accepted.
     public func prepareLink(_ request: DistributionRepositoryLinkRequest) throws {
         let parts = request.fullName.split(separator: "/", omittingEmptySubsequences: false)
-        guard parts.count == 2, parts.allSatisfy({ Self.isRepositoryName(String($0)) }) else {
+        guard parts.count == 2, parts.allSatisfy({ GitHubName.isRepository(String($0)) }) else {
             throw ApelinError(.badRequest, "Name the repository as owner/name.")
         }
         _ = try api()
@@ -284,110 +284,15 @@ public struct DistributionService: Sendable {
         ])
     }
 
-    // MARK: Publishing
-
-    /// Checked before the task is accepted: packages under the data folder's
-    /// `Builds/`, each a regular `.deb` GitHub takes, then a link whose
-    /// project is there.
-    public func preparePublish(_ request: DistributionPublishRequest) throws -> (DistributionRepository, [URL]) {
-        guard !request.files.isEmpty, request.files.count <= Self.maximumPackagesPerPublish else {
-            throw ApelinError(.badRequest, "Publish between 1 and \(Self.maximumPackagesPerPublish) packages at a time.")
-        }
-        let builds = CanonicalPath.resolve(layout.data.root.appendingPathComponent("Builds").path)
-        let files = try request.files.map { path -> URL in
-            guard let builds, !path.utf8.contains(0), let resolved = CanonicalPath.resolve(path),
-                  resolved.hasPrefix(builds + "/"), resolved.hasSuffix(".deb")
-            else { throw ApelinError(.badRequest, "Only a package Apelin built can be published.") }
-            var metadata = stat()
-            guard lstat(resolved, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG else {
-                throw ApelinError(.notFound, "\((resolved as NSString).lastPathComponent) is not there.")
-            }
-            guard metadata.st_size <= Self.maximumPackageBytes else {
-                throw ApelinError(.badRequest, "\((resolved as NSString).lastPathComponent) is over 100 MB, which GitHub refuses.")
-            }
-            return URL(fileURLWithPath: resolved)
-        }
-        guard let linked = linked() else {
-            throw ApelinError(.notFound, "No package repository is linked. Create or link one in Settings ▸ Git.")
-        }
-        return (linked, files)
-    }
-
-    /// Up to date with the remote (fast-forward only), each package into
-    /// `debs/`, one commit, one push.
-    public func publish(_ linked: DistributionRepository, files: [URL], reporter: TaskReporter) async throws -> JSONValue {
-        let project = try git.projects.locate(linked.projectID)
-        let repository = try GitRepository(at: project.root)
-        _ = try git.pull(git.preparePull(GitPullRequest(projectID: linked.projectID)), reporter: reporter)
-        try reporter.checkCancelled()
-        reporter.stage("preparing")
-        let debs = project.root.appendingPathComponent("debs", isDirectory: true)
-        var metadata = stat()
-        if lstat(debs.path, &metadata) != 0 {
-            guard mkdir(debs.path, 0o755) == 0 else { throw ApelinError(.internal, "could not make debs/") }
-        } else if metadata.st_mode & S_IFMT != S_IFDIR {
-            throw ApelinError(.conflict, "debs in \(project.name) is not a folder.")
-        }
-        var published: [String] = []
-        var skipped: [String] = []
-        var titles: [String] = []
-        for file in files {
-            let control = try DebianControlFile(parsing: DebArchiveReader.control(of: .path(file.path)))
-            guard let package = control["Package"], let version = control["Version"],
-                  let architecture = control["Architecture"]
-            else { throw ApelinError(.badRequest, "\(file.lastPathComponent) has no Package, Version or Architecture.") }
-            let name = try Self.packageFileName(package: package, version: version, architecture: architecture)
-            let destination = debs.appendingPathComponent(name)
-            if lstat(destination.path, &metadata) == 0 {
-                guard metadata.st_mode & S_IFMT == S_IFREG,
-                      FileManager.default.contentsEqual(atPath: destination.path, andPath: file.path)
-                else {
-                    throw ApelinError(
-                        .conflict,
-                        "debs/\(name) is already published with other contents. Raise the version and build again.",
-                    )
-                }
-                skipped.append(name)
-                continue
-            }
-            try FileManager.default.copyItem(at: file, to: destination)
-            published.append(name)
-            let title = "\(package) \(version)"
-            if !titles.contains(title) {
-                titles.append(title)
-            }
-        }
-        var result: [String: JSONValue] = [
-            "published": .array(published.map(JSONValue.string)),
-            "skipped": .array(skipped.map(JSONValue.string)),
-            "sourceURL": .string(linked.sourceURL),
-        ]
-        guard !published.isEmpty else { return .object(result) }
-        try repository.stage(published.map { "debs/" + $0 })
-        let login = (try? credentials.credential(forHost: GitHubHost.name))?.username ?? "apelin"
-        let commit = try repository.commit(
-            message: "Publish " + titles.joined(separator: ", "),
-            author: author(repository, login: login),
-        )
-        try reporter.checkCancelled()
-        reporter.stage("pushing")
-        _ = try GitService.mapping { try repository.push(credentials: git.credentialLookup) }
-        result["commit"] = .string(commit)
-        return .object(result)
-    }
-
     // MARK: Helpers
 
-    private func api() throws -> GitHubAPI {
-        guard let credential = try credentials.credential(forHost: GitHubHost.name), !credential.token.isEmpty else {
-            throw ApelinError(.denied, "Sign in with GitHub in Settings ▸ Git first.", reason: .authenticationRequired)
-        }
-        return GitHubAPI(token: credential.token, exchange: exchange)
+    func api() throws -> GitHubAPI {
+        try GitHubAPI.signedIn(credentials, exchange: exchange)
     }
 
     /// The commit author Apelin's settings name, else the repository's, else
     /// the GitHub account's no-reply address.
-    private func author(_ repository: GitRepository, login: String) -> GitSignature {
+    func author(_ repository: GitRepository, login: String) -> GitSignature {
         (try? git.author(name: nil, email: nil, repository: repository))
             ?? GitSignature(name: login, email: "\(login)@users.noreply.github.com")
     }
@@ -496,21 +401,6 @@ public struct DistributionService: Sendable {
     static func sourceURL(owner: String, name: String) -> String {
         let host = owner.lowercased() + ".github.io"
         return name.lowercased() == host ? "https://\(host)/" : "https://\(host)/\(name)/"
-    }
-
-    /// What GitHub takes for a repository's name.
-    /// A GitHub login: letters, digits and single hyphens, at most 39, no
-    /// hyphen at either end.
-    static func isOwnerName(_ name: String) -> Bool {
-        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-")
-        return (1 ... 39).contains(name.count) && name.allSatisfy(allowed.contains)
-            && !name.hasPrefix("-") && !name.hasSuffix("-") && !name.contains("--")
-    }
-
-    static func isRepositoryName(_ name: String) -> Bool {
-        let allowed = Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.")
-        return (1 ... 100).contains(name.count) && name.allSatisfy(allowed.contains)
-            && name != "." && name != ".." && !name.lowercased().hasSuffix(".git")
     }
 
     /// `<Package>_<Version>_<Architecture>.deb`, the epoch's colon spelled

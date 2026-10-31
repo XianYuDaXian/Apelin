@@ -6,20 +6,19 @@ import UIKit
 /// One of the composer's round icons: a symbol and a tap. It has no text,
 /// so it carries the name VoiceOver reads, set with the symbol and changed
 /// with it.
-class ComposerIconButton: UIView {
-    let imageView = UIImageView()
+class ComposerIconButton: UIButton {
+    let iconView = UIImageView()
 
     var tapAction: () -> Void = {}
 
     required init() {
         super.init(frame: .zero)
-        addSubview(imageView)
-        imageView.tintColor = .label
-        imageView.translatesAutoresizingMaskIntoConstraints = false
-        imageView.contentMode = .scaleAspectFit
+        addSubview(iconView)
+        iconView.tintColor = .label
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        iconView.contentMode = .scaleAspectFit
 
-        let tap = UITapGestureRecognizer(target: self, action: #selector(buttonAction))
-        addGestureRecognizer(tap)
+        addTarget(self, action: #selector(buttonAction), for: .primaryActionTriggered)
 
         isUserInteractionEnabled = true
         isAccessibilityElement = true
@@ -33,13 +32,13 @@ class ComposerIconButton: UIView {
 
     required convenience init(iconName: String, label: String) {
         self.init()
-        imageView.image = UIImage(named: iconName)?.withRenderingMode(.alwaysTemplate)
+        iconView.image = UIImage(named: iconName)?.withRenderingMode(.alwaysTemplate)
         accessibilityLabel = label
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        imageView.frame = bounds.insetBy(dx: 2, dy: 2)
+        iconView.frame = bounds.insetBy(dx: 2, dy: 2)
     }
 
     /// Hidden or faded out, it is not there: the composer keeps its unused
@@ -50,19 +49,16 @@ class ComposerIconButton: UIView {
 
     @objc private func buttonAction() {
         guard isShown else { return }
-        puddingAnimate()
         tapAction()
     }
 
-    override func accessibilityActivate() -> Bool {
-        guard isShown else { return false }
-        tapAction()
-        return true
+    override var isHighlighted: Bool {
+        didSet { iconView.alpha = isHighlighted ? 0.4 : 1 }
     }
 
     func change(iconName: String) {
-        UIView.transition(with: imageView, duration: 0.3, options: .transitionCrossDissolve) {
-            self.imageView.image = UIImage(named: iconName)?.withRenderingMode(.alwaysTemplate)
+        UIView.transition(with: iconView, duration: 0.3, options: [.transitionCrossDissolve, .allowUserInteraction, .beginFromCurrentState]) {
+            self.iconView.image = UIImage(named: iconName)?.withRenderingMode(.alwaysTemplate)
         }
     }
 }

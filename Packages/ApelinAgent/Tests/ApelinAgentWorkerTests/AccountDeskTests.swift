@@ -530,31 +530,56 @@ struct AccountDeskTests {
 
     // MARK: - Every login kwwk offers
 
+    @Test
+    func `DeepSeek signs in with a key alone and signs out independently`() async throws {
+        let other = OAuthCredentials(access: "other-SECRET", refresh: "", expires: .max)
+        let store = DeliveredCredentialSource([CredentialProviderID.openAICompatible: other])
+        let desk = AccountDesk(store: store, login: Self.neverCalled, listener: Self.silent, verifyKey: { provider, key, _ in
+            #expect(provider == .deepSeek)
+            #expect(key.access == "deepseek-SECRET")
+        })
+        let recorder = SignInRecorder()
+        let task = TaskID("deepseek-sign-in")
+        try await desk.start(AgentSignInRequest(provider: .deepSeek), taskID: task, reporter: recorder.reporter)
+        try await recorder.waitFor { !$0.events.isEmpty }
+        #expect(AgentProvider.deepSeek.keyFields.first { $0.field == .baseURL }?.defaultValue == DeepSeekProvider.baseURL)
+        try await desk.respond(AgentSignInRespondRequest(taskID: task, fields: [.apiKey: "deepseek-SECRET"]))
+        try await recorder.waitFor { $0.state != nil }
+        #expect(recorder.state == .succeeded)
+        let account = try #require(await desk.list().accounts.first { $0.provider == .deepSeek })
+        #expect(account.signedIn)
+        #expect(account.account == "api.deepseek.com")
+        #expect(account.models?.contains("deepseek-flash") == true)
+        #expect(!recorder.transcript.contains("SECRET"))
+        try await desk.signOut(.deepSeek)
+        #expect(try await store.credentials(for: CredentialProviderID.deepSeek) == nil)
+        #expect(try await store.credentials(for: CredentialProviderID.openAICompatible) == other)
+    }
+
     /// The test that fails when kwwk gains a login: every subscription
     /// `OAuthSubscriptions.login` runs has a provider here that signs in by
-    /// a flow (not a typed key), and Settings lists them in kwwk's order.
+    /// a flow (not a typed key). Display order is Apelin's own.
     @Test
-    func `every kwwk subscription has a provider, in kwwk's order`() {
+    func `every kwwk subscription has a provider`() {
         for subscription in OAuthSubscriptions.providers {
             let provider = AgentProvider.allCases.first { $0.storeID == subscription.id }
             #expect(provider != nil, "kwwk signs in to \(subscription.id), which AgentProvider lacks")
             #expect(provider.map { $0.signInMethod != .apiKey } == true, "\(subscription.id) is a kwwk flow, not a key")
         }
-        let subscriptionIDs = OAuthSubscriptions.providers.map(\.id)
-        let listed = AgentProvider.signInOrder.prefix(subscriptionIDs.count).map(\.storeID)
-        #expect(Array(listed) == subscriptionIDs)
+        #expect(Array(AgentProvider.signInOrder.prefix(4)) == [.openAICodex, .anthropicOAuth, .githubCopilot, .cursor])
+        #expect(AgentProvider.signInOrder.filter { $0.signInMethod == .apiKey }
+            == [.openAI, .deepSeek, .google, .anthropic, .openAICompatible])
     }
 
     /// Every login kwwk can store and register for a session
     /// (`providerDirectory`, the list `registerStored` serves) has a
-    /// provider here, and every provider here is one kwwk can register — so
-    /// a session can use whatever Settings signs in to.
+    /// provider here; Apelin's own registration adds DeepSeek.
     @Test
-    func `every stored provider kwwk registers has a provider, and no other`() {
+    func `every stored provider is registered by kwwk or Apelin`() {
         let kwwk = Set(providerDirectory.map(\.storeId))
         let apelin = Set(AgentProvider.allCases.map(\.storeID))
         #expect(kwwk.subtracting(apelin).isEmpty, "kwwk stores \(kwwk.subtracting(apelin).sorted()) with no provider")
-        #expect(apelin.subtracting(kwwk).isEmpty, "no session could use \(apelin.subtracting(kwwk).sorted())")
+        #expect(apelin.subtracting(kwwk) == [CredentialProviderID.deepSeek])
         // A store id kwwk keeps as a typed key and does not sign in to is
         // a key form here.
         let subscriptions = Set(OAuthSubscriptions.providers.map(\.id))
@@ -614,7 +639,7 @@ struct AccountDeskTests {
     /// form only the fields `agentSignInRespond` knows.
     @Test
     func `each key form asks for a key first, as KWWKCli's does`() {
-        #expect(SignInKeyForms.all.map(\.provider) == [.anthropic, .openAI, .google, .openRouter, .openAICompatible])
+        #expect(SignInKeyForms.all.map(\.provider) == [.anthropic, .openAI, .google, .deepSeek, .openRouter, .openAICompatible])
         for form in SignInKeyForms.all {
             #expect(form.fields.first == KeyField(field: .apiKey, required: true, placeholder: form.fields.first?.placeholder))
             #expect(form.fields.filter(\.secure).count == 1)

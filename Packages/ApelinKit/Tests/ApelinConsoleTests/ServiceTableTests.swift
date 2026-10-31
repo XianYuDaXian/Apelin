@@ -40,6 +40,8 @@ final class ServiceTableTests: XCTestCase {
             return Row(reply: handle) { _ = try await $0.toolchainSetup(ToolchainSetupRequest()) }
         case .toolchainRemove:
             return Row(reply: handle) { _ = try await $0.toolchainRemove(id: "toolchain") }
+        case .toolchainSetDefault:
+            return Row(reply: ack) { try await $0.toolchainSetDefault(id: "toolchain") }
         case .toolchainSelfTest:
             return Row(reply: handle) { _ = try await $0.toolchainSelfTest(id: "toolchain") }
         case .sdkList:
@@ -62,6 +64,8 @@ final class ServiceTableTests: XCTestCase {
             return Row(reply: ProjectCheckResponse(passed: true)) { _ = try await $0.projectCheck(projectID: "p") }
         case .projectRename:
             return Row(reply: ProjectRenameResponse(projectID: "p", displayName: "Hello", changed: true)) { _ = try await $0.projectRename(.init(projectID: "p", displayName: "Hello")) }
+        case .projectDelete:
+            return Row(reply: ProjectDeleteResponse(projectID: "p", projectName: "Hello")) { _ = try await $0.projectDelete(.init(projectID: "p")) }
         case .buildStart:
             return Row(reply: handle) { _ = try await $0.buildStart(projectID: "p") }
         case .buildAttach:
@@ -72,6 +76,10 @@ final class ServiceTableTests: XCTestCase {
             return Row(reply: handle) { _ = try await $0.installPackage(artifactID: "a", digest: String(repeating: "0", count: 64)) }
         case .removePackage:
             return Row(reply: handle) { _ = try await $0.removePackage(installationID: "i") }
+        case .installationList:
+            return Row(reply: InstallationListResponse(installations: [])) {
+                _ = try await $0.installationList(packageID: "local.apelin.hello")
+            }
         case .respring:
             return Row(reply: ack) { try await $0.respring() }
         case .approvalDigestState:
@@ -118,7 +126,7 @@ final class ServiceTableTests: XCTestCase {
         case .readUITree:
             return Row(reply: ReadUITreeResponse(tree: .object([:]))) { _ = try await $0.readUITree() }
         case .uiAction:
-            return Row(reply: ack) { try await $0.uiAction(.tap(x: 1, y: 2)) }
+            return Row(reply: UIActionResponse()) { _ = try await $0.uiAction(.tap(x: 1, y: 2)) }
         case .agentOpen:
             return Row(reply: AgentOpenResponse(sessionID: "s", task: TaskHandle(taskID: id, kind: .agent))) {
                 _ = try await $0.agentOpen(AgentOpenRequest(projectName: "Hello"))
@@ -183,6 +191,28 @@ final class ServiceTableTests: XCTestCase {
             return Row(reply: ack) { try await $0.distributionRepositoryUnlink() }
         case .distributionPublish:
             return Row(reply: handle) { _ = try await $0.distributionPublish(files: ["/tmp/a.deb"]) }
+        case .feedbackSend:
+            return Row(reply: FeedbackSendResponse(number: 1, url: "https://github.com/owngoal-dev/Apelin/issues/1")) {
+                _ = try await $0.feedbackSend(title: "t", body: "b")
+            }
+        case .feedbackRead:
+            let issue = FeedbackReadResponse(
+                number: 1, url: "https://github.com/owngoal-dev/Apelin/issues/1", title: "t", body: "b",
+                footer: nil, author: "someone", state: "open", isAuthor: true,
+            )
+            return Row(reply: issue) { _ = try await $0.feedbackRead(number: 1) }
+        case .feedbackEdit:
+            return Row(reply: FeedbackEditResponse(number: 1, url: "https://github.com/owngoal-dev/Apelin/issues/1", title: "t", body: "c")) {
+                _ = try await $0.feedbackEdit(FeedbackEditRequest(number: 1, title: nil, body: "c", expectedTitle: "t", expectedBody: "b"))
+            }
+        case .feedbackStarState:
+            return Row(reply: FeedbackStarResponse(repository: "owngoal-dev/Apelin", starred: false)) {
+                _ = try await $0.feedbackStarState()
+            }
+        case .feedbackStar:
+            return Row(reply: FeedbackStarResponse(repository: "owngoal-dev/Apelin", starred: true)) {
+                _ = try await $0.feedbackStar()
+            }
         case .transferExport:
             return Row(reply: handle) { _ = try await $0.transferExport(kind: .sdk, id: "sdk", createdBy: "Apelin") }
         case .transferInspect:
@@ -230,6 +260,17 @@ final class ServiceTableTests: XCTestCase {
             return Row(reply: ack) { try await $0.gitCredentialSet(GitCredentialSetRequest(host: "example.com", username: "u", token: "t")) }
         case .gitCredentialRemove:
             return Row(reply: ack) { try await $0.gitCredentialRemove(host: "example.com") }
+        case .gitRepositoryCreate:
+            let created = GitRepositoryCreateResponse(
+                fullName: "u/r",
+                cloneURL: "https://github.com/u/r.git",
+                url: "https://github.com/u/r",
+            )
+            return Row(reply: created) { _ = try await $0.gitRepositoryCreate(GitRepositoryCreateRequest(name: "r", visibility: .private)) }
+        case .gitIssueCreate:
+            return Row(reply: GitIssueCreateResponse(number: 1, url: "https://github.com/u/r/issues/1", repository: "u/r")) {
+                _ = try await $0.gitIssueCreate(repository: "u/r", title: "t", body: "b")
+            }
         }
     }
 

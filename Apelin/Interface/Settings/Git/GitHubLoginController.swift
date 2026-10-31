@@ -77,8 +77,8 @@ final class GitHubLoginController: UIViewController {
         $0.textAlignment = .center
         $0.numberOfLines = 0
         $0.text = String(localized: """
-        GitHub's page asks you to authorize GitHub CLI: Apelin signs in through its app. The token is \
-        kept only in this device's keychain and used for remotes on github.com.
+        GitHub’s page asks you to authorize GitHub CLI: Apelin signs in through its app. The token is \
+        kept only in this device’s keychain and used for remotes on github.com.
         """)
     }
 
@@ -207,7 +207,7 @@ final class GitHubLoginController: UIViewController {
         case .denied: String(localized: "The sign-in was declined on GitHub.")
         case .expired: String(localized: "The code expired before it was entered.")
         case let .refused(reason): String(localized: "GitHub refused the sign-in: \(reason)")
-        case .unreadable: String(localized: "GitHub's answer could not be read.")
+        case .unreadable: String(localized: "GitHub’s answer could not be read.")
         case nil: ProviderLoginController.unavailableText(error)
         }
     }

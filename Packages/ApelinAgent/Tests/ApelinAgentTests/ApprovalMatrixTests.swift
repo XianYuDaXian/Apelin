@@ -15,8 +15,10 @@ struct ApprovalMatrixTests {
         root = try ScopedRoot(home.projectURL)
     }
 
+    /// The modes alone: Ask Before Using the Screen, which asks in every mode
+    /// while it is on, has its own suite (`ScreenUseConsentTests`).
     private func verdict(_ mode: ApprovalMode, _ facts: InvocationFacts, presets: ApprovalPresets = .default) -> GateVerdict {
-        ApprovalPolicy(mode: mode, presets: presets).evaluate(facts, root: root)
+        ApprovalPolicy(mode: mode, presets: presets, asksBeforeScreen: false).evaluate(facts, root: root)
     }
 
     private func isAllow(_ verdict: GateVerdict) -> Bool {
@@ -86,6 +88,21 @@ struct ApprovalMatrixTests {
         #expect(isAsk(verdict(.confirm, InvocationFacts(tool: .local(.packageRemove)))))
         // MCP tools ask.
         #expect(isAsk(verdict(.confirm, InvocationFacts(tool: .mcp("mcp__docs__search")))))
+    }
+
+    @Test
+    func `Confirm: a web fetch asks unless the user presets it, and runs in Relaxed and Full`() {
+        defer { home.remove() }
+        let facts = InvocationFacts(tool: .local(.webFetch))
+        #expect(AgentToolName.webFetch.risk == .readOnly && AgentToolName.webFetch.isSensitiveRead)
+        #expect(!ApprovalPresets.default.readTools.contains(.webFetch))
+        #expect(verdict(.confirm, facts) == .ask(reason: "This action is not in your approved presets. Review it before running.", detail: .none))
+        #expect(ToolRunner.allowsSessionScope(.local(.webFetch), detail: .none))
+        var presets = ApprovalPresets.default
+        presets.readTools.insert(.webFetch)
+        #expect(verdict(.confirm, facts, presets: presets) == .allow(.preset("apelin_web_fetch")))
+        #expect(verdict(.relaxed, facts) == .allow(.relaxed))
+        #expect(verdict(.full, facts) == .allow(.relaxed))
     }
 
     @Test

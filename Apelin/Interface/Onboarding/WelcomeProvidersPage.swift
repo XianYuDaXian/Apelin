@@ -10,23 +10,29 @@ final class WelcomeProvidersPage: WelcomeListPage {
         (String(localized: "Cursor"), .cursor),
         (String(localized: "GitHub Copilot"), .githubCopilot),
     ]
-    private struct Row: Equatable {
-        let provider: AgentProvider
-        let name: String
-        let connected: Bool
+    private enum Item: Hashable { case introduction, provider(AgentProvider) }
+    private enum Row: Equatable {
+        case introduction
+        case provider(AgentProvider, name: String, connected: Bool)
+        var id: Item {
+            switch self {
+            case .introduction: .introduction
+            case let .provider(provider, _, _): .provider(provider)
+            }
+        }
     }
 
-    private lazy var dataSource = TableDataSource<Int, AgentProvider, Row>(
+    private lazy var dataSource = TableDataSource<Int, Item, Row>(
         tableView: tableView,
-        identifier: { $0.provider },
+        identifier: { $0.id },
     ) { [weak self] _, _, row in
         self?.cell(for: row)
     }
 
     private func updateRows() {
-        dataSource.update([(0, entries.map { entry in
-            Row(
-                provider: entry.1,
+        dataSource.update([(0, [.introduction]), (1, entries.map { entry in
+            Row.provider(
+                entry.1,
                 name: entry.0,
                 connected: accounts.contains { $0.provider == entry.1 && $0.signedIn },
             )
@@ -50,7 +56,16 @@ final class WelcomeProvidersPage: WelcomeListPage {
     }
 
     private func cell(for row: Row) -> UITableViewCell {
-        let (name, provider) = (row.name, row.provider)
+        guard case let .provider(provider, name, connected) = row else {
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            var content = UIListContentConfiguration.cell()
+            content.text = String(localized: "Sign in to the account the agent uses to write, build and install your tweaks.")
+            content.textProperties.font = .preferredFont(forTextStyle: .body)
+            content.textProperties.numberOfLines = 0
+            cell.contentConfiguration = content
+            cell.selectionStyle = .none
+            return cell
+        }
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
         var content = cell.defaultContentConfiguration()
         content.text = name
@@ -58,28 +73,22 @@ final class WelcomeProvidersPage: WelcomeListPage {
         content.imageProperties.maximumSize = CGSize(width: 40, height: 40)
         cell.contentConfiguration = content
         // a signed-in account is ticked; tapping it still picks its models
-        cell.accessoryType = row.connected ? .checkmark : .disclosureIndicator
+        cell.accessoryType = connected ? .checkmark : .disclosureIndicator
         cell.isAccessibilityElement = true
         cell.accessibilityLabel = name
-        cell.accessibilityValue = row.connected
+        cell.accessibilityValue = connected
             ? String(localized: "Connected") : nil
         return cell
     }
 
-    func tableView(_: UITableView, viewForHeaderInSection _: Int) -> UIView? {
-        text(
-            .groupedFooter(),
-            String(localized: "Sign in to the account the agent uses to write, build and install your tweaks."),
-        )
-    }
-
-    func tableView(_: UITableView, viewForFooterInSection _: Int) -> UIView? {
-        text(.groupedFooter(), String(localized: "You can add more providers later in Settings."))
+    func tableView(_: UITableView, viewForFooterInSection section: Int) -> UIView? {
+        guard dataSource.sectionIdentifier(for: section) == 1 else { return nil }
+        return text(.groupedFooter(), String(localized: "You can add more providers later in Settings."))
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard let provider = dataSource.value(at: indexPath)?.provider else { return }
+        guard case let .provider(provider, _, _)? = dataSource.value(at: indexPath) else { return }
         signIn(provider)
     }
 

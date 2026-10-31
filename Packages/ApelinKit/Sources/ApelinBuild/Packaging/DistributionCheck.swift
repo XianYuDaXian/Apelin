@@ -102,8 +102,8 @@ public struct DistributionCheck: Sendable {
             warn(
                 "distribution.version.packaged",
                 "/package/version",
-                "version \(package.version) was already packaged for \(packaged.bootstrap) on \(date); raise /package/version "
-                    + "if anything changed, or package managers will not offer the new build as an update",
+                "version \(package.version) was already packaged for \(packaged.bootstrap) on \(date): publish or share that "
+                    + "package as it is; raise /package/version only to ship a change, so package managers offer it as an update",
             )
         }
         return out
@@ -141,8 +141,8 @@ public struct DistributionCheck: Sendable {
             let date = packaged.createdAt.formatted(.iso8601.year().month().day())
             warn(
                 "distribution.version.packaged",
-                "version \(record.packageVersion) was already packaged for \(record.bootstrap) on \(date); raise the version the build script writes "
-                    + "if anything changed, or package managers will not offer the new build as an update",
+                "version \(record.packageVersion) was already packaged for \(record.bootstrap) on \(date): publish or share that "
+                    + "package as it is; raise the version the build script writes only to ship a change, so package managers offer it as an update",
             )
         }
         let other = releases.filter { $0.bootstrap != record.bootstrap }.max { $0.createdAt < $1.createdAt }

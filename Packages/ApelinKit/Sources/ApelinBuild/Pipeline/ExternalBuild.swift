@@ -154,6 +154,7 @@ public enum ExternalBuild {
             log: logURL.path,
             loadCheck: loadCheck(contents, packageID: packageID, inputs: inputs),
             createdAt: Date(timeIntervalSince1970: TimeInterval(inputs.timestamp)),
+            packageFiles: ArtifactRecord.packageFiles(of: contents),
         )
         log("packaged \(packageID) \(version) (\(expected)), \(record.digest)")
         if inputs.configuration == .release {

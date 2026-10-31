@@ -48,6 +48,15 @@ final class ComposerBlockButton: UIButton {
         setNeedsLayout()
     }
 
+    override var isHighlighted: Bool {
+        didSet {
+            let opacity: CGFloat = isHighlighted ? 0.4 : 1
+            borderView.alpha = opacity
+            iconView.alpha = opacity
+            textLabel.alpha = opacity
+        }
+    }
+
     override var intrinsicContentSize: CGSize {
         CGSize(width: ceil(inset + iconSize + spacing + textLabel.intrinsicContentSize.width + inset),
                height: ceil(max(iconSize, textLabel.intrinsicContentSize.height) + inset * 2))

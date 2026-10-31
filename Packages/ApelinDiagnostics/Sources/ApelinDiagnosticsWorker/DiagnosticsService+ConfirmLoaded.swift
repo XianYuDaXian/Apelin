@@ -68,7 +68,7 @@ extension DiagnosticsService {
         if request.imageCheck != nil {
             throw ApelinError(
                 .badRequest,
-                "imageCheck is disabled: reading another process's image list panicked the iOS 27 kernel.",
+                "imageCheck is disabled on every iOS version: reading another process's image list panicked the kernel on a test device.",
             )
         }
         // A respring has to bring SpringBoard back inside the window.

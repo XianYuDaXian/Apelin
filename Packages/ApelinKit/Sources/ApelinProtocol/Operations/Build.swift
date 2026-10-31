@@ -29,6 +29,13 @@ public struct BuildArtifact: Codable, Sendable, Equatable {
     /// host copies it to private staging and checks `digest` there.
     public var path: String?
     public var projectID: String?
+    /// The regular files and links the deb installs, as dpkg lists them
+    /// (`/var/jb/usr/bin/x`), fewest components first and at most
+    /// `maximumPackageFiles`: what the host looks up in the package
+    /// database when irisind refuses the install.
+    public var packageFiles: [String]?
+
+    public static let maximumPackageFiles = 256
 
     public init(
         artifactID: String,
@@ -41,6 +48,7 @@ public struct BuildArtifact: Codable, Sendable, Equatable {
         packagingDigest: String? = nil,
         path: String? = nil,
         projectID: String? = nil,
+        packageFiles: [String]? = nil,
     ) {
         self.artifactID = artifactID
         self.digest = digest
@@ -52,6 +60,7 @@ public struct BuildArtifact: Codable, Sendable, Equatable {
         self.packagingDigest = packagingDigest
         self.path = path
         self.projectID = projectID
+        self.packageFiles = packageFiles
     }
 }
 

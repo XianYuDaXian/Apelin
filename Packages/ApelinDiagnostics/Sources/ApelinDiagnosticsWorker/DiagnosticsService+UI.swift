@@ -15,28 +15,52 @@ extension DiagnosticsService {
         return try ApelinProtocol.ReadUITreeResponse(tree: JSONValue(encoding: read))
     }
 
-    func uiAction(_ action: ApelinProtocol.UIActionRequest) async throws -> Acknowledged {
+    /// A wake answers the lock state it left, and a `type` what it left in
+    /// the fields, read back from the tree; every other action, an empty
+    /// reply.
+    func uiAction(_ action: ApelinProtocol.UIActionRequest) async throws -> ApelinProtocol.UIActionResponse {
         let mappedAction = try Self.action(action.action)
-        try await blocking {
-            let front = try requireTarget(action.targetID)
-            try mapped { try diagnostics.perform(mappedAction, settled: front) }
+        let outcome = try await blocking {
+            let front = try requireTarget(action.targetID, refusing: action.refusedBundleIDs ?? [])
+            return try mapped { try diagnostics.perform(mappedAction, settled: front) }
         }
-        return Acknowledged()
+        return ApelinProtocol.UIActionResponse(
+            locked: outcome?.lock?.locked,
+            screenOff: outcome?.lock?.screenOff,
+            typedTextMatches: outcome?.typed?.matches,
+            fieldValues: outcome?.typed?.fieldValues,
+        )
     }
 
     /// An action is bound to the verified foreground app when a target is
-    /// named; without one it goes to whatever is in front. Answers the
-    /// settled read it checked, nil without a target. It waits: call it
-    /// inside `blocking`.
+    /// named; without one it goes to whatever is in front. An app in
+    /// `refused` is never reached: named as the target, it is refused before
+    /// anything is read, and in front — on the settled read, verified or
+    /// not — it is refused too, even with no target, so the check and the
+    /// action go by the same read. Answers the settled read it checked, nil
+    /// when it read nothing. It waits: call it inside `blocking`.
     @discardableResult
-    func requireTarget(_ targetID: String?) throws -> ForegroundApp? {
-        guard let targetID else { return nil }
-        // Read once the app switch that brought it there, if any, is over.
-        let front = diagnostics.settledForegroundApp()
+    func requireTarget(_ targetID: String?, refusing refused: [String] = []) throws -> ForegroundApp? {
+        if let targetID, refused.contains(targetID) {
+            throw Self.refusal(targetID)
+        }
+        guard targetID != nil || !refused.isEmpty else { return nil }
+        // Read once the app switch that brings it there, if any, is over:
+        // with a target, once that app is the one in front.
+        let front = diagnostics.settledForegroundApp(expecting: targetID)
+        if refused.contains(front.bundleIdentifier) {
+            throw Self.refusal(front.bundleIdentifier)
+        }
+        guard let targetID else { return front }
         guard front.verified, front.bundleIdentifier == targetID else {
-            throw ApelinError(.conflict, "\(targetID) is not the verified foreground app (\(front.bundleIdentifier.isEmpty ? "unknown" : front.bundleIdentifier))")
+            let seen = front.bundleIdentifier.isEmpty ? "unknown" : front.bundleIdentifier
+            throw ApelinError(.conflict, "\(targetID) is not the verified foreground app after \(Int(diagnostics.settleTimeout)) s (\(seen))")
         }
         return front
+    }
+
+    private static func refusal(_ bundleID: String) -> ApelinError {
+        ApelinError(.denied, "UI actions may not reach \(bundleID), so nothing was done: ask the user to do this there themselves")
     }
 
     static func action(_ action: ApelinProtocol.UIAction) throws -> ApelinDiagnosticsCore.UIAction {
@@ -50,7 +74,7 @@ extension DiagnosticsService {
                 match: identifier == nil ? .exact : .contains,
             ))
         case let .type(text):
-            return .type(text: text, delayMilliseconds: 0)
+            return .type(text: text, delayMilliseconds: ApelinDiagnosticsCore.UIAction.defaultTypeDelayMilliseconds)
         case let .swipe(fromX, fromY, toX, toY, durationMilliseconds):
             return .swipe(
                 from: UIPoint(x: fromX, y: fromY),
@@ -58,7 +82,11 @@ extension DiagnosticsService {
                 seconds: Double(durationMilliseconds) / 1000,
             )
         case let .press(button):
-            throw ApelinError(.unavailable, "Pressing the \(button) button is not supported.")
+            guard let pressed = HardwareButton(rawValue: button) else {
+                let names = HardwareButton.allCases.map(\.rawValue).joined(separator: ", ")
+                throw ApelinError(.badRequest, "There is no \(button) button to press; the buttons are \(names).")
+            }
+            return .press(pressed)
         }
     }
 }

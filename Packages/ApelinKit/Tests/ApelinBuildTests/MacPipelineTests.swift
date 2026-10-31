@@ -104,16 +104,26 @@ final class MacPipelineTests: XCTestCase {
             XCTAssertEqual(control.package, "com.example.hellotweak")
             XCTAssertEqual(control.architecture, record.architecture)
             XCTAssertEqual(control["Depends"], "firmware (>= 16.0), mobilesubstrate")
+            let icon = "https://owngoal-dev.github.io/Apelin/icons/wiki.qaq.apelin.dev.tweak.png"
+            XCTAssertEqual(control["Icon"], icon, "the template's package icon")
             let prefix = bootstrap == .rootless ? "/var/jb" : ""
             let paths = Set(contents.entries.map(\.path))
             XCTAssertTrue(paths.contains(prefix + "/Library/MobileSubstrate/DynamicLibraries/HelloTweak.dylib"), "\(paths)")
             XCTAssertTrue(paths.contains(prefix + "/Library/MobileSubstrate/DynamicLibraries/HelloTweak.plist"), "\(paths)")
+            // What the host looks up when irisind refuses the install: the
+            // deb's files as dpkg lists them, and no folder.
+            let files = try XCTUnwrap(record.packageFiles)
+            XCTAssertEqual(Set(files), Set(contents.entries.filter { $0.kind != .directory }.map(\.path)))
+            XCTAssertTrue(files.contains(prefix + "/Library/MobileSubstrate/DynamicLibraries/HelloTweak.dylib"), "\(files)")
+            XCTAssertTrue(files.contains(prefix + "/Library/MobileSubstrate/DynamicLibraries/HelloTweak.plist"), "\(files)")
+            XCTAssertEqual(record.wireArtifact.packageFiles, files, "the artifact event carries them to the host")
 
             // And through the tools a person would use.
             if let dpkgDeb = dpkgDeb() {
-                let info = try runTool(dpkgDeb, ["-f", record.path, "Package", "Version", "Architecture", "Depends"])
+                let info = try runTool(dpkgDeb, ["-f", record.path, "Package", "Version", "Architecture", "Depends", "Icon"])
                 XCTAssertEqual(info.status, 0, info.output)
                 XCTAssertTrue(info.output.contains("Architecture: \(record.architecture)"), info.output)
+                XCTAssertTrue(info.output.contains("Icon: \(icon)\n"), info.output)
                 let listing = try runTool(dpkgDeb, ["-c", record.path])
                 XCTAssertEqual(listing.status, 0, listing.output)
                 XCTAssertTrue(listing.output.contains(".\(prefix)/Library/MobileSubstrate/DynamicLibraries/HelloTweak.dylib"), listing.output)
@@ -188,12 +198,83 @@ final class MacPipelineTests: XCTestCase {
         let product = try XCTUnwrap(result.products.products.first)
         let image = try MachOImage(contentsOfFile: product.executable)
         for slice in image.slices {
-            XCTAssertEqual(try image.entitlementsDictionary(of: slice)?["com.apple.private.security.no-sandbox"] as? Bool, true)
+            let entitlements = try image.entitlementsDictionary(of: slice)
+            XCTAssertEqual(entitlements?["com.apple.private.security.no-sandbox"] as? Bool, true)
+            // the GPU list the template carries from 0.1.1, under both keys
+            for key in ["com.apple.security.iokit-user-client-class", "com.apple.security.exception.iokit-user-client-class"] {
+                XCTAssertTrue((entitlements?[key] as? [String])?.contains("IOSurfaceRootUserClient") == true, key)
+            }
         }
         XCTAssertNil(result.record.loadCheck)
         let contents = try DebArchiveReader.contents(of: .path(result.record.path), contentsLimit: 0)
         XCTAssertTrue(contents.entries.contains { $0.path.hasPrefix("/var/jb/usr/bin/") && $0.mode == 0o755 }, "\(contents.entries.map(\.path))")
     }
+
+    /// A preference bundle whose pane is built in code beside its Root.plist
+    /// one: the extension's Preferences declarations name the cell types,
+    /// the specifier factories and properties and the list edits such a
+    /// pane calls, and its stub links them, for both bootstraps.
+    func testPreferenceBundleWithAPaneBuiltInCode() throws {
+        let registry = try requireTools()
+        let scratch = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let (home, store) = try makeHome(in: scratch)
+        let catalog = ExtensionCatalog(directory: Repository.extensions)
+        let created = try store.create(templateID: "wiki.qaq.apelin.dev.preferences/objc-bundle", name: "Coded Pane", values: [:], catalog: catalog, registry: registry)
+        try Data(Self.codedPane.utf8).write(to: created.root.appendingPathComponent("Sources/CodedListController.m"))
+
+        for bootstrap in [Bootstrap.roothide, .rootless] {
+            let installRoot = bootstrap == .rootless ? "/var/jb" : "/var/containers/Bundle/Application/.jbroot-0123456789ABCDEF"
+            let inputs = try BuildInputs.resolve(buildID: "coded-\(bootstrap.rawValue)", projectID: created.projectID, configuration: .debug, store: store, catalog: catalog, registry: registry, installRoot: installRoot, home: home.path, bootstrap: bootstrap)
+            let reporter = Collector()
+            do {
+                _ = try BuildService.build(inputs: inputs, store: store, reporter: reporter, cancellation: BuildCancellation())
+            } catch {
+                XCTFail("\(bootstrap): \(error)\n\(reporter.lines.suffix(30).joined(separator: "\n"))")
+                continue
+            }
+            XCTAssertEqual(reporter.diagnostics, [], "\(bootstrap)")
+        }
+    }
+
+    private static let codedPane = """
+    #import <Preferences/PSListController.h>
+
+    @interface CodedListController : PSListController
+    @end
+
+    @implementation CodedListController
+    - (NSArray *)specifiers {
+        if (_specifiers == nil) {
+            PSSpecifier *toggle = [PSSpecifier preferenceSpecifierNamed:@"Enabled"
+                                                                 target:self
+                                                                    set:@selector(setPreferenceValue:specifier:)
+                                                                    get:@selector(readPreferenceValue:)
+                                                                 detail:Nil
+                                                                   cell:PSSwitchCell
+                                                                   edit:Nil];
+            [toggle setProperty:@"enabled" forKey:@"key"];
+            [toggle setProperty:@YES forKey:@"default"];
+            [toggle removePropertyForKey:@"footerText"];
+            toggle.identifier = @"enabled";
+            if (toggle.cellType == PSSwitchCell && toggle.target == self) {
+                toggle.name = @"Enabled";
+            }
+            _specifiers = [@[[PSSpecifier groupSpecifierWithName:@"General"], toggle, [PSSpecifier emptyGroupSpecifier]] mutableCopy];
+        }
+        return _specifiers;
+    }
+
+    - (void)viewDidLoad {
+        [super viewDidLoad];
+        PSSpecifier *row = [self specifierForID:@"enabled"];
+        [self reloadSpecifier:row];
+        [self removeSpecifier:row animated:NO];
+        [self insertSpecifier:row atIndex:1 animated:YES];
+        [self addSpecifier:[PSSpecifier groupSpecifierWithName:@"More"]];
+    }
+    @end
+    """
 
     /// The artifact's digests describe the bytes it holds: a file the
     /// packaging description names that changes after the check — here a

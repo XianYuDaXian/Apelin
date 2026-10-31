@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "wiki.qaq.apelin.dev.tweak",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "kind": "tweak",
   "displayName": "Tweak Development",
   "summary": "Objective-C tweaks that hook through the substrate-compatible API, with a process filter and package layout.",
@@ -102,7 +102,7 @@
         { "path": "apelin-project.json", "format": "json" },
         { "path": "Sources/Tweak.m", "format": "objc" }
       ],
-      "digest": "sha256:2d4b3b1e0a5d5dda2ba862861dfffc55592894e771a696f772c4e2b60979535b"
+      "digest": "sha256:f7aa0129fcb88ba57ea493d55f34828fd0bc1a435e5a0e3145dedf16118d4dc6"
     }
   ],
   "provenance": [
@@ -116,6 +116,7 @@
         "Kept: one constructor, identity check before any hook, os_log subsystem equal to the package id, the filter scoped to SpringBoard, mobilesubstrate as the provider dependency, the compile flags (-fvisibility=hidden, -Werror=unguarded-availability-new, -ffile-prefix-map) and the dSYM-before-strip order, now apelin-build's fixed baseline.",
         "Changed: the runtime-only TW_HOOK table is replaced by one MSHookMessageEx call through the extension's substrate support, so the template exercises the declared hook API; the filter plist becomes package.tweakFilter; build.env/version.txt become apelin-project.json; the badge example becomes a SpringBoard launch hook.",
         "Added: the ApelinLoaded <build id> and ApelinHooked markers confirm_loaded reads.",
+        "Added: package.icon, this extension's icon on Apelin's Pages, written as the control's Icon so a package manager shows it beside the package.",
         "Dropped: the kill-switch file, the preferences reader and the helper daemon (other templates or later work), and the Mac-side scripts.",
         "The hook target is the one Documents/Research/ApelinHello validated on the iOS 27 vphone."
       ]

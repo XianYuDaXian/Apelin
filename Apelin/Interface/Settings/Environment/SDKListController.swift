@@ -104,18 +104,25 @@ final class SDKListController: TableController {
                 rows: list.activeTasks.map(Row.task),
             ))
         }
-        sections.append(Section(
-            id: "installed",
-            header: String(localized: "Installed"),
-            footer: list.sdks.isEmpty
-                ? String(localized: """
-                No SDK yet. Add one with the plus button.
-                """)
-                : nil,
-            rows: list.sdks.map(Row.sdk),
-        ))
+        if !list.sdks.isEmpty {
+            let sdks = list.sdks.sorted {
+                let order = $0.version.compare($1.version, options: .numeric)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedDescending
+            }
+            sections.append(Section(
+                id: "installed",
+                header: String(localized: "Installed"),
+                rows: sdks.map(Row.sdk),
+            ))
+        }
         self.sections = sections
-        tableView.backgroundView = nil
+        tableView.backgroundView = sections.isEmpty
+            ? EmptyStateView(
+                symbolName: "shippingbox",
+                title: String(localized: "No SDKs Yet"),
+                text: String(localized: "Tap “+” to download an iOS SDK."),
+            )
+            : nil
         updateRows()
     }
 
@@ -124,6 +131,7 @@ final class SDKListController: TableController {
         sections = []
         tableView.backgroundView = EmptyStateView(
             symbolName: "exclamationmark.triangle",
+            title: String(localized: "Error"),
             text: ToolchainController.unavailableText(error),
         )
         updateRows()
@@ -133,23 +141,19 @@ final class SDKListController: TableController {
 
     private func cell(in _: UITableView, row: Row) -> UITableViewCell {
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-        var content = UIListContentConfiguration.subtitleCell()
+        var content = UIListContentConfiguration.stackedValueCell()
         content.secondaryTextProperties.color = .secondaryLabel
-        content.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
-        content.textToSecondaryTextVerticalPadding = 3
+
         switch row {
         case .task:
             content.text = String(localized: "SDK Import")
             content.secondaryText = String(localized: "In progress. Tap to view.")
             cell.accessoryType = .disclosureIndicator
         case let .sdk(record):
-            // as the toolchains are listed: the name, then what it holds
             content.text = SDKDetailController.displayName(of: record)
-            var details = [SDKDetailController.baseArchitectures(of: record).joined(separator: ", ")]
             if let swift = SDKDetailController.swiftVersion(of: record) {
-                details.append(String(localized: "Swift \(swift)"))
+                content.secondaryText = String(localized: "Swift \(swift)")
             }
-            content.secondaryText = details.joined(separator: " · ")
         }
         cell.accessoryType = .disclosureIndicator
         cell.contentConfiguration = content

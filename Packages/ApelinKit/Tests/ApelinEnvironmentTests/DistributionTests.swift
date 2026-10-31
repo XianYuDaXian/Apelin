@@ -102,11 +102,12 @@ final class DistributionTests: XCTestCase {
         let github = FakeGitHub()
         let service: DistributionService
         let remotes: URL
+        let store = MemoryGitCredentialStore()
 
         init(_ test: XCTestCase, signedIn: Bool = true) throws {
             home = try TemporaryHome(test)
             remotes = home.home.appendingPathComponent("remotes", isDirectory: true)
-            let store = MemoryGitCredentialStore()
+            let store = store
             if signedIn {
                 try store.save(GitCredential(username: "someone", token: "gho_token"), forHost: "github.com")
             }
@@ -142,6 +143,24 @@ final class DistributionTests: XCTestCase {
             let url = folder.appendingPathComponent("out.deb")
             try writer.write(toPath: url.path)
             return url
+        }
+
+        /// What a build records of its package: `sha256:` of its bytes.
+        func digest(_ url: URL) throws -> String {
+            try CanonicalJSON.sha256Tag(Data(contentsOf: url))
+        }
+
+        /// A publish in a task's own staging, as the worker runs one.
+        func publish(_ linked: DistributionRepository, files: [URL], digests: [String]? = nil) async throws -> JSONValue {
+            let staging = try home.layout.makeStaging(UUID().uuidString)
+            return try await service.publish(linked, files: files, digests: digests, staging: staging, reporter: .silent)
+        }
+
+        /// The packages in the repository's clone, its README aside.
+        func published(_ project: String = "packages") -> [String] {
+            let debs = self.project(project).appendingPathComponent("debs").path
+            let names = (try? FileManager.default.contentsOfDirectory(atPath: debs)) ?? []
+            return names.filter { $0.hasSuffix(".deb") }.sorted()
         }
     }
 
@@ -354,9 +373,10 @@ final class DistributionTests: XCTestCase {
         let rootless = try fixture.build("com.example.tweak", version: "1:1.0")
         let roothide = try fixture.build("com.example.tweak", version: "1:1.0", architecture: "iphoneos-arm64e")
         let (linked, files) = try fixture.service.preparePublish(DistributionPublishRequest(files: [rootless.path, roothide.path]))
-        let result = try await fixture.service.publish(linked, files: files, reporter: .silent)
+        let result = try await fixture.publish(linked, files: files)
         let names = ["com.example.tweak_1%3a1.0_iphoneos-arm64.deb", "com.example.tweak_1%3a1.0_iphoneos-arm64e.deb"]
         XCTAssertEqual(result["published"], .array(names.map(JSONValue.string)))
+        XCTAssertEqual(result["repository"], .string("someone/packages"))
         for name in names {
             XCTAssertTrue(FileManager.default.contentsEqual(
                 atPath: fixture.project("packages").appendingPathComponent("debs/\(name)").path,
@@ -365,18 +385,120 @@ final class DistributionTests: XCTestCase {
         }
         XCTAssertEqual(try commits(in: bare), ["Publish com.example.tweak 1:1.0", "Set up the package repository"])
 
-        // the same bytes again are skipped; other bytes under the name are refused
-        let again = try await fixture.service.publish(linked, files: [rootless], reporter: .silent)
+        // the same bytes again are skipped; other bytes under the name are
+        // refused, and so is the new package beside them
+        let again = try await fixture.publish(linked, files: [rootless])
         XCTAssertEqual(again["skipped"], .array([.string(names[0])]))
         XCTAssertNil(again["commit"])
+        let newer = try fixture.build("com.example.tweak", version: "1:1.1")
         let changed = try fixture.build("com.example.tweak", version: "1:1.0", marker: 2)
         do {
-            _ = try await fixture.service.publish(linked, files: [changed], reporter: .silent)
+            _ = try await fixture.publish(linked, files: [newer, changed])
             XCTFail("a changed package under a published name must be refused")
         } catch {
             XCTAssertEqual((error as? ApelinError)?.code, .conflict, "\(error)")
         }
+        XCTAssertEqual(fixture.published(), names, "nothing went in")
         XCTAssertEqual(try commits(in: bare).count, 2)
+    }
+
+    func testPublishHoldsEachPackageToItsDigestAndPublishesNoneWhenOneDiffers() async throws {
+        let fixture = try Fixture(self)
+        let bare = try fixture.bare("someone/packages")
+        _ = try await fixture.service.create(DistributionRepositoryCreateRequest(name: "packages"), name: "packages", reporter: .silent)
+        let roothide = try fixture.build("com.example.tweak", version: "1.0", architecture: "iphoneos-arm64e")
+        let rootless = try fixture.build("com.example.tweak", version: "1.0")
+        let other = try fixture.build("com.example.tweak", version: "1.0", marker: 2)
+        let request = try DistributionPublishRequest(
+            files: [roothide.path, rootless.path],
+            digests: [fixture.digest(roothide), fixture.digest(other)],
+            repository: "someone/packages",
+        )
+        let (linked, files) = try fixture.service.preparePublish(request)
+        do {
+            _ = try await fixture.publish(linked, files: files, digests: request.digests)
+            XCTFail("a package whose bytes are not its digest must be refused")
+        } catch {
+            XCTAssertEqual((error as? ApelinError)?.code, .conflict, "\(error)")
+            XCTAssertTrue("\(error)".contains("none of the packages went in"), "\(error)")
+        }
+        XCTAssertEqual(fixture.published(), [], "neither package went in, the one that matched included")
+        XCTAssertEqual(try commits(in: bare), ["Set up the package repository"])
+
+        // both bootstraps of one version, held to their digests, in one commit
+        let digests = try [fixture.digest(roothide), fixture.digest(rootless)]
+        let result = try await fixture.publish(linked, files: files, digests: digests)
+        let names = ["com.example.tweak_1.0_iphoneos-arm64.deb", "com.example.tweak_1.0_iphoneos-arm64e.deb"]
+        XCTAssertEqual(result["published"], .array(names.reversed().map(JSONValue.string)), "in the request's order")
+        XCTAssertEqual(fixture.published(), names)
+        XCTAssertEqual(try commits(in: bare), ["Publish com.example.tweak 1.0", "Set up the package repository"])
+        for (name, source) in zip(names, [rootless, roothide]) {
+            let copy = fixture.project("packages").appendingPathComponent("debs/\(name)")
+            XCTAssertEqual(try fixture.digest(copy), try fixture.digest(source), "\(name) as its build made it")
+        }
+
+        // two packages that would take one name publish neither
+        let twin = try fixture.build("com.example.other", version: "2.0")
+        let sameName = try fixture.build("com.example.other", version: "2.0", marker: 3)
+        do {
+            _ = try await fixture.publish(linked, files: [twin, sameName])
+            XCTFail("two packages of one name must be refused")
+        } catch {
+            XCTAssertEqual((error as? ApelinError)?.code, .badRequest, "\(error)")
+        }
+        XCTAssertEqual(fixture.published(), names)
+    }
+
+    func testAPublishWhosePushFailedReachesGitHubWithTheNextOne() async throws {
+        let fixture = try Fixture(self)
+        let bare = try fixture.bare("someone/packages")
+        _ = try await fixture.service.create(DistributionRepositoryCreateRequest(name: "packages"), name: "packages", reporter: .silent)
+        let built = try fixture.build("com.example.tweak", version: "1.0")
+        let name = "com.example.tweak_1.0_iphoneos-arm64.deb"
+        // what a publish leaves when its push fails: the package committed in the clone only
+        let clone = fixture.project("packages")
+        try FileManager.default.copyItem(at: built, to: clone.appendingPathComponent("debs/\(name)"))
+        let repository = try GitRepository(at: clone)
+        try repository.stage(["debs/\(name)"])
+        let author = GitSignature(name: "someone", email: "someone@users.noreply.github.com")
+        _ = try repository.commit(message: "Publish com.example.tweak 1.0", author: author)
+        XCTAssertEqual(try commits(in: bare), ["Set up the package repository"])
+
+        let (linked, files) = try fixture.service.preparePublish(DistributionPublishRequest(files: [built.path]))
+        let result = try await fixture.publish(linked, files: files)
+        XCTAssertEqual(result["skipped"], .array([.string(name)]))
+        XCTAssertNil(result["commit"], "nothing new to commit")
+        XCTAssertEqual(try commits(in: bare), ["Publish com.example.tweak 1.0", "Set up the package repository"])
+    }
+
+    func testPublishChecksItsDigestsRepositoryAndSignInBeforeItStarts() async throws {
+        let fixture = try Fixture(self)
+        _ = try fixture.bare("someone/packages")
+        _ = try await fixture.service.create(DistributionRepositoryCreateRequest(name: "packages"), name: "packages", reporter: .silent)
+        let built = try fixture.build("com.example.tweak", version: "1.0")
+        let digest = try fixture.digest(built)
+        let malformed: [[String]] = [
+            [], [digest, digest], ["sha256:" + String(repeating: "A", count: 64)], [String(digest.dropFirst(7))], ["sha256:12"],
+        ]
+        for digests in malformed {
+            XCTAssertThrowsError(try fixture.service.preparePublish(DistributionPublishRequest(files: [built.path], digests: digests))) {
+                XCTAssertEqual(($0 as? ApelinError)?.code, .badRequest, "\(digests)")
+            }
+        }
+        XCTAssertThrowsError(try fixture.service.preparePublish(DistributionPublishRequest(
+            files: [built.path], digests: [digest], repository: "someone/elsewhere",
+        ))) {
+            XCTAssertEqual(($0 as? ApelinError)?.code, .conflict, "another repository than the one linked")
+        }
+        XCTAssertNoThrow(try fixture.service.preparePublish(DistributionPublishRequest(
+            files: [built.path], digests: [digest], repository: "Someone/Packages",
+        )), "GitHub's names take any case")
+        XCTAssertNoThrow(try fixture.service.preparePublish(DistributionPublishRequest(files: [built.path])), "as the app sends it")
+
+        try fixture.store.remove(host: "github.com")
+        XCTAssertThrowsError(try fixture.service.preparePublish(DistributionPublishRequest(files: [built.path]))) {
+            XCTAssertEqual(($0 as? ApelinError)?.reason, .authenticationRequired, "nothing can be pushed without a sign-in")
+        }
     }
 
     func testPublishTakesOnlyBuiltPackagesAndNeedsALink() throws {

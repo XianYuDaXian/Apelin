@@ -183,13 +183,32 @@ struct ConversationToolTests {
             try await runner.run(.local(.conversationCreate), toolCallID: "c1", arguments: ["prompt": "Build it"], cancellation: nil, mcp: nil)
         }
         await #expect(throws: ToolArgumentError.self) {
-            try await runner.run(.local(.conversationList), toolCallID: "c2", arguments: [:], cancellation: nil, mcp: nil)
+            try await runner.run(.local(.conversationRead), toolCallID: "c2", arguments: ["session_id": "far-chat"], cancellation: nil, mcp: nil)
         }
         _ = try await runner.run(.local(.conversationCreate), toolCallID: "c3", arguments: ["prompt": "Build it", "project": "Far"], cancellation: nil, mcp: nil)
         #expect(await backend.calls == [.conversationElsewhere(tool: "apelin_conversation_create", project: Self.far.id, evidence: .relaxed)])
         await #expect(throws: ToolDeniedError.self) {
             try await runner.run(.local(.conversationCreate), toolCallID: "c4", arguments: ["prompt": "x", "project": "Nowhere"], cancellation: nil, mcp: nil)
         }
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func `General Chat lists without a project, asking nothing even in Strict mode: the host lists what it may reach`() async throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        let backend = MockBackend()
+        let id = UUID().uuidString
+        let general = try ProjectIdentity(id: "temporary:" + id, name: ProjectName(id))
+        // A call that asked is stopped at once, and never reaches the backend.
+        let cancellation = CancellationHandle()
+        let gate = ApprovalGate { event in
+            if case .approvalRequested = event {
+                cancellation.cancel(reason: "asked")
+            }
+        }
+        let runner = try Self.runner(home, project: general, mode: .confirm, backend: backend, gate: gate)
+        _ = try? await runner.run(.local(.conversationList), toolCallID: "c1", arguments: [:], cancellation: cancellation, mcp: nil)
+        #expect(await backend.calls == [.conversationList])
     }
 
     // MARK: Approval

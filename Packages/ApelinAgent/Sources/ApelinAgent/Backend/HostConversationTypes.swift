@@ -91,6 +91,8 @@ public struct ConversationSummary: Sendable, Hashable, Codable {
     /// `apelin://conversation/<session id>`.
     public var link: String
     public var title: String?
+    /// The project's folder, when not the session's own.
+    public var project: String?
     /// `open` (running a turn or idle), `waitingForApproval` or `ended`.
     public var state: String
     /// The conversation whose agent opened it; nil for the user's.
@@ -100,6 +102,7 @@ public struct ConversationSummary: Sendable, Hashable, Codable {
     public init(
         sessionID: String,
         title: String? = nil,
+        project: String? = nil,
         state: String,
         openedBy: String? = nil,
         updatedAt: Date,
@@ -108,6 +111,7 @@ public struct ConversationSummary: Sendable, Hashable, Codable {
         self.sessionID = sessionID
         link = ApelinLink.conversation(sessionID)
         self.title = title
+        self.project = project
         self.state = state
         self.openedBy = openedBy
         self.updatedAt = updatedAt
@@ -117,8 +121,11 @@ public struct ConversationSummary: Sendable, Hashable, Codable {
 
 public struct ConversationListToolResponse: Sendable, Hashable, Codable {
     public var conversations: [ConversationSummary]
-    public init(conversations: [ConversationSummary]) {
+    /// What the list left out, and how to list it.
+    public var note: String?
+    public init(conversations: [ConversationSummary], note: String? = nil) {
         self.conversations = conversations
+        self.note = note
     }
 }
 
@@ -196,7 +203,8 @@ public struct ConversationReadToolResponse: Sendable, Hashable, Codable {
     public var title: String?
     public var state: ConversationState
     public var messages: [ConversationMessage]
-    /// Approvals it waits on, which only the user can give.
+    /// Approvals it waits on, which only the user can give; none once it
+    /// has ended.
     public var pendingApprovals: [ConversationApproval]
     /// Pass as after_seq to read on from here.
     public var lastSeq: UInt64

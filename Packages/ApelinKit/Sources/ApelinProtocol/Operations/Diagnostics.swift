@@ -175,18 +175,50 @@ public enum UIAction: Codable, Sendable, Equatable {
     case tapElement(text: String?, identifier: String?)
     case type(text: String)
     case swipe(fromX: Double, fromY: Double, toX: Double, toY: Double, durationMilliseconds: Int)
+    /// `wake`, `home` or `lock` (the side button). Only a wake runs while
+    /// the device is locked or its screen is off.
     case press(button: String)
 }
 
+/// What an action left. A wake says whether the device is still locked and
+/// its screen still off. A `type` says what it left in the frontmost app,
+/// read back from its UI tree: the values its visible elements took on
+/// while the text went in, and whether one holds the text, so characters
+/// that did not land can be seen. Every other action, and a `type` whose
+/// tree could not be read, answers none of them.
+public struct UIActionResponse: Codable, Sendable, Equatable {
+    public var locked: Bool?
+    public var screenOff: Bool?
+    public var typedTextMatches: Bool?
+    public var fieldValues: [String]?
+
+    public init(
+        locked: Bool? = nil,
+        screenOff: Bool? = nil,
+        typedTextMatches: Bool? = nil,
+        fieldValues: [String]? = nil,
+    ) {
+        self.locked = locked
+        self.screenOff = screenOff
+        self.typedTextMatches = typedTextMatches
+        self.fieldValues = fieldValues
+    }
+}
+
 public struct UIActionRequest: OperationRequest {
-    public typealias Response = Acknowledged
+    public typealias Response = UIActionResponse
     public static let operation = AppOperation.uiAction
     public var targetID: String?
     public var action: UIAction
+    /// Apps the action may not reach, as a target or in front: the session
+    /// host's to set, never a caller's (Apelin itself for an agent).
+    /// Absent on the wire when nil.
+    public var refusedBundleIDs: [String]?
 
-    public init(targetID: String? = nil, action: UIAction) {
+    public init(targetID: String? = nil, action: UIAction, refusedBundleIDs: [String]? = nil) {
         self.targetID = targetID
         self.action = action
+        self.refusedBundleIDs = refusedBundleIDs
     }
 }
 
@@ -236,7 +268,8 @@ public extension ApelinService {
         try await send(ReadUITreeRequest(targetID: targetID))
     }
 
-    func uiAction(_ action: UIAction, targetID: String? = nil) async throws {
-        _ = try await send(UIActionRequest(targetID: targetID, action: action))
+    @discardableResult
+    func uiAction(_ action: UIAction, targetID: String? = nil) async throws -> UIActionResponse {
+        try await send(UIActionRequest(targetID: targetID, action: action))
     }
 }

@@ -25,6 +25,9 @@
       "digest": "${build.lastEvent.payload.digest}"
     }},
     {"op": "expect", "request": {"step": "install", "state": "succeeded"}},
+    {"op": "installationList", "label": "installed", "request": {"projectID": "${project.response.projectID}"}},
+    {"op": "expect", "request": {"step": "installed", "path": "response.installations.0.installationID", "equals": "${install.lastEvent.payload.result.installationID}"}},
+    {"op": "expect", "request": {"step": "installed", "path": "response.installations.0.packageID", "equals": "local.apelin.i3-chain"}},
     {"op": "confirmLoaded", "label": "loaded", "timeoutSeconds": 120, "request": {
       "buildID": "${build.lastEvent.payload.buildID}",
       "targetID": "com.apple.springboard",

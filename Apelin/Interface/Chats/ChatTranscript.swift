@@ -49,6 +49,22 @@ struct ChatTranscript {
     private var unanswered: UUID?
     /// The run's output so far, from its latest `received`.
     private var receivedTokens: Int?
+    /// Where the message streaming now began among `rows`, and the row it
+    /// answered then, from its `messageStarted` until anything but its
+    /// stream comes: a `messageDiscarded` (kwwk asks for it again) takes
+    /// back what it showed, so the reply that follows is not drawn twice.
+    private var attempt: (rows: Int, unanswered: UUID?)?
+    /// A model request failed and is being made again, and nothing has
+    /// come of it yet (`reconnecting`): the running summary says so.
+    private var reconnecting = false
+    /// What ends `attempt`: anything but its stream, or news that may come
+    /// meanwhile (a title, a message queued, the count).
+    private static let endsAttempt: Set<String> = [
+        "prompt", "steer", "message", "toolCall", "toolResult", "approvalRequested", "approvalResolved",
+        "error", "finished", "compactionStarted", "compactionFinished", TaskEvent.stateKind,
+    ]
+    /// What ends `reconnecting`: the request answered, or the run moved on.
+    private static let endsReconnecting = endsAttempt.union(["messageStarted", "thinking", "toolCallPreparing", "text"])
 
     /// `conversationTitle` names another conversation of the project by its
     /// session ID, for a message its agent sent. `sending` are messages sent
@@ -83,6 +99,12 @@ struct ChatTranscript {
             let text = payload?["text"]?.stringValue ?? ""
             let id = Self.rowID("event:\(index)")
             lastEventTime = event.time
+            if Self.endsAttempt.contains(event.kind) {
+                attempt = nil
+            }
+            if Self.endsReconnecting.contains(event.kind) {
+                reconnecting = false
+            }
             switch event.kind {
             case "prompt", "steer":
                 finishThinking(at: event.time)
@@ -121,8 +143,23 @@ struct ChatTranscript {
             case "messageStarted":
                 assistant = nil
                 finishThinking(at: event.time)
+                attempt = (rows.count, unanswered)
                 startThinking(id: id, at: event.time)
                 isWorking = true
+            case "messageDiscarded":
+                // The rows it made go, and what it answered is unanswered
+                // again: the stand-in its thought replaced comes back, and
+                // the next attempt's thought takes its id once more.
+                guard let attempt else { break }
+                rows.removeSubrange(attempt.rows...)
+                firstRows = firstRows.filter { $0.value < attempt.rows }
+                thinking = nil
+                thinkingStarted = nil
+                assistant = nil
+                unanswered = attempt.unanswered
+                self.attempt = nil
+            case "reconnecting":
+                reconnecting = true
             case "thinking":
                 if thinking == nil {
                     startThinking(id: id, at: event.time)
@@ -208,6 +245,10 @@ struct ChatTranscript {
                     )
                     var request = ChatMessage(id: rowID, role: .approval(nil), text: title + "\n\n" + detail)
                     request.runsAsRoot = ApprovalCardText.isRoot(payload)
+                    request.approvalSections = ApprovalCardText.sections(
+                        payload, title: title,
+                        callReason: payload?["toolCallID"]?.stringValue.flatMap { callReasons[$0] },
+                    )
                     add(request)
                 }
             case "approvalResolved":
@@ -252,7 +293,7 @@ struct ChatTranscript {
                     add(ChatMessage(id: id, role: .compaction, text: payload?["summary"]?.stringValue ?? ""))
                 }
             case TaskEvent.stateKind:
-                if let state = payload?["state"]?.stringValue.flatMap(TaskState.init(rawValue:)), state.isTerminal {
+                if Self.endsTask(event) {
                     finishThinking(at: event.time)
                     isWorking = false
                     isCompacting = false
@@ -283,7 +324,7 @@ struct ChatTranscript {
                     quietDeadline = deadline
                 }
             }
-            Self.keepTrailingSummaryRunning(&messages, receivedTokens: receivedTokens)
+            Self.keepTrailingSummaryRunning(&messages, receivedTokens: receivedTokens, reconnecting: reconnecting)
         }
         messages += queued
         for draft in sending where !messages.contains(where: { $0.id == draft.id }) {
@@ -341,11 +382,23 @@ struct ChatTranscript {
         return event.payload?["id"]?.stringValue.flatMap(UUID.init(uuidString:))
     }
 
+    /// Whether an event is the `state` a task ends with, which ends its
+    /// turn: the host appends nothing after it.
+    static func endsTask(_ event: TaskEvent) -> Bool {
+        guard event.kind == TaskEvent.stateKind else { return false }
+        return event.payload?["state"]?.stringValue.flatMap(TaskState.init(rawValue:))?.isTerminal == true
+    }
+
     /// While the turn runs, its last summary stays unfinished across tool
     /// calls and approvals. Each thought ends when a tool starts, so without
     /// this the title would flip between "Thought for…" and the running one.
-    /// It carries the run's output so far and the newest call in its trace.
-    private static func keepTrailingSummaryRunning(_ rows: inout [ChatMessage], receivedTokens: Int?) {
+    /// It carries the run's output so far, the newest call in its trace and
+    /// whether a failed request is being made again.
+    private static func keepTrailingSummaryRunning(
+        _ rows: inout [ChatMessage],
+        receivedTokens: Int?,
+        reconnecting: Bool,
+    ) {
         guard let index = rows.lastIndex(where: { !$0.role.needsApproval }) else { return }
         guard case let .thinking(_, tools) = rows[index].role else {
             settleCount(&rows, reply: index, receivedTokens: receivedTokens)
@@ -355,6 +408,7 @@ struct ChatTranscript {
         rows[index].runningTools = rows[index].trace.count(where: \.awaitsResult)
         rows[index].receivedTokens = receivedTokens
         rows[index].banner = rows[index].trace.last { $0.role == .tool }?.banner
+        rows[index].isReconnecting = reconnecting
     }
 
     /// While the run writes a reply, the summary just above it is finished
@@ -506,11 +560,20 @@ struct ChatTranscript {
         case .fileEdit: return path.isEmpty ? String(localized: "Edit a file") : String(localized: "Edit \(path)")
         case .fileList: return String(localized: "List files")
         case .fileGrep, .fileFind: return String(localized: "Search files")
+        case .fileShow:
+            guard case let .array(items)? = values?["paths"] else { return String(localized: "Show a file") }
+            let paths = items.compactMap(\.stringValue)
+            if paths.count > 1 {
+                return String(localized: "Show \(paths.count) files")
+            }
+            return paths.first.map { String(localized: "Show \($0)") } ?? String(localized: "Show a file")
         case .shellRun: return String(localized: "Run a command")
         case .sdkAnalyzeFramework, .sdkReadHeader: return String(localized: "Read the SDK")
         case .projectBuild: return String(localized: "Build the project")
         case .packageInstall: return String(localized: "Install the package")
         case .packageRemove: return String(localized: "Remove the package")
+        case .packageList: return String(localized: "List installed packages")
+        case .packagePublish: return String(localized: "Publish to the package repository")
         case .packageConfirmLoaded: return String(localized: "Check the tweak loaded")
         case .screenCapture: return String(localized: "Capture the screen")
         case .screenReadTree: return String(localized: "Inspect the screen")
@@ -541,12 +604,20 @@ struct ChatTranscript {
         case .gitSetAuthor: return String(localized: "Set the commit author")
         case .gitSaveCredential: return String(localized: "Save a Git credential")
         case .gitRemoveCredential: return String(localized: "Remove a Git credential")
+        case .gitCreateRepository: return String(localized: "Create a GitHub repository")
+        case .gitCreateIssue: return String(localized: "Create a GitHub issue")
         case .conversationCreate: return String(localized: "Create a chat")
         case .conversationSend: return String(localized: "Send to a chat")
         case .conversationList: return String(localized: "List chats")
         case .conversationRead: return String(localized: "Read a chat")
         case .conversationStop: return String(localized: "Stop a chat")
         case .notificationSend: return String(localized: "Send a notification")
+        case .webFetch:
+            let host = values?["url"]?.stringValue.flatMap { URLComponents(string: $0)?.host } ?? ""
+            return host.isEmpty ? String(localized: "Read a webpage") : String(localized: "Read \(host)")
+        case .feedbackSend: return String(localized: "Send feedback")
+        case .feedbackRead: return String(localized: "Read a feedback issue")
+        case .feedbackEdit: return String(localized: "Edit a feedback issue")
         case .toolchainList: return String(localized: "List toolchains")
         case .sdkList: return String(localized: "List SDKs")
         case .toolchainSetup: return String(localized: "Set up a toolchain")
@@ -556,6 +627,7 @@ struct ChatTranscript {
         case .templateList: return String(localized: "List project templates")
         case .projectList: return String(localized: "List projects")
         case .projectRename: return String(localized: "Rename the project")
+        case .projectDelete: return String(localized: "Delete a project")
         case .projectCreate:
             let project = values?["name"]?.stringValue ?? ""
             return project.isEmpty ? String(localized: "Create a project") : String(localized: "Create \(project)")

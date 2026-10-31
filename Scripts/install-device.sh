@@ -115,13 +115,13 @@ cleanup_upload() {
     if [ -n "$remote_directory" ]; then
         # The new bundle only, never Apelin.app.previous: that is the
         # installed app, left there by a swap that could not be undone.
-        run_sudo "rm -rf $(shell_quote "$remote_directory/Apelin.app") && rm -f $(shell_quote "$remote_directory/package.deb") $(shell_quote "$remote_directory/app.tar") && rmdir $(shell_quote "$remote_directory")" || {
+        run_sudo "rm -rf $(shell_quote "${remote_directory:?}/Apelin.app") && rm -f $(shell_quote "$remote_directory/package.deb") $(shell_quote "$remote_directory/app.tar") && rmdir $(shell_quote "$remote_directory")" || {
             echo "error: could not remove installation temporary: $remote_directory" >&2
             status=1
         }
     fi
     if [ -n "$staging" ]; then
-        rm -rf "$staging"
+        rm -rf -- "${staging:?}"
     fi
     return $status
 }
@@ -140,7 +140,7 @@ if [[ $mode == app ]]; then
     shopt -u nullglob
     for library in ${embedded[@]+"${embedded[@]}"}; do
         if [[ -d "$library" ]]; then
-            rm -rf "$library/_CodeSignature"
+            rm -rf -- "${library:?}/_CodeSignature"
             library="$library/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$library/Info.plist")"
         fi
         ldid -S -Cadhoc "$library"
@@ -148,7 +148,7 @@ if [[ $mode == app ]]; then
     packaging="$(cd "$(dirname "$0")/.." && pwd)/Packaging"
     widget="$staging/Apelin.app/PlugIns/ApelinWidgets.appex"
     if [[ -d "$widget" ]]; then
-        rm -rf "$widget/_CodeSignature"
+        rm -rf -- "${widget:?}/_CodeSignature"
         ldid -S"$packaging/ApelinWidgets.entitlements" -Cadhoc \
             "$widget/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$widget/Info.plist")"
     fi

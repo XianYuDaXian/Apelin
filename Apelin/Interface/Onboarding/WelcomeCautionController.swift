@@ -40,7 +40,7 @@ class WelcomeCautionController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        title = String(localized: "Agents Can Make Mistakes")
+        title = String(localized: "Disclaimer")
         view.backgroundColor = WelcomeStyle.groupedBackground
 
         let symbol = UIImageView(image: UIImage(systemName: "exclamationmark.triangle.fill")).then {
@@ -48,7 +48,7 @@ class WelcomeCautionController: UIViewController {
             $0.preferredSymbolConfiguration = .init(pointSize: 44)
         }
         let body = UILabel().then {
-            $0.text = String(localized: "Review generated code and important changes before you run or install them.")
+            $0.text = String(localized: "Agents can make mistakes. Review generated code and important changes before you run or install them.")
             $0.font = WelcomeStyle.subtitleFont
             $0.textColor = WelcomeStyle.titleColor
             $0.numberOfLines = 0

@@ -5,7 +5,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 modules="$1"
 work="$(mktemp -d -t apelin-onboarding)"
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf -- "${work:?}"' EXIT
 objects=()
 for module in ApelinCore ApelinProtocol; do
     if [[ -f "$modules/$module.o" ]]; then

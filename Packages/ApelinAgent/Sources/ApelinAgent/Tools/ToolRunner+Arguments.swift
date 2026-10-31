@@ -25,15 +25,31 @@ extension ToolRunner {
     static func templateValues(_ arguments: JSONValue) throws -> [String: TemplateValue] {
         guard case let .object(object) = arguments, let given = object["values"] else { return [:] }
         guard case let .object(values) = given else { throw ToolArgumentError("values must be an object") }
-        return try values.mapValues { value in
-            switch value {
-            case let .string(text): return .string(text)
-            case let .bool(flag): return .boolean(flag)
-            case let .int(number): return .integer(number)
-            case let .double(number) where number.rounded() == number && abs(number) < 1e15:
-                return .integer(Int(number))
-            default: throw ToolArgumentError("each value must be a string, boolean or integer")
-            }
+        var converted: [String: TemplateValue] = [:]
+        for (name, value) in values.sorted(by: { $0.key < $1.key }) {
+            converted[name] = try templateValue(value, named: name)
+        }
+        return converted
+    }
+
+    /// One parameter's value as the call gave it; apelin-build judges it
+    /// against the parameter's kind, which apelin_template_list names.
+    private static func templateValue(_ value: JSONValue, named name: String) throws -> TemplateValue {
+        switch value {
+        case let .string(text): return .string(text)
+        case let .bool(flag): return .boolean(flag)
+        case let .int(number): return .integer(number)
+        case let .double(number) where number.rounded() == number && abs(number) < 1e15:
+            return .integer(Int(number))
+        case let .array(items):
+            return try .list(items.map { item in
+                guard case let .string(text) = item else {
+                    throw ToolArgumentError(#"\#(name): a list holds strings only, such as ["com.apple.springboard", "com.apple.Preferences"]"#)
+                }
+                return text
+            })
+        default:
+            throw ToolArgumentError("\(name) must be a string, boolean, integer or list of strings")
         }
     }
 
@@ -52,11 +68,12 @@ extension ToolRunner {
                 fromY: number("y"),
                 toX: number("to_x"),
                 toY: number("to_y"),
+                durationMilliseconds: arguments.argInt("duration_ms") ?? UIAction.defaultSwipeMilliseconds,
             )
         case "press_button":
             let button = try arguments.requireString("button")
-            guard ["home", "lock", "volume_up", "volume_down"].contains(button) else {
-                throw ToolArgumentError("unknown button \(button)")
+            guard ["wake", "home", "lock"].contains(button) else {
+                throw ToolArgumentError("unknown button \(button); the buttons are wake, home and lock")
             }
             return .pressButton(button)
         case let other: throw ToolArgumentError("unknown action \(other)")

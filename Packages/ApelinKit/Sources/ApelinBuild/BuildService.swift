@@ -100,6 +100,7 @@ public enum BuildService {
             log: products.log,
             loadCheck: output.loadCheck,
             createdAt: Date(timeIntervalSince1970: TimeInterval(inputs.timestamp)),
+            packageFiles: ArtifactRecord.packageFiles(of: contents),
         )
         try ArtifactStore(store: store).save(record)
         return Result(record: record, products: products)

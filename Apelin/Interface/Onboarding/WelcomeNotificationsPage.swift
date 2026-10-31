@@ -133,10 +133,12 @@ final class WelcomeNotificationsPage: UIViewController {
             $0.textColor = WelcomeStyle.detailColor
             $0.numberOfLines = 0
         }
+        let rule = UIView().then { $0.backgroundColor = .separator }
+        rule.snp.makeConstraints { $0.height.equalTo(0.5) }
         // The drawn notification says what one is; nothing under it repeats it.
-        let stack = UIStackView(arrangedSubviews: [heading, intro, WelcomeNoticePreview()]).then {
+        let stack = UIStackView(arrangedSubviews: [heading, intro, rule, WelcomeNoticePreview()]).then {
             $0.axis = .vertical
-            $0.spacing = 18
+            $0.spacing = 24
             $0.alignment = .fill
             $0.setCustomSpacing(8, after: heading)
         }

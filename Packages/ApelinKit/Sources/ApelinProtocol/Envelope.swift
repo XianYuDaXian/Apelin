@@ -122,6 +122,10 @@ public struct ApelinError: Error, Codable, Sendable, Equatable, CustomStringConv
         /// `agentRunCode`, `denied`: the host's preset rule does not count
         /// a call sent as a preset; the agent asks the user instead.
         public static let notAPreset = Reason(rawValue: "notAPreset")
+        /// `denied`: a remote or GitHub's API asked for a sign-in and no
+        /// credential is saved for its host, or it refused the one it was
+        /// given; the agent names Settings ▸ Git.
+        public static let authenticationRequired = Reason(rawValue: "authenticationRequired")
     }
 
     public var code: Code

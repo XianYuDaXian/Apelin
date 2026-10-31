@@ -64,7 +64,7 @@ struct GitToolTests {
         }
         #expect(Set(properties(.gitCommit).keys) == ["message", "all", "reason"])
         #expect(Set(properties(.gitInit).keys) == ["reason"])
-        #expect(Set(properties(.gitPush).keys) == ["remote", "branch", "reason"])
+        #expect(Set(properties(.gitPush).keys) == ["remote", "branch", "url", "reason"])
         #expect(Set(properties(.gitClone).keys) == ["url", "branch", "reason"])
         #expect(Set(properties(.gitDiff).keys) == ["path", "staged", "reason"])
         #expect(required(.gitStage) == ["paths", "reason"])
@@ -140,11 +140,28 @@ struct GitToolTests {
         #expect(second.count == 1)
 
         let pushes = await harness.backend.calls.compactMap { call -> String? in
-            guard case let .gitPush(remote, branch, evidence) = call else { return nil }
+            guard case let .gitPush(remote, branch, _, evidence) = call else { return nil }
             guard case .user = evidence else { return "not user" }
             return "\(remote ?? "nil") \(branch ?? "nil")"
         }
         #expect(pushes == ["nil develop", "nil develop"])
+    }
+
+    @Test
+    func `a push to a new remote names its address on the card and sends it`() async throws {
+        let harness = try DigestApprovalTests.Harness()
+        defer { harness.home.remove() }
+        let url = "https://github.com/owner/clock.git"
+        let (_, asked) = try await harness.run(.gitPush, ["url": .string(url)])
+        let request = try #require(asked.first)
+        #expect(asked.count == 1)
+        #expect(request.reason.contains("origin at \(url)"))
+        #expect(!request.allowsSessionScope)
+        let pushes = await harness.backend.calls.compactMap { call -> String? in
+            guard case let .gitPush(remote, branch, url, _) = call else { return nil }
+            return "\(remote ?? "nil") \(branch ?? "nil") \(url ?? "nil")"
+        }
+        #expect(pushes == ["nil main \(url)"])
     }
 
     @Test

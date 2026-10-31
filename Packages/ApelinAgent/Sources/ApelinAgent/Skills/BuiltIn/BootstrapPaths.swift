@@ -1,7 +1,7 @@
 extension BuiltInSkills {
     static let bootstrapPaths = SkillDocument(
         name: "apelin-bootstrap-paths",
-        description: "How roothide and rootless spell paths, so a tweak, a script or a plist names a file the way the thing that opens it expects: jbroot vs /var/jb, /rootfs, @PREFIX@ and @ROOTFS@, @loader_path/.jbroot, and which paths never change. Read before writing any path in code, a build script or a maintainer script.",
+        description: "How roothide and rootless spell paths, so a tweak, a script or a plist names a file the way the thing that opens it expects: jbroot vs /var/jb, /rootfs, @PREFIX@ and @ROOTFS@, @loader_path/.jbroot, which paths never change, and why a resolved jbroot path is never written down. Read before writing any path in code, a build script, a maintainer script or a note.",
         body: """
         # Bootstrap paths
 
@@ -28,7 +28,8 @@ extension BuiltInSkills {
           through `@loader_path/.jbroot/…` (the tweak extension's link stubs
           set this; you write no install names).
         Because the roothide root moves, never write it down, cache it across
-        launches, or hard-code `/var/jb` for it.
+        launches, or hard-code `/var/jb` for it (below: never store a
+        resolved path).
 
         ## Three worlds, three spellings
         1. **Your compiled code** (the tweak, a tool) is Apple's ABI and is
@@ -81,6 +82,36 @@ extension BuiltInSkills {
         install skill has the rest (making mobile's folders, restarting a
         daemon).
 
+        ## Never store a resolved path
+        On roothide everything under the jbroot moves when it is renamed:
+        Apelin's data folder (in the jbroot's own `var/mobile`), the
+        project's real path, `$APELIN_PROJECT_ROOT`, `$APELIN_TOOLCHAIN_BIN`,
+        `SDKROOT`, every toolchain's and SDK's folder. A path read today (in
+        a tool's result, the environment section or a variable's value) may
+        be gone after the next reboot or jailbreak, so the jbroot's real
+        path, or any path under it, never goes into anything that outlives
+        the run: project files, build scripts, Makefiles, `AGENTS.md` or
+        `CLAUDE.md`, memory, skills, plists, package or maintainer scripts,
+        code. Keep the logical spelling and resolve it where it is used:
+        - code: `ApelinBootstrapPath(@"/Library/…")` at run time, as
+          roothide's `jbroot("/Library/…")` does; never its result as a
+          literal.
+        - a plist or maintainer script: `@PREFIX@/…`, `@ROOTFS@/…`.
+        - a build script or Makefile: the variables Apelin sets when it runs
+          (`$APELIN_PROJECT_ROOT`, `$SDKROOT`, `$APELIN_TOOLCHAIN_BIN`, and
+          for a workspace build `$APELIN_PREFIX` and `$APELIN_PACKAGE_DIR`),
+          or paths relative to the project. Each is checked before it is
+          used (`${APELIN_PACKAGE_DIR:?}`), since a run that did not set it
+          leaves it empty; `$APELIN_PREFIX` is empty on roothide by design,
+          so nothing is removed under it alone.
+        - a note (`AGENTS.md`, memory, a skill): the place in words or a
+          variable ("the project root", "the registered iOS 17 SDK",
+          `$SDKROOT`), never its path.
+        On rootless `/var/jb` and `/var/mobile` do not move, so nothing there
+        goes stale on this device; still spell paths as above, since the
+        project also builds for roothide, and write a bare `/var/jb` only
+        where the code is rootless's alone (`APELIN_BOOTSTRAP_ROOTLESS`).
+
         ## Quick rules
         - Opening a bootstrap file from your own code → make it absolute with
           `ApelinBootstrap.h`'s `ApelinBootstrapPath`.
@@ -92,6 +123,8 @@ extension BuiltInSkills {
           `@ROOTFS@/…`, `substitutePrefix: true` for a shipped file.
         - Comparing two paths → canonicalise both first (`realpath`): `/var`
           and `/private/var` differ, and the jbroot may itself be a link.
+        - Writing a path into a file, a note or memory → its logical spelling
+          or a variable, never the jbroot's real path.
         """,
         files: ["ApelinBootstrap.h": bootstrapHeader],
     )

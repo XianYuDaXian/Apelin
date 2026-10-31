@@ -13,7 +13,9 @@ import Foundation
 /// the build's), read its control file, apply the managed-package rules and
 /// the agent's Confirm-mode rule, write the installation record with a
 /// transaction ID chosen here, hand irisind the staged copy by descriptor,
-/// relay its events into the task and keep its receipt.
+/// relay its events into the task and keep its receipt. When irisind refuses
+/// it, name the installed packages in its way (`InstallConflicts`), read
+/// from the package database only then.
 ///
 /// Every step that changes something is on disk first, so a host that stops
 /// mid-way resumes: a staged install is submitted again under the same
@@ -38,6 +40,7 @@ actor InstallBridge {
     private let artifacts: ArtifactRegistry
     private let installations: InstallationStore
     private let packages: InstalledPackageSource
+    private let fileLists: PackageFileLists
     private let approvals: ApprovalLedger
     private let pollInterval: TimeInterval
     private var checkedService = false
@@ -49,6 +52,7 @@ actor InstallBridge {
         artifacts: ArtifactRegistry,
         installations: InstallationStore,
         packages: InstalledPackageSource,
+        fileLists: PackageFileLists,
         approvals: ApprovalLedger,
         pollInterval: TimeInterval = 0.25,
     ) {
@@ -58,6 +62,7 @@ actor InstallBridge {
         self.artifacts = artifacts
         self.installations = installations
         self.packages = packages
+        self.fileLists = fileLists
         self.approvals = approvals
         self.pollInterval = pollInterval
     }
@@ -212,6 +217,27 @@ actor InstallBridge {
         return handle
     }
 
+    /// Who is in the way of the install irisind just refused: the package's
+    /// files as its build recorded them and its control's relations, against
+    /// the package database as it is now.
+    private func conflicts(
+        blocking record: InstallationRecord,
+        staged: URL,
+    ) async -> (found: [InstallConflict], explanation: String?) {
+        let files = await artifacts.artifact(record.artifactID)?.packageFiles ?? []
+        let control = try? readControl(staged)
+        guard let installed = try? packages.installedPackages() else { return ([], nil) }
+        let found = await InstallConflicts.find(
+            packageID: record.packageID,
+            packageFiles: files,
+            control: control,
+            installed: installed,
+            lists: fileLists,
+            records: installations.all(),
+        )
+        return (found, InstallConflicts.explanation(found, installed: installed))
+    }
+
     private func checkAgentInstall(artifact: ArtifactRegistry.Artifact?, session: String?) async throws {
         guard let artifact else { throw ApelinError(.denied, "the agent installs build artifacts only") }
         guard await approvals.mode(session: session).asks else { return }
@@ -314,11 +340,15 @@ actor InstallBridge {
                     $0.status = .failed
                     $0.receipt = receipt
                 }
-                await registry.finish(
-                    taskID,
-                    .failed,
-                    message: final.failureText ?? "Irisin could not complete the installation. Try again.",
-                )
+                let inTheWay = await conflicts(blocking: record, staged: staged)
+                for conflict in inTheWay.found {
+                    await registry.append(taskID, kind: "conflict", payload: try? JSONValue(encoding: conflict))
+                }
+                var message = final.failureText ?? "Irisin could not complete the installation. Try again."
+                if let explanation = inTheWay.explanation {
+                    message = final.failureText.map { "\(explanation) Irisin reported: \($0)" } ?? explanation
+                }
+                await registry.finish(taskID, .failed, message: message)
             }
         } catch {
             if record.status == .staged {
@@ -342,28 +372,18 @@ actor InstallBridge {
             records: installations.all(),
         )
         guard var record else { throw ApelinError(.notFound, "no installation \(request.installationID)") }
+        try Self.checkRemover(caller, of: record)
 
-        if case let .worker(.agent, session) = caller {
-            // Removal is confirmed every time under Confirm (§7), whatever was approved before.
-            if await approvals.mode(session: session).asks {
-                guard let session,
-                      await approvals.takeRemoval(installationID: record.installationID, session: session)
-                else {
-                    throw ApelinError(
-                        .denied,
-                        "approval required: removing \(record.packageID) needs the user's approval for this removal",
-                    )
-                }
-            }
-        } else if case .worker(.environment, _) = caller {
-            guard record.origin == .environment else {
+        // Removal is confirmed every time under Confirm (§7), whatever was approved before.
+        if case let .worker(.agent, session) = caller, await approvals.mode(session: session).asks {
+            guard let session,
+                  await approvals.takeRemoval(installationID: record.installationID, session: session)
+            else {
                 throw ApelinError(
                     .denied,
-                    "the environment worker removes the toolchain packages it installed, nothing else",
+                    "approval required: removing \(record.packageID) needs the user's approval for this removal",
                 )
             }
-        } else if case .worker = caller {
-            throw ApelinError(.denied, "removePackage is not available to this caller")
         }
 
         try await requireService()
@@ -415,6 +435,9 @@ actor InstallBridge {
                     $0.status = .removed
                     $0.removalReceipt = receipt
                 }
+                if let line = pruneToolchainTree(of: record.packageID) {
+                    await registry.append(taskID, kind: "log", payload: .object(["line": .string(line)]))
+                }
                 let removed: JSONValue = .object([
                     "installationID": .string(installationID), "packageID": .string(record.packageID),
                     "transactionID": .string(transaction.uuidString.lowercased()),
@@ -436,6 +459,117 @@ actor InstallBridge {
             }
         } catch {
             await registry.finish(taskID, .failed, message: Self.message(error))
+        }
+    }
+
+    /// Who removes what, beyond `ManagedPackagePolicy`: the app any record;
+    /// the agent what a build installed, as it installs nothing else; the
+    /// environment worker its toolchains only.
+    private static func checkRemover(_ caller: Caller, of record: InstallationRecord) throws {
+        switch caller {
+        case .app:
+            return
+        case .worker(.agent, _):
+            switch record.origin {
+            case .build:
+                return
+            case .environment:
+                throw ApelinError(.denied, "Apelin's toolchain packages are removed in Settings, not by the agent.")
+            case .file:
+                throw ApelinError(
+                    .denied,
+                    "This package was installed from a file, not by a project's build, so the agent cannot remove it. Remove it with your preferred package manager.",
+                )
+            }
+        case .worker(.environment, _):
+            guard record.origin == .environment else {
+                throw ApelinError(
+                    .denied,
+                    "the environment worker removes the toolchain packages it installed, nothing else",
+                )
+            }
+        case .worker:
+            throw ApelinError(.denied, "removePackage is not available to this caller")
+        }
+    }
+
+    // MARK: List
+
+    /// Per package still on the device, the newest record this bridge
+    /// installed it under, newest first, each with whether `remove` from
+    /// this caller would act on it and, if not, the refusal it would give.
+    func list(_ request: InstallationListRequest, caller: Caller) async throws -> InstallationListResponse {
+        let installed = try packages.installedPackages()
+        let records = await installations.all()
+        var newest: [String: InstallationRecord] = [:]
+        // Oldest first: a later install of a package supersedes an earlier
+        // one, and a removal under way is listed as that, not as the
+        // install before it.
+        for record in records where record.status == .installed || record.status == .removing {
+            newest[record.packageID] = record
+        }
+        let listed = newest.values.filter {
+            installed[$0.packageID]?.isInstalled == true
+                && (request.packageID == nil || $0.packageID == request.packageID)
+                && (request.projectID == nil || $0.projectID == request.projectID)
+        }
+        return InstallationListResponse(installations: listed.sorted { $0.createdAt > $1.createdAt }.map { record in
+            var refusal: String?
+            do {
+                try ManagedPackagePolicy.checkRemoval(record, installed: installed, records: records)
+                try Self.checkRemover(caller, of: record)
+            } catch {
+                refusal = Self.message(error)
+            }
+            return InstallationSummary(
+                installationID: record.installationID,
+                packageID: record.packageID,
+                version: record.version,
+                projectID: record.projectID,
+                buildID: record.buildID,
+                installedAt: record.receipt?.finishedAt ?? record.createdAt,
+                removable: refusal == nil,
+                reason: refusal,
+            )
+        })
+    }
+
+    // MARK: Toolchain folders
+
+    /// After a toolchain package's removal: the folders roothide's `.jbroot`
+    /// links kept from going (`ToolchainTreePruner`). Answers the line for
+    /// the removal's log; nil for another package, or nothing left behind.
+    private func pruneToolchainTree(of packageID: String) -> String? {
+        guard let id = ToolchainTreePruner.toolchainID(packageID: packageID) else { return nil }
+        let folder = "usr/lib/apelin/toolchains/" + id
+        switch ToolchainTreePruner.prune(installRoot: paths.installRoot, id: id) {
+        case .pruned: return "Removed the empty folders the toolchain left in \(folder)."
+        case .absent: return nil
+        case let .kept(reason): return "Left \(folder) in place: \(reason)."
+        }
+    }
+
+    /// At start, before anything can install: the folders left behind by
+    /// every toolchain whose package is not on the device and that no
+    /// install or removal still handles — after a removal nothing pruned (an
+    /// earlier Apelin's, or one cut short), or files taken away outside
+    /// Apelin. A tree whose package dpkg lists is dpkg's, and stays.
+    func pruneLeftoverToolchains() async {
+        // Without the package list, a tree in use cannot be told apart.
+        guard let database = try? packages.installedPackages() else { return }
+        let handled = await Set(installations.all().filter {
+            [.staged, .submitted, .removing].contains($0.status)
+        }.map(\.packageID))
+        for id in ToolchainTreePruner.toolchainIDs(installRoot: paths.installRoot) {
+            let packageID = ManagedPackagePolicy.toolchainPrefix + id
+            // dpkg may keep a removed package's stanza, as `… not-installed`.
+            if let entry = database[packageID], !entry.status.hasSuffix(" not-installed") {
+                continue
+            }
+            guard !handled.contains(packageID) else { continue }
+            if ToolchainTreePruner.prune(installRoot: paths.installRoot, id: id) == .pruned {
+                NSLog("apelind-session: removed the empty folders toolchain %@ left", id)
+            }
         }
     }
 

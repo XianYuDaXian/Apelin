@@ -180,6 +180,417 @@ console now goes on after a restart only past a successful respring.
 
 ## Still to run on the owner's devices
 
+- [ ] Deleting a conversation (2026-10-30, AGENTS.md ▸ The root
+      and ▸ Project display names and external project actions; only the
+      Mac transcript harness's `ChatDeletionCheck` has run). On the iPhone
+      (`VPHONE=Date`) and the iPad (`VPHONE=Banana`) vphone, after `make
+      vphone-app`. In the sidebar, a New Chat holding only a typed draft,
+      a pinned New Chat, and a conversation swiped the moment its first
+      message is sent (still "New Chat" and spinning): each swipes to a
+      red Delete, with Stop beside it while it works, and its long press
+      ends on Delete. Delete on one at rest goes at once, the picked one
+      leaving the icon beside the iPad's sidebar and a new conversation
+      behind the iPhone's drawer. Delete on one that works, and on one
+      waiting for an approval, asks "Delete Conversation?", saying it is
+      still working, with Stop and Delete: Cancel leaves it running, Stop
+      and Delete stops it (no more output) and the row goes. From the
+      chat's `…`, in a project's chat and in General Chat: Delete
+      Conversation… is last, red, in a group of its own; it asks, naming
+      the conversation, Cancel keeps it, and Delete takes it, the page
+      then as the sidebar's Delete leaves it; while a turn runs the
+      question says so and its button is Stop and Delete. A deleted
+      conversation leaves no banner in Notification Center and goes from
+      the widget on its next look. VoiceOver offers Delete (and Stop) among
+      a row's actions and reads Delete Conversation… in the menu; in
+      Chinese they read 删除 / 停止并删除 and 删除聊天….
+      Run so far (2026-10-30, build 24 from CI): on the iPad 26.4 vphone
+      the menu ends with Delete Conversation… in red, it asks naming the
+      conversation, and Delete took the row and its file, leaving the icon
+      beside the sidebar; on the iPhone 26.4 vphone the same from a
+      General Chat, leaving a new conversation behind the drawer. The
+      sidebar's swipe, a working conversation's Stop and Delete, the
+      widget and VoiceOver are still to run.
+- [ ] Ask Before Using the Screen (2026-10-30, AGENTS.md ▸
+      Product ▸ Approval, Approvals ▸ The screen; none has run on a
+      device, and it needs a model provider). On the iOS 26.4 and iOS
+      27.0.1 iPhone vphones (roothide) and the iPad vphone: Settings ▸
+      Permission Mode shows the switch under the modes, on, with its
+      footer, and VoiceOver reads it as one switch with its state. With it
+      on, in Relaxed and again in Full, ask a project's chat to report a
+      problem upstream: before anything opens, the reply says what it
+      would open and why and waits; once told to go ahead, `icli url open
+      https://github.com/…/issues/new` asks on a card ("Opens … on this
+      device …", no "for this session") and Approve opens Safari; an
+      apelin_screen_read_tree and an apelin_screen_interact each ask the
+      same way, every call, and Deny leaves the screen as it was. The
+      next message's `<system-state>` names the setting on. Turned off,
+      the next message's state says off and the three run as the mode
+      says: no card in Relaxed or Full, Strict's own card. A conversation
+      the agent opens asks as its opener does. The console's own
+      `readUITree` and `uiAction` (`diagnostics.json`) run as before
+      either way.
+      Run so far (2026-10-30, build 24, iPad 26.4 vphone): Settings ▸
+      Permission Mode shows the switch on, with its footer. The rest is
+      still to run.
+- [x] The reader's line through a sidebar toggle (2026-10-30, build 24,
+      iPad 26.4 vphone, AGENTS.md ▸ the page's width change,
+      `readingPlace`): a one-row reply of sixty paragraphs scrolled to
+      sections 38–42; hiding the sidebar kept sections 38–44 in view where
+      the reader was, and showing it again put back exactly the first
+      screen.
+- [ ] Agent tool extensions in a conversation (2026-10-29, AGENTS.md ▸
+      Agent sessions ▸ Agent tool extensions; none of it has run on a
+      device, and it needs a model provider). On roothide and rootless,
+      with the Disassembler 1.1.0 and Assembler 1.0.0 packages installed,
+      open a project's chat: its tools are `assemble`, `disassemble` and
+      `symbols`, and asked what it has, the model names both extensions.
+      Under Strict each call asks, the card naming the extension, and
+      "for this session" lets the same call run again without a card. Ask
+      it to assemble `ret` for arm64 (`c0035fd6`), to list the defined
+      symbols of a binary it built (the absolute path, `Builds/…`), to
+      disassemble that binary's `_main`, and for `symbols` with `output:
+      file`: the listing shows in the conversation as a card that opens
+      in Quick Look, and file_read reads the `Attachments/` copy the
+      result names. Ask it to disassemble a symbol the binary lacks: the
+      call fails with the Disassembler's own words. Kill the extension's process
+      while the chat is open (`killall apelin-disassembler`): the next
+      call opens it again and answers. Remove the Assembler package with
+      the chat open: the next message's tools have no `assemble`, and the
+      model was told it went; install it again and it comes back. Close
+      the chat: no `apelin-disassembler` process is left.
+      Run so far (2026-10-29, build 23 from CI, iOS 26.4 iPhone vphone,
+      roothide, Relaxed, deepseek-v4-pro through an OpenAI-compatible key):
+      a headless project chat called `assemble` (`ret` for arm64: `c0 03 5f
+      d6`), `symbols` on `/usr/lib/dyld` (`__dyld_start` at `0x30f0`) and
+      `disassemble` there (four instructions), each answered, and the
+      reply quoted them. The rest is still to run.
+- [ ] Distribute on the distribution build page (2026-10-29, AGENTS.md ▸
+      Project display names and external project actions; none of it has
+      run on a device). A release build on the iPhone and the iPad vphone,
+      on iOS 26 and iOS 27: while it runs, Stop, and after a failure,
+      Retry, as before; once Ready to Distribute completes, Distribute is
+      the bar's trailing item, in the prominent style (a bold title before
+      iOS 26), its menu Share Package and Publish to Repository, and the
+      `…` menu has the same two above Build Log. Share Package from either
+      menu opens the share sheet, on the iPad pointing at the item it was
+      chosen from. With no package repository linked, Publish to
+      Repository shows "No Package Repository" at the top and opens
+      Settings at Git over the build page, Back leading to Settings:
+      signed out of GitHub it offers Sign In…, signed in Create
+      Repository… and Link Repository…; with one linked, closing Settings
+      leaves the build page as it was and Publish to Repository asks to
+      publish to it. In Chinese the labels read 分发, 分享软件包 and
+      发布到仓库.
+- [ ] Publishing packages already built (2026-10-29, AGENTS.md ▸ Project
+      display names and external project actions; none of it has run on a
+      device). With release builds of the current version for roothide and
+      rootless (the agent's, or two distribution builds), Distribute…
+      lists both under Packages as Built and selected; Publish to
+      Repository names the repository and both packages, and one publish
+      task commits both, nothing built again. Back on the page both read
+      Published and are no longer selected; picked and published again,
+      both are skipped.
+      Share Package on a row (and the row's VoiceOver action) shares that
+      `.deb`; a completed share reads Shared, a cancelled one stays Built.
+      Raising the version takes the rows away until it is built again; a
+      deb deleted from `Builds/` takes its row away. Build for a target
+      whose package is listed asks nothing when the version packaged
+      before is its only warning. With no repository linked, Publish to
+      Repository opens Settings ▸ Git.
+- [ ] Packages published by the agent (2026-10-29, AGENTS.md ▸ Agent
+      sessions ▸ Publishing; none of it has run on a device, and it pushes
+      to a real repository, so by hand only, on a test repository linked
+      in Settings ▸ Git ▸ Publishing). `make device-run SCRIPT=distribution`
+      still refuses a file outside `Builds/`. A project chat asked for
+      release builds for roothide and rootless, then to publish them:
+      apelin_package_publish with both build IDs, under Strict one card
+      naming the repository and both packages with their digests and no
+      "for this session"; Approve adds both files to `debs/` in one
+      "Publish …" commit that reaches GitHub, nothing built again, and the
+      reply names the source address. Asked again: both "already
+      published", no new commit. A debug build, a build whose `.deb` was
+      deleted, and the same build twice are refused before any card; a
+      `.deb` changed after its build is refused and none goes in. Unlinked:
+      the agent names Settings ▸ Git ▸ Publishing; signed out: Sign In with
+      GitHub. In Relaxed, no card, and still no publication the user did
+      not ask for. Remove the test packages afterwards.
+- [ ] A GitHub repository made by the agent (2026-10-29, AGENTS.md ▸ The
+      environment worker ▸ Git and Agent sessions; none of it has run on a
+      device, and it makes repositories on a real account, so by hand
+      only). `make device-run SCRIPT=i2-git-remote` refuses a bad name
+      (`badRequest`) before anything reaches GitHub. Signed out of GitHub,
+      ask a project's conversation to open a private repository for it:
+      apelin_git_create_repository answers that GitHub authorization is
+      needed and names Sign In with GitHub in Settings ▸ Git, and nothing
+      is made. Signed in: asked for "a repository" without a visibility,
+      the agent asks public or private before calling the tool; under
+      Strict the card names the owner, name and visibility, offers no "for
+      this session", and Approve makes one empty private repository on the
+      account, which the model links; the model then calls git_push with
+      that clone URL, which asks again, and the push lands as `origin` and
+      the branch's upstream. Again with an organization the account may
+      create in, and one it may not (GitHub's refusal in its words), and a
+      name the account already has (`conflict`). In Relaxed, no card, and
+      still no repository the user did not ask for. Delete the test
+      repositories afterwards.
+- [ ] A project deleted by the agent (2026-10-29, AGENTS.md ▸ Project
+      display names ▸ Deleting a project; none of it has run on a device,
+      it needs a model provider, and it deletes, so by hand only, on a
+      throwaway project). In General Chat, "delete the project <name>"
+      under Strict: one card naming the folder and the name the sidebar
+      shows and saying it cannot be undone, with no "for this session";
+      Approve removes `Projects/<folder>` whole (a link inside it removed,
+      what it named left), its running conversation stopped first, and the
+      sidebar, All Projects, delivered banners and the widget no longer
+      show the project or its chats, the open page going to General Chat
+      when it showed that project; `Builds/<projectID>/` stays, as after
+      the app's own Delete. Deny deletes nothing. Relaxed and Full delete
+      without a card. From the project's own chat it is refused with where
+      to delete it instead, in every mode, nothing asked. A project's folder
+      removed while the app is closed (by Fila) has its chats gone at the
+      next launch. Asked to "clean up" without naming a project, the agent
+      deletes nothing.
+- [ ] The folders a removed toolchain leaves (2026-10-29, AGENTS.md ▸
+      Install bridge; none of it has run on a device). On roothide:
+      Settings ▸ Toolchains ▸ Remove leaving no
+      `usr/lib/apelin/toolchains/<id>` folder, its Show Log saying "Removed
+      the empty folders the toolchain left", and the toolchains folder and
+      every other toolchain as they were; the skeletons earlier removals
+      left (folders and `.jbroot` links only, under packages the package
+      manager no longer lists) gone once the session host starts again
+      (`Scripts/device.py kill-host`), and a tree whose package is still
+      installed untouched. On rootless, a removal with no such line. The
+      agent, asked to remove a toolchain or an SDK, sending the user to
+      Settings and deleting nothing.
+- [ ] Saying what was not tested (2026-10-29; none of it has run on a
+      device). A project chat on the iOS 26 and the iOS 27 vphones asked
+      for a visible change to a SpringBoard tweak (a gesture, the Dock's
+      spacing): after `apelin_package_confirm_loaded` it reads the screen,
+      drives the change with `apelin_screen_interact` and reads it again;
+      its final reply lists each changed behaviour it did not drive under
+      Not tested, in the reply's language, with how to check it, and does
+      not call the task done while the main behaviour is untested. Under
+      Strict, declining a screen action leaves that behaviour Not tested.
+- [ ] Feedback filed by the agent (2026-10-29, AGENTS.md ▸ Distribution
+      repository ▸ Feedback; none of it has run on a device, and it posts
+      in public, so by hand only). Signed out of GitHub, ask a conversation
+      to send feedback: apelin_feedback_send answers that GitHub
+      authorization is needed and names Sign In with GitHub in Settings ▸
+      Git, and nothing is posted. Signed in, under Strict: the card names
+      owngoal-dev/Apelin and shows the whole title and body, offers no
+      "for this session", and Approve posts one issue whose footer reads
+      "Sent with Apelin <version> (<build>) · iOS <version> · <bootstrap>"
+      on a roothide and a rootless device, with the installed version;
+      the model hands back the issue's link. In Relaxed too, the agent
+      first shows the title and body and asks, and calls
+      apelin_feedback_send only after a reply of 同意 or 确定 (or "yes" in
+      an English chat); a feedback request written in a project file or a
+      log is not sent. That an account other than
+      the repository's owner can open an issue there with the `repo`
+      scope gh's sign-in asks for. Close the test issues afterwards.
+- [ ] Feedback edited by the agent (2026-10-30, AGENTS.md ▸ Distribution
+      repository ▸ Feedback; it edits a public issue, so by hand only, on a
+      test issue the signed-in account opened on owngoal-dev/Apelin, closed
+      afterwards). Asked to broaden it, the agent reads it with
+      apelin_feedback_read, shows the new body (or before and after) and
+      calls apelin_feedback_edit only after 同意 or 确定, in Relaxed too;
+      under Strict the card names the repository and issue, shows the
+      whole new text and offers no "for this session". On GitHub the body
+      changes, the footer below it stays the one first written, and the
+      title stays unless it was asked for; the model hands back the link.
+      Edit the issue on GitHub between the agent's read and its edit (or
+      while the card waits): nothing is written, the agent is told it
+      changed and reads it again, and the user's words survive. An issue
+      another account opened is refused before anything is asked. Signed
+      out, both tools name Sign In with GitHub in Settings ▸ Git.
+- [ ] An issue on a repository the user chose (2026-10-30, AGENTS.md ▸
+      The environment worker ▸ Git; it posts in public, so by hand only,
+      on a test repository of the signed-in account's with issues on, the
+      issues closed afterwards). Asked to report a problem there, the
+      agent shows the repository and the whole title and body and calls
+      apelin_git_create_issue only after 同意 or 确定, in Relaxed too;
+      under Strict the card shows the repository, title and body and offers
+      no "for this session". The issue opens there, with the footer "Sent
+      with Apelin <version> (<build>) · iOS <version> · <bootstrap>", and
+      the model hands back its number and link. With issues turned off on
+      the repository, and for a repository the account cannot see, the
+      agent says what blocks it and posts nothing elsewhere, opens no
+      browser and drives no screen. Asked to file on owngoal-dev/Apelin, it
+      goes through apelin_feedback_send. Signed out, it names Sign In with
+      GitHub in Settings ▸ Git.
+- [ ] The star prompt (2026-10-29, AGENTS.md ▸ Distribution repository ▸
+      The star; it stars a real account, so by hand only). Signed out of
+      GitHub, ten builds that succeed ask nothing and count for nothing.
+      Signed in with an account that has not starred owngoal-dev/Apelin:
+      the first nine builds that succeed after that (agent builds and
+      distribution builds alike; failed builds and a reopened
+      conversation's replay add none) ask nothing, the tenth asks "Do You
+      Like Apelin?" with Maybe Later on the left and Star Now on the
+      right, in Chinese 下次一定 and 立即标记. Maybe Later asks again ten
+      builds later, on another day, and after the third time never again;
+      Star Now stars the repository on that account, says Thank You and
+      never asks again. An account that has starred it already is never
+      asked. The state is `starPrompt.state` in the app's preferences;
+      unstar the repository afterwards.
+- [ ] Waking the device from the agent (2026-10-29; none of it has run on
+      a device). A wake and a lock round trip on the iOS 26 and the iOS 27
+      vphones, iPhone and iPad, with no passcode: `uiAction` `press`
+      `lock` from an unlocked screen turning it off and locking it, then
+      `readUITree` and a `home` press refused as "The screen is off.", a
+      wake lighting the screen past the lock screen (`locked` and
+      `screenOff` false), a lit lock screen refused as "The device is
+      locked.", and `home` from an app reaching the home screen. The
+      `diagnostics` script's wake on an awake device answering `screenOff`
+      false and changing nothing. apelin-diagnostics carries fewer
+      entitlements than the icli CLI: that its wake (SpringBoardServices'
+      undim, then a HID home press) lights the screen as `icli button
+      wake` does. On an iPhone with a passcode: a wake leaving the lit lock
+      screen with `locked` true, and the agent asking the user to unlock it
+      rather than for the passcode; whether a screenshot of that lock
+      screen comes back. The agent waking the device by itself to check a
+      lock-screen tweak.
+- [ ] A tweak filtered to another app from its creation (2026-10-29,
+      AGENTS.md ▸ Agent sessions; none of it has run on a device). In
+      General Chat, ask for a tweak that loads into Settings:
+      apelin_template_list shows the tweak template's `filterBundles` with
+      its default `["com.apple.springboard"]`, apelin_project_create takes
+      `{"filterBundles": ["com.apple.Preferences"]}` in `values` the first
+      time, the new project's `package.tweakFilter.bundles` is
+      `["com.apple.Preferences"]`, and its first build does not ask in
+      Strict. Before this, every such call was refused ("each value must be
+      a string, boolean or integer") and the model kept the SpringBoard
+      filter without saying so. Then ask for one loading into 33 apps, one
+      more than a tweak's filter holds: if it does anything but ask, the reply
+      says plainly what it did instead (fewer apps, say) and what is left,
+      as the prompt's `# Responses` asks.
+- [ ] An agent kept off Apelin's own screen, and a repository imported
+      from any chat (2026-10-29, AGENTS.md ▸ Diagnostics and ▸ Agent
+      sessions; none of it has run on a device; needs a model provider).
+      With Apelin in front, apelin_screen_interact's tap, swipe and typed
+      text are refused, nothing on Apelin's screen changing, in Relaxed,
+      in Full and in Strict after Approve; target_id wiki.qaq.apelin is
+      refused too; with Settings in front the same tap goes through; the
+      console's `diagnostics` script, whose tap is the app's, still runs.
+      In General Chat and in a tweak project's chat, "import <an HTTPS
+      repository>" makes an Empty workspace and opens its conversation,
+      which clones the repository with git_clone, never a template project.
+- [ ] Messages queued during a run (2026-10-29, none of it has run on a
+      device; needs a model provider). Two messages sent while a reply
+      runs, a third typed and not sent, then Stop: the composer holds all
+      three, oldest first, with the first two's files, and "2 Messages Not
+      Sent" shows (and VoiceOver says it); the same with the conversation
+      in the background, said when it is opened; a run that fails with a
+      message queued (a provider error, Wi-Fi off) followed by a run that
+      takes the message, nothing put back.
+- [ ] file_read showing images (2026-10-29; Mac tests only, needs a model
+      provider). On the jp vphones (iOS 26.4 and 27), in a conversation
+      with a model that takes images: a screenshot sent with a message
+      read again by file_read from its `Attachments/` path several turns
+      later and described correctly; a downloaded animated GIF over
+      512 KB read at frame 0 and at a later frame; an iPhone HEIC photo put
+      in the project coming back upright as JPEG; a frame extracted from a
+      video with ffmpeg through shell_run (where ffmpeg is installed)
+      read and described; a Mach-O still refused with the image hint. The
+      picture landing in the transcript's album each time, and a
+      provider without vision (DeepSeek) answering from the summary line
+      alone, without an error.
+- [ ] Installations from any conversation (2026-10-29, none of it has run
+      on a device). `installationList` in `project-build-install` and
+      `i3-chain`; apelin_package_list in General Chat and in another
+      project's chat naming the i3 chain tweak's installation and project;
+      apelin_package_remove with only `package_id` there, the Strict card
+      naming the package, version and project, then the package gone; a
+      stale installation id refused before asking, with what Apelin can
+      remove instead; a toolchain listed as not the agent's and its
+      removal refused.
+- [ ] A turn the network failed (2026-10-29, AGENTS.md ▸ Agent sessions
+      ▸ `NetworkRecovery`; none of it has run on a device). Send a message
+      that runs a few tools and turn on Airplane Mode while it runs, for
+      about a minute: the running summary reads "Reconnecting…" (正在重新连接…)
+      and VoiceOver reads it as the title; once Airplane Mode is off the
+      turn goes on by itself, with no error row and no 继续, and the trace
+      lists each call once. Turned on mid-reply, the partial text goes and
+      the reply comes back once, never under it. With Airplane Mode left on
+      past about three minutes the turn still ends with the provider's
+      error. Stop during "Reconnecting…" ends the turn at once, as
+      stopped. An "An SSL error has occurred" seen again after this is a
+      handshake that failed three times; note the network it was on.
+- [ ] shell_run's argv on the toolchain's PATH (2026-10-29, AGENTS.md ▸
+      Agent sessions ▸ `agentRunCode`; none of it has run on a device). In
+      a project with a toolchain set up, `argv` `["clang", "-c", "x.c"]`,
+      `["nm", "x.o"]` and `["otool", "-hv", "x.o"]` run by name;
+      `["clang++", "x.cpp", "-o", "x"]` links libc++ (the link runs under
+      its own name, not as clang); with Swift, `["swiftc", "x.swift"]`
+      compiles; the tool directory's absolute `clang` and `["./build.sh"]`
+      in the project run; a name on no directory says where it looked and
+      names `bash -c`. In Strict each still asks; `root: true` with
+      `irisin-cli` still runs the bootstrap's.
+- [ ] apelin_web_fetch (2026-10-29, proven on the Mac against a stubbed
+      session only, `WebFetchToolTests`). On a device: a chat asking for a
+      project's GitHub page and a raw file reading them as text, with
+      links and code blocks; a page over 32 KB read on by its offset; in
+      Strict, the card naming the address, and Allow for This Session
+      letting the same address through again; `http://192.168.1.1/` and
+      a redirect to it refused without a request; the worker reaching the
+      network as mobile where the app's own policy is off (it is bound by
+      bundle ID, Gotchas ▸ the app was offline); the trace titled "Read
+      <site>" in each language.
+- [ ] Showing a project file with `file_show` (2026-10-29, none of it has
+      run on a device). Asked to see an image, a PDF and a log, the agent
+      calls `file_show`, which runs without asking in Strict mode; the
+      image comes up in an album and the PDF and the log as cards under
+      the call, each opening in Quick Look; the trace names the call
+      ("Show notes.pdf", "Show 3 files"); a copy stays as it was after the
+      agent edits the file; the same in General Chat; and the conversation
+      reopened after the session host restarts still shows them.
+- [ ] Every project's memory from one chat (2026-10-29, none of it has
+      run on a device; needs a model provider). In General Chat, asked to
+      tidy every project's memories: one apelin_memory_list with
+      all_projects naming each record's project, a record of a deleted
+      project marked missing, then saves and deletes naming each project,
+      with no conversation opened and no card in Strict; Settings ▸ Agent ▸
+      Memories showing each change under its project. A General Chat save
+      of a project fact without a project refused, then made with one.
+- [ ] A refused install names the package in its way (2026-10-29,
+      AGENTS.md ▸ Install bridge; none of it has run on a device). Build
+      and install a tweak, change its `package.id`, build and install
+      again: the install fails with "<dylib> already belongs to <old id>
+      <version>, which Apelin installed (installation <id>). Remove that
+      installation first, then install again." and Irisin's own words
+      after it; the agent's apelin_package_install result carries
+      `conflicts` with that `installationID`, apelin_package_remove of it
+      asks under Strict, and the install then goes through. Then, with the
+      old package installed again, name its ID in `package.conflicts`
+      instead: the failure says the installer does not remove it, and
+      names the installation. Once on roothide and once on rootless, whose
+      lists spell paths `/var/jb/…`.
+- [ ] The read tools outside the project and the Preferences declarations
+      (2026-10-29, AGENTS.md ▸ Agent sessions; none of it has run on a
+      device). Under Strict, in a preference bundle project's chat:
+      file_read of
+      `<install root>/usr/share/apelin/development/wiki.qaq.apelin.dev.preferences/support/include/Preferences/PSListController.h`
+      and file_grep of an SDK's `usr/include` by the path `# Environment`
+      names, each with no card; file_find there naming whole paths that
+      file_read takes back; file_edit of the header refused. On both
+      bootstraps, with the preferences extension 0.1.1 installed: a pane
+      that builds a switch row with
+      `+preferenceSpecifierNamed:target:set:get:detail:cell:edit:`
+      (`PSSwitchCell`), sets its `key`, `defaults` and `default` with
+      `setProperty:forKey:`, and adds it with `insertSpecifier:atIndex:animated:`
+      builds, shows a switch in Settings and stores its value; then a
+      class-dump of the device's Preferences framework against the header's
+      `PSCellType` values and every method it declares.
+- [ ] Screen actions that wait and read back (2026-10-29, none of it has
+      run on a device). apelin_screen_interact's type_text into a text
+      field at icli's 30 ms a character, "Hello world" arriving whole and
+      `typedTextMatches` true with the field's value in `fieldValues`;
+      the same into a search field, a text view and a secure field (what
+      its value reads as), and with the field not focused (`fieldValues`
+      empty); a slower keyboard or an IME, where 30 ms may not be enough
+      and the read-back is what shows it. An action with `target_id`
+      sent right after another app was opened, waiting for that app
+      rather than refused; tap_element on a menu item while the menu is
+      still animating in, tapped once; a swipe with `duration_ms` 1200.
 - [ ] The trace sheet as a list (2026-10-28, none of it has run on a
       device). A summary's Trace opening an inset grouped list, one row
       per step in order — "Thoughts", each call's title, an approval's
@@ -225,6 +636,14 @@ console now goes on after a restart only past a successful respring.
       `https://<owner>.github.io/<name>/` added in Sileo and Irisin; Link of
       an existing repository; a release build's Publish to Package
       Repository showing the package in the source within ten minutes.
+- [ ] Apelin's own files out of git, and a first push (2026-10-29; the Mac
+      only so far: `GitRemoteServiceTests`, `GitBackendTests`,
+      `GitToolTests`). On a device: a new project's `.git/info/exclude`; a
+      chat that sent an image, in a project made before, whose `git_status`
+      shows no `Attachments/`; `git_status` on a project with no repository
+      naming git_init; `i2-git-remote`'s two new refusals; and, with a
+      GitHub account, the agent asking for an empty repository's address
+      and `git_push` with `url` adding origin and pushing to it.
 - [ ] The climbing token count (2026-10-25; needs a model provider, which
       the iOS 27 vphone had none of): at the summary row's right
       edge, rising over five seconds while a turn thinks and catching up in
@@ -243,6 +662,13 @@ console now goes on after a restart only past a successful respring.
       "Not Approved" indicator; an ordinary approval and a session grant
       never running a root command (covered on the Mac by `RootRunChecks`
       in `make harness`).
+      Run on 2026-10-30 (build 24, iOS 26.4 iPhone vphone, Relaxed,
+      deepseek-v4-pro): asked which packages Irisin could upgrade, the
+      agent asked for root itself, the card saying Runs as root for
+      `irisin-cli list --upgradable --json`; Approve ran it at euid 0 and
+      the reply listed Irisin's three updates, changing nothing. The
+      console refuses `approvalMode: full` without the owner check, so Full
+      stays by hand.
 - [ ] The approval card after the 2026-10-25 polish (build 45's card said
       the root sentence twice, listed `root: true` and showed argv as JSON):
       a root card and an ordinary shell_run card each show the agent's
@@ -426,6 +852,37 @@ console now goes on after a restart only past a successful respring.
       the next request writes the cache once and its block lists nothing.
       DeepSeek counts hits in 64-token blocks and may take a request or two
       to warm.
+- [ ] The note that the host restarted, and no jbroot path written down
+      (2026-10-29, AGENTS.md ▸ Agent sessions and ▸ the system prompt;
+      none has run on a device). On the iOS 26.4 and iOS 27.0.1 iPhone
+      vphones (roothide), in a project's chat that has run: kill the
+      session host by its `session.pid` (`Scripts/device.py kill-host`),
+      then send a message in that chat. The last user message of
+      `$DATA/sessions/<id>/transcript.json` (fetched as for Prompt
+      caching) has, inside its `<system-state>`, "Apelin's background
+      service has restarted since this conversation last ran" with the
+      install root now; the bubble, the title and an
+      `apelin_conversation_read` of the chat show none of it, and the agent
+      neither sets up a toolchain nor imports an SDK again. A second
+      message has no note. Kill the host again, Compact… the chat, then
+      send: that message has it. A chat started after a kill has none.
+      When a reboot and a new jailbreak rename the jbroot, an old chat goes
+      on with the new paths without a turn spent finding its toolchain
+      gone. A roothide chat's system prompt has the "roothide can rename
+      the install root" line and a rootless one's does not; asked to write
+      down in AGENTS.md how its project builds, the agent writes no
+      `.jbroot-` path (`Scripts/device.py exec 'grep -rl ".jbroot-"
+      "$DATA/Projects/<folder>"'` finds nothing).
+- [ ] Progress notes in the user's language (2026-10-29, AGENTS.md ▸ the
+      system prompt; none has run on a device). The audit of 40 device
+      chats found Chinese chats writing "Build passed. Installing." between
+      tool calls, after English build and install results. On the iOS 26
+      and iOS 27 vphones, in a tweak project's chat, ask in Chinese to
+      build, install and confirm it loaded: every line between the tool
+      calls, the questions and the reply are Chinese, while code, paths
+      and package ids stay as they are. Each user message's
+      `<system-state>` in the transcript (fetched as for Prompt caching)
+      says "progress notes included".
 - [ ] The Compacted row and the native compaction fallback (2026-10-28,
       AGENTS.md ▸ Agent sessions and ▸ the chat's More menu; none has run
       on a device). Compact… on a long chat: once the card closes, a
@@ -442,6 +899,59 @@ console now goes on after a restart only past a successful respring.
       tokens compacts, from the menu and on its own at 75 % of the window,
       with no such error, kwwk's own summary where Anthropic's came back
       empty.
+- [ ] A program the agent builds and runs itself (2026-10-29, AGENTS.md ▸
+      the system prompt, `apelin-device-executables`; none has run on a
+      device, the skill quotes a field conversation). On the iOS 26.4 and
+      iOS 27.0.1 iPhone vphones (roothide) and a rootless device: a C
+      program built with shell_run's clang (`clang -arch arm64 probe.c -o
+      probe -framework CoreFoundation -framework CoreVideo`) that calls
+      `CVPixelBufferCreate` for a 64×64 BGRA buffer with
+      `kCVPixelBufferIOSurfacePropertiesKey` an empty dictionary and
+      prints the status. Expected: unsigned, exit 137; signed `ldid
+      -S<a 0.1.0 cli project's Tool.entitlements>` (its four keys, no GPU
+      list), -6662; signed with the skill's `Tool.entitlements`, 0. Then,
+      in a Strict chat, ask for an mp4 made into a GIF: the agent reads
+      the skill, writes the file into the project, signs before the first
+      run (a card for ldid and one for the run) and does not rewrite its
+      decoder over -6662.
+- [ ] The cli templates' GPU list (2026-10-29, AGENTS.md ▸ Live chat and
+      project UI ▸ the templates, `wiki.qaq.apelin.dev.cli` 0.1.1; none
+      has run on a device). With the 0.1.1 extension installed, on the
+      iOS 26.4 and iOS 27.0.1 iPhone vphones (roothide) and a rootless
+      device: a new project from the C template, `CoreFoundation` and
+      `CoreVideo` added to its product's `frameworks`, whose `main` calls
+      `CVPixelBufferCreate` for a 64×64 BGRA buffer with
+      `kCVPixelBufferIOSurfacePropertiesKey` an empty dictionary and
+      prints the status; built, installed and run from the terminal, it
+      prints 0, and `ldid -e` on the installed tool lists
+      `IOSurfaceRootUserClient` under both keys. The same source in a
+      project made from 0.1.0, before the upgrade, prints -6662 until both
+      lists are copied into its `Packaging/Tool.entitlements`. In a Strict
+      chat, another new cli project's first build, its description
+      untouched, asks nothing.
+- [ ] The templates' package icon (2026-10-29, AGENTS.md ▸ Live chat and
+      project UI ▸ the templates; none has run on a device). With
+      app and tweak 0.1.1 and cli and preferences 0.1.2 installed, on the
+      iOS 26.4 and iOS 27.0.1 iPhone vphones (roothide) and a rootless
+      device: a new project of each kind builds and installs, and Irisin's
+      installed list shows the kind's icon from Pages beside it. A tweak
+      published to the user's package repository shows the same icon in
+      the source once Pages has indexed it. With `package.icon` changed to
+      another https image, the next install in a Strict chat asks once (a
+      packaging change) and the new icon shows; with it removed, the deb
+      has no `Icon` and the package manager draws its default.
+      Run so far (2026-10-29, build 23, iOS 26.4 iPhone vphone, roothide):
+      a tweak project made from tweak 0.1.1 has the tweak icon's URL in
+      `package.icon`, and its Debug build's deb names it in `Icon:`; the
+      install and Irisin's list are still to run.
+- [ ] Restarting an app installed again (2026-10-29, AGENTS.md ▸ Agent
+      sessions ▸ apelin_package_install; none has run on a device). In an
+      app project's conversation, with the app open from its last install:
+      build and install again, and the result's `relaunchHint` names the
+      app's bundle id; the agent runs `icli app kill --force <bundle id>`,
+      then `icli app launch <bundle id>`, through shell_run as mobile
+      (Strict asks for each), and `icli app running` shows a new pid
+      running the new build.
 
 ## SDK and toolchain matrix (2026-10-19)
 

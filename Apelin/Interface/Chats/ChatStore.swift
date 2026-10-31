@@ -22,7 +22,10 @@ struct ChatRecord: Codable, Sendable {
 /// The replay a reopened session's task starts with: every event of the
 /// session again, renumbered and newly timed, before anything new. It ends
 /// at the first user message or compaction the conversation has not seen:
-/// Compact… reopens a stopped session too, with no message after it.
+/// Compact… reopens a stopped session too, with no message after it. It
+/// also ends where the task does, when the task stops before getting that
+/// far: its worker died, the host stopped, or a second open of the session
+/// failed.
 struct SessionReplay: Codable, Sendable {
     private static let userMessageKinds: Set<String> = ["prompt", "steer"]
     private static let compactionKind = "compactionStarted"
@@ -55,7 +58,10 @@ struct SessionReplay: Codable, Sendable {
     }
 
     /// Whether `event` is still part of the replay, counting off the user
-    /// message it repeats.
+    /// message it repeats. The `state` a task ends with never is: the
+    /// worker replays only the states an approval sets, so one that ends
+    /// the task is this task's own end, and the turn ends on it as in a
+    /// first task.
     mutating func replays(_ event: TaskEvent) -> Bool {
         if event.kind == Self.retryKind {
             // A retry has no user message after it: this is what ends the
@@ -63,6 +69,9 @@ struct SessionReplay: Codable, Sendable {
             guard let remaining = retries, remaining > 0 else { return false }
             retries = remaining - 1
             return true
+        }
+        if ChatTranscript.endsTask(event) {
+            return false
         }
         if event.kind == Self.compactionKind {
             guard let remaining = compactions, remaining > 0 else { return false }
@@ -80,6 +89,17 @@ struct SessionReplay: Codable, Sendable {
 }
 
 extension ChatRecord {
+    /// `message` sent by the reader, shown at once from `sending` until the
+    /// host echoes it, the composer emptied if it held that draft. Writing
+    /// in a conversation is what moves it up the sidebar (`lastInteraction`).
+    mutating func submit(_ message: ComposerDraft, at now: Date = Date()) {
+        sending = (sending ?? []) + [message]
+        if draft.id == message.id {
+            draft = ComposerDraft()
+        }
+        summary.lastInteraction = now
+    }
+
     /// Takes out of `sending` each message `events` echo, and returns it
     /// with the event that echoed it. A draft put back by
     /// `reclaimUnsent` that the host did take is emptied too, unless its
@@ -151,6 +171,33 @@ extension ChatRecord {
         }
         self.replay = replay
         return []
+    }
+
+    /// Where the end of the finished task `batch` answered for is, when this
+    /// conversation read past it: the cursor is there, and its transcript
+    /// still runs a turn (`isWorking`) though the task has ended. An earlier
+    /// version read the `state` a reopened session's task ended with during
+    /// its replay as part of the replay, and moved the cursor past it,
+    /// where no attach brings it again. The host appends nothing after that
+    /// `state`, so it is the task's last event, at `batch.lastSeq`. Nil
+    /// when nothing is missing.
+    func missedEnd(of batch: TaskEventBatch, isWorking: Bool) -> EventSeq? {
+        guard isWorking, batch.finished, batch.lastSeq > .start, cursor >= batch.lastSeq else { return nil }
+        return batch.lastSeq
+    }
+
+    /// Takes `end`, read again from the task, as the end `missedEnd` found
+    /// at `seq`: that one event, once, which ends a replay still waiting.
+    /// Nil, or anything but a `state` that ends the task at `seq`, is left
+    /// out. Either way the row stops working, since the task has ended.
+    /// Returns whether it took the event.
+    @discardableResult
+    mutating func takeMissedEnd(_ end: TaskEvent?, at seq: EventSeq) -> Bool {
+        summary.isWorking = false
+        guard let end, end.seq == seq, ChatTranscript.endsTask(end), events.last != end else { return false }
+        replay = nil
+        events.append(end)
+        return true
     }
 
     /// After a relaunch, what is still in `sending` may never have reached

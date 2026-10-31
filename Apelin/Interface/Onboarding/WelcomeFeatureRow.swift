@@ -21,10 +21,10 @@ final class WelcomeFeatureRow: UIView {
 
         hStack.axis = .horizontal
         hStack.spacing = 14
-        hStack.alignment = .center
+        hStack.alignment = .top
 
         contentStack.axis = .vertical
-        contentStack.spacing = 2
+        contentStack.spacing = 4
         contentStack.alignment = .leading
 
         addSubview(hStack)
@@ -42,11 +42,13 @@ final class WelcomeFeatureRow: UIView {
             make.width.height.equalTo(28)
         }
 
-        titleLabel.font = WelcomeStyle.featureTitleFont
+        titleLabel.font = .preferredFont(forTextStyle: .headline)
+        titleLabel.adjustsFontForContentSizeCategory = true
         titleLabel.textColor = WelcomeStyle.titleColor
-        titleLabel.numberOfLines = 1
+        titleLabel.numberOfLines = 0
 
-        detailLabel.font = WelcomeStyle.detailFont
+        detailLabel.font = .preferredFont(forTextStyle: .callout)
+        detailLabel.adjustsFontForContentSizeCategory = true
         detailLabel.textColor = WelcomeStyle.detailColor
         detailLabel.numberOfLines = 0
 

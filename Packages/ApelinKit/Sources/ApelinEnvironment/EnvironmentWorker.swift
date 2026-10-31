@@ -4,8 +4,10 @@ import Foundation
 
 /// apelin-environment's request handling, everything `Workers/Environment`
 /// hands it: the toolchain and SDK operations, the git service and its
-/// settings, the package repository, and the cancellation of the tasks it
-/// runs.
+/// settings, a repository made on GitHub and an issue opened on one, the
+/// package repository, the feedback filed, read and edited on Apelin's own
+/// repository and the star the reader gives it, and the cancellation of the
+/// tasks it runs.
 ///
 /// An operation that starts a task arrives with the task's ID. It is checked
 /// first — a bad request is the reply, not a failed task — then accepted with
@@ -29,6 +31,10 @@ public final class EnvironmentWorker: @unchecked Sendable {
     var git: GitService
     /// A `var` for the same reason, and for a test's GitHub.
     var distribution: DistributionService
+    /// `var`s for a test's GitHub too.
+    var feedback: FeedbackService
+    var repositories: GitHubRepositoryService
+    var issues: GitHubIssueService
     let toolchains: ToolchainService
     let transfers: TransferService
     let installer: any PackageInstaller
@@ -52,6 +58,9 @@ public final class EnvironmentWorker: @unchecked Sendable {
         sdk = SDKManager(layout: layout)
         git = GitService(layout: layout, credentials: credentials)
         distribution = DistributionService(layout: layout, git: git, credentials: credentials)
+        feedback = FeedbackService(layout: layout, credentials: credentials)
+        repositories = GitHubRepositoryService(credentials: credentials)
+        issues = GitHubIssueService(layout: layout, credentials: credentials)
         toolchains = ToolchainService(layout: layout, backend: backend)
         transfers = TransferService(layout: layout, toolchains: toolchains, sdk: sdk)
         // Nothing runs yet: a tree with no record is an interrupted import,
@@ -102,6 +111,11 @@ public final class EnvironmentWorker: @unchecked Sendable {
         case .toolchainStatus:
             await WorkerMain.serve(ToolchainStatusRequest.self, request) { [self] _ in
                 toolchains.status(activeTasks: activeTasks)
+            }
+        case .toolchainSetDefault:
+            await WorkerMain.serve(ToolchainSetDefaultRequest.self, request) { [self] typed in
+                try toolchains.setDefault(id: typed.id)
+                return Acknowledged()
             }
         case .toolchainCatalog:
             await WorkerMain.serve(ToolchainCatalogRequest.self, request) { [self] _ in
@@ -175,11 +189,27 @@ public final class EnvironmentWorker: @unchecked Sendable {
         case .distributionPublish:
             await startTask(DistributionPublishRequest.self, request, resultInState: true) { [self] typed, _ in
                 let (linked, files) = try distribution.preparePublish(typed)
-                return { reporter, _ in
-                    let result = try await self.distribution.publish(linked, files: files, reporter: reporter)
+                return { reporter, staging in
+                    let result = try await self.distribution.publish(
+                        linked,
+                        files: files,
+                        digests: typed.digests,
+                        staging: staging,
+                        reporter: reporter,
+                    )
                     reporter.emit("result", result)
                 }
             }
+        case .feedbackSend:
+            await WorkerMain.serve(FeedbackSendRequest.self, request) { [self] in try await feedback.send($0) }
+        case .feedbackRead:
+            await WorkerMain.serve(FeedbackReadRequest.self, request) { [self] in try await feedback.read($0) }
+        case .feedbackEdit:
+            await WorkerMain.serve(FeedbackEditRequest.self, request) { [self] in try await feedback.edit($0) }
+        case .feedbackStarState:
+            await WorkerMain.serve(FeedbackStarStateRequest.self, request) { [self] in try await feedback.starState($0) }
+        case .feedbackStar:
+            await WorkerMain.serve(FeedbackStarRequest.self, request) { [self] in try await feedback.star($0) }
         case .gitClone:
             await startTask(GitCloneRequest.self, request) { [self] typed, taskID in
                 if request.resumed, let result = git.finishedClone(typed, taskID: taskID) {
@@ -220,6 +250,10 @@ public final class EnvironmentWorker: @unchecked Sendable {
             await WorkerMain.serve(GitCredentialSetRequest.self, request) { [self] in try git.setCredential($0) }
         case .gitCredentialRemove:
             await WorkerMain.serve(GitCredentialRemoveRequest.self, request) { [self] in try git.removeCredential($0) }
+        case .gitRepositoryCreate:
+            await WorkerMain.serve(GitRepositoryCreateRequest.self, request) { [self] in try await repositories.create($0) }
+        case .gitIssueCreate:
+            await WorkerMain.serve(GitIssueCreateRequest.self, request) { [self] in try await issues.create($0) }
         case .transferInspect:
             await WorkerMain.serve(TransferInspectRequest.self, request) { [self] in
                 try transfers.inspect($0, descriptors: request.descriptors)

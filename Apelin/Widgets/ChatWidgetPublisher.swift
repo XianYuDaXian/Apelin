@@ -82,7 +82,7 @@ final class ChatWidgetPublisher {
         guard let runtime, runtime.isReconciled else { return }
         let listed = runtime.records.values.filter(\.isListedInWidgets).map { record in
             let project = record.summary.projectName.map { projectNames[$0] ?? $0 }
-            return (chat: record.widgetChat(projectName: project), updated: record.summary.updated)
+            return (chat: record.widgetChat(projectName: project), updated: record.summary.lastInteraction)
         }
         let snapshot = ChatWidgetSnapshot(chats: listed)
         if snapshot != written {

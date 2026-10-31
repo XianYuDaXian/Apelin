@@ -25,7 +25,7 @@ Operations by area (the full list is `AGENTS.md` ▸ The wire):
 | Connection | `hello` (install root, protocol, operation list) | the *Connecting…* state; no error while apelind starts |
 | Environment | `toolchainStatus/Catalog/Setup/Remove`, `sdkList/Import/Remove`, `environmentAttach/Cancel` | Settings ▸ Toolchain, SDKs |
 | Projects | `extensionList`, `projectCreate`, `projectCheck` | new project from a template; project problems |
-| Build and install | `buildStart/Attach/Cancel`, `installPackage`, `removePackage`, `respring`, `approvalDigestState` | build log, diagnostics, install |
+| Build and install | `buildStart/Attach/Cancel`, `installPackage`, `removePackage`, `installationList`, `respring`, `approvalDigestState` | build log, diagnostics, install |
 | Files | `fileRead`, `protectedEditOpen/Commit` | editor; protected edit with confirmation |
 | Terminal | `ptyOpen/Attach/Resize/Close` (`ptyAttach{wantsDescriptor}` hands over a live socket) | terminal |
 | Logs and crashes | `logStream`, `crashList`, `crashOpen` (descriptor), `crashSymbolicate` | logs, crash list and detail |

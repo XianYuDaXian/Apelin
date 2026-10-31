@@ -4,19 +4,10 @@ import UIKit
 final class MemoryEditorController: TableController, UITextViewDelegate {
     private enum Row: Hashable { case title, body, delete }
     private final class DataSource: UITableViewDiffableDataSource<Int, Row> {
-        var scope = ""
         override func tableView(_: UITableView, titleForHeaderInSection section: Int) -> String? {
             switch section {
             case 0: String(localized: "Title")
             case 1: String(localized: "Memory")
-            default: nil
-            }
-        }
-
-        override func tableView(_: UITableView, titleForFooterInSection section: Int) -> String? {
-            switch section {
-            case 0: String(localized: "Up to 120 characters.")
-            case 1: String(localized: "Used in: \(scope). Up to 2,000 characters.")
             default: nil
             }
         }
@@ -25,9 +16,9 @@ final class MemoryEditorController: TableController, UITextViewDelegate {
     private let store: MemoryStore
     private let record: MemoryRecord?
     private let revision: String
-    private let scope: String
     private let titleField = UITextField()
     private let bodyField = UITextView()
+    private let bodyPlaceholder = UILabel()
     private var dataSource: DataSource!
     private var saving = false
     private lazy var saveItem = UIBarButtonItem(
@@ -35,17 +26,16 @@ final class MemoryEditorController: TableController, UITextViewDelegate {
         primaryAction: UIAction { [weak self] _ in self?.save() },
     )
 
-    init(store: MemoryStore, record: MemoryRecord?, revision: String, scope: String) {
+    init(store: MemoryStore, record: MemoryRecord?, revision: String) {
         self.store = store
         self.record = record
         self.revision = revision
-        self.scope = scope
         super.init(style: .insetGrouped)
     }
 
     @available(*, unavailable)
     required init?(coder _: NSCoder) {
-        fatalError("Use init(store:record:revision:scope:)")
+        fatalError("Use init(store:record:revision:)")
     }
 
     override func viewDidLoad() {
@@ -69,6 +59,20 @@ final class MemoryEditorController: TableController, UITextViewDelegate {
         bodyField.textContainerInset = .zero
         bodyField.textContainer.lineFragmentPadding = 0
         bodyField.delegate = self
+        bodyPlaceholder.text = String(localized: "What should the agent remember?")
+        bodyPlaceholder.font = .preferredFont(forTextStyle: .body)
+        bodyPlaceholder.adjustsFontForContentSizeCategory = true
+        bodyPlaceholder.textColor = .placeholderText
+        bodyPlaceholder.numberOfLines = 0
+        bodyPlaceholder.isAccessibilityElement = false
+        bodyPlaceholder.isUserInteractionEnabled = false
+        bodyPlaceholder.translatesAutoresizingMaskIntoConstraints = false
+        bodyField.addSubview(bodyPlaceholder)
+        NSLayoutConstraint.activate([
+            bodyPlaceholder.leadingAnchor.constraint(equalTo: bodyField.frameLayoutGuide.leadingAnchor),
+            bodyPlaceholder.trailingAnchor.constraint(equalTo: bodyField.frameLayoutGuide.trailingAnchor),
+            bodyPlaceholder.topAnchor.constraint(equalTo: bodyField.frameLayoutGuide.topAnchor),
+        ])
         let titleCell = fieldCell(titleField)
         let bodyCell = fieldCell(bodyField, minimumHeight: 180)
         dataSource = DataSource(tableView: tableView) { _, _, row in
@@ -85,7 +89,6 @@ final class MemoryEditorController: TableController, UITextViewDelegate {
                 return cell
             }
         }
-        dataSource.scope = scope
         var snapshot = NSDiffableDataSourceSnapshot<Int, Row>()
         snapshot.appendSections([0, 1])
         snapshot.appendItems([.title], toSection: 0)
@@ -126,7 +129,8 @@ final class MemoryEditorController: TableController, UITextViewDelegate {
         let title = (titleField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let body = (bodyField.text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         saveItem.isEnabled = !saving && !title.isEmpty && !body.isEmpty
-            && title.count <= MemoryStore.maximumTitleLength && body.count <= MemoryStore.maximumBodyLength
+        bodyPlaceholder.isHidden = !(bodyField.text ?? "").isEmpty
+        bodyField.accessibilityHint = bodyPlaceholder.isHidden ? nil : bodyPlaceholder.text
     }
 
     private func save() {

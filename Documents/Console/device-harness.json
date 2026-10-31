@@ -148,16 +148,16 @@
     },
     "transfer": {
       "needs": ["sdk"],
-      "after": [{"mobile": "rm -rf \"$DATA/Exports\""}]
+      "after": [{"mobile": "rm -rf \"${DATA:?}/Exports\""}]
     },
     "transfer-project": {
       "needs": ["project:I3 Chain Tweak"],
       "before": [{"removeProject": "Transfer Copy"}],
-      "after": [{"removeProject": "Transfer Copy"}, {"mobile": "rm -rf \"$DATA/Exports\""}]
+      "after": [{"removeProject": "Transfer Copy"}, {"mobile": "rm -rf \"${DATA:?}/Exports\""}]
     },
     "transfer-toolchain": {
       "needs": ["installed-toolchain"],
-      "after": [{"mobile": "rm -rf \"$DATA/Exports\""}],
+      "after": [{"mobile": "rm -rf \"${DATA:?}/Exports\""}],
       "timeout": 3600,
       "manual": "writes an .apetc of the whole toolchain, a GB or more, which takes minutes and that much free space in the data folder; run it by name on a device that has it"
     }

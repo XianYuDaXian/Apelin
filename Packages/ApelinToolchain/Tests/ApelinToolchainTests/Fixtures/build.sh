@@ -25,7 +25,7 @@ SSH=${SSH:-ssh}
 SCP=${SCP:-scp}
 CC="xcrun --sdk iphoneos clang -miphoneos-version-min=15.0 -Os"
 WORK=$(mktemp -d)
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf -- "${WORK:?}"' EXIT
 mkdir -p "$WORK/input" "$WORK/signing"
 
 $CC -arch arm64 -arch arm64e -DFIXTURE_DEPENDENCY fixture.c \
@@ -187,7 +187,7 @@ EOF
 
 REMOTE=/var/mobile/irisin-adapter-fixtures
 PATHS='export PATH=/var/jb/usr/bin:/var/jb/bin:$PATH;'
-$SSH "$HOST" "rm -rf $REMOTE; mkdir -p $REMOTE"
+$SSH "$HOST" "rm -rf ${REMOTE:?}; mkdir -p $REMOTE"
 $SCP -r "$WORK/input" "$WORK/signing" "$HOST:$REMOTE/"
 $SSH "$HOST" "$PATHS cd $REMOTE && for f in input/Fixture.dylib input/FixtureBundle input/fixture-tool; do ldid -S \$f; done &&
     ldid -Ssigning/app.entitlements input/FixtureApp && ldid -Ssigning/mixed.entitlements input/FixtureMixed &&
@@ -199,5 +199,5 @@ $SSH "$HOST" "$PATHS cd $REMOTE && for f in input/Fixture.dylib input/FixtureBun
     if file -b \$f | grep -q executable; then ldid -Hsha256 -M -S../signing/roothide.entitlements \$f; else ldid -Hsha256 -S \$f; fi; done"
 rm -rf input expected
 $SCP -r "$HOST:$REMOTE/input" "$HOST:$REMOTE/expected" .
-$SSH "$HOST" "rm -rf $REMOTE"
+$SSH "$HOST" "rm -rf ${REMOTE:?}"
 ls -l input expected

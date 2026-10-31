@@ -14,14 +14,36 @@ final class WelcomeProjectPage: WelcomeListPage {
         let created: Bool
     }
 
+    private enum Item: Equatable {
+        case introduction
+        case template(Row)
+        var id: String {
+            switch self {
+            case .introduction: "introduction"
+            case let .template(row): "template:" + row.template.id
+            }
+        }
+    }
+
     private var extensions: [DevelopmentExtension] = [.emptyWorkspace]
     private var creating = false
     private var loader: Task<Void, Never>?
-    private lazy var dataSource = TableDataSource<Section, String, Row>(
+    private lazy var dataSource = TableDataSource<Section, String, Item>(
         tableView: tableView,
-        identifier: { $0.template.id },
+        identifier: { $0.id },
     ) { [weak self] _, _, row in
-        self?.cell(for: row)
+        switch row {
+        case .introduction:
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            var content = UIListContentConfiguration.cell()
+            content.text = String(localized: "Pick a template to start your first project. You can also create one later from the sidebar.")
+            content.textProperties.font = .preferredFont(forTextStyle: .body)
+            content.textProperties.numberOfLines = 0
+            cell.contentConfiguration = content
+            cell.selectionStyle = .none
+            return cell
+        case let .template(row): return self?.cell(for: row)
+        }
     }
 
     deinit { loader?.cancel() }
@@ -53,8 +75,8 @@ final class WelcomeProjectPage: WelcomeListPage {
 
     private func updateRows() {
         let createdID = flow.project == nil ? nil : flow.projectTemplateID
-        dataSource.update([(.introduction, [])] + extensions.map { item in
-            (.kind(item.id), item.templates.map { Row(template: $0, kind: item.kind, created: $0.id == createdID) })
+        dataSource.update([(.introduction, [.introduction])] + extensions.map { item in
+            (.kind(item.id), item.templates.map { Item.template(Row(template: $0, kind: item.kind, created: $0.id == createdID)) })
         })
     }
 
@@ -71,14 +93,9 @@ final class WelcomeProjectPage: WelcomeListPage {
         return cell
     }
 
-    func tableView(_: UITableView, viewForHeaderInSection section: Int) -> UIView? {
-        guard dataSource.sectionIdentifier(for: section) == .introduction else { return nil }
-        return text(.groupedFooter(), String(localized: "Pick a template to start your first project. You can also create one later from the sidebar."))
-    }
-
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard let row = dataSource.value(at: indexPath) else { return }
+        guard case let .template(row)? = dataSource.value(at: indexPath) else { return }
         if flow.project != nil {
             flow.showNotifications()
         } else {

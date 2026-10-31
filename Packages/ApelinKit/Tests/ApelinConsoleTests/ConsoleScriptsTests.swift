@@ -17,6 +17,7 @@ final class ConsoleScriptsTests: XCTestCase {
         .agentRegenerate: "The app's retry button sends it, and a script has no reply it may drop without a provider answer.",
         .agentModelSwitch: "The composer sends it when the reader switches model mid-answer; a script has no running turn to switch.",
         .gitCredentialSet: "A git credential comes only from Sign In with GitHub in Settings ▸ Git; the console refuses it before sending.",
+        .feedbackStar: "A star is given on the reader's GitHub account only by their tap in the app; the console refuses it before sending.",
     ]
 
     private static func consoleFolder(_ name: String) -> URL {

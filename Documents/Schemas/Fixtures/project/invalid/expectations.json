@@ -18,5 +18,10 @@
   "flag-not-a-flag.json": "does not match",
   "filter-dylib-elsewhere.json": "must be installed under /Library/MobileSubstrate/DynamicLibraries/",
   "app-without-info-plist.json": "missing infoPlist",
-  "swift-source-in-objc.json": "is not a .c or .m source"
+  "swift-source-in-objc.json": "is not a .c or .m source",
+  "package-icon-http.json": "/package/icon: \"http://owngoal-dev.github.io/Apelin/icons/wiki.qaq.apelin.dev.tweak.png\" does not match",
+  "package-icon-space.json": "/package/icon: \"https://owngoal-dev.github.io/Apelin/icons/my tweak.png\" does not match",
+  "package-icon-newline.json": "/package/icon: \"https://owngoal-dev.github.io/Apelin/icons/wiki.qaq.apelin.dev.tweak.png\\n\" does not match",
+  "package-icon-too-long.json": "/package/icon: longer than 2048",
+  "package-icon-not-a-string.json": "/package/icon: expected string"
 }

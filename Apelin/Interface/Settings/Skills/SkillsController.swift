@@ -104,6 +104,7 @@ final class SkillsController: TableController {
                 if listing == nil {
                     tableView.backgroundView = EmptyStateView(
                         symbolName: "exclamationmark.triangle",
+                        title: String(localized: "Error"),
                         text: ToolchainController.unavailableText(error),
                     )
                 }
@@ -129,21 +130,20 @@ final class SkillsController: TableController {
     private func cell(in tableView: UITableView, row: Row) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "skill")
             ?? UITableViewCell(style: .subtitle, reuseIdentifier: "skill")
-        var content = cell.defaultContentConfiguration()
+        var content = UIListContentConfiguration.stackedValueCell()
         switch row {
         case let .skill(skill):
+            content = .explanatoryCell()
             content.text = skill.name
             content.textProperties.numberOfLines = 1
             content.secondaryText = skill.description
             content.secondaryTextProperties.numberOfLines = 2
-            content.secondaryTextProperties.color = .secondaryLabel
             cell.accessoryType = .disclosureIndicator
             cell.selectionStyle = .default
         case let .problem(problem):
             content.text = problem.location ?? String(localized: "Skills Folder")
             content.secondaryText = problem.message
             content.secondaryTextProperties.numberOfLines = 0
-            content.secondaryTextProperties.color = .secondaryLabel
             cell.accessoryType = .none
             cell.selectionStyle = .none
         case .empty:

@@ -215,7 +215,7 @@ struct PromptCacheTests {
         #expect(blocks[3].contains("- Local time: Sunday 2026-10-25 00:05, Asia/Shanghai (UTC+08:00)."))
         for block in blocks {
             #expect(block.contains("; preferred: zh-Hans-CN, en-US; region CN."))
-            #expect(block.contains("- Reply in the language the user writes in; when that is unclear, in Chinese"))
+            #expect(block.contains("- Write to the user in the language they write in, progress notes included; when that is unclear, in Chinese"))
         }
         let told = Self.changes(blocks[1])
         #expect(told.contains("  - memory added (all chats): Editor: Prefers tabs."), "\(told)")
@@ -302,6 +302,50 @@ struct PromptCacheTests {
         let last = try #require(sent.last?.messages.compactMap(Self.text).last.flatMap(Self.block))
         #expect(Self.changes(last) == ["  - memory added (all chats): Language: Reply in Chinese."], "\(last)")
         #expect(try store.read().records.map(\.title).sorted() == ["Editor", "Language"], "the agent's save went through")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func `a memory the agent keeps for another project is not this chat's, so one of its title made here meanwhile is still told`() async throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        let provider = await registerFauxProvider()
+        defer { provider.unregister() }
+        let requests = Requests()
+        let store = MemoryStore(root: home.dataRoot.url)
+        let weather = try ProjectIdentity(id: "6f1c5b0e-0000-4000-8000-00000000beef", name: ProjectName("Weather"))
+        let backend = MockBackend()
+        await backend.addProject(weather)
+        provider.setResponses([
+            .factory { _, _, _, _ in
+                // the user, in Settings, for this project
+                try store.save(MemoryRecord(title: "Build", body: "Runs make.", projectID: home.project.id), revision: store.read().revision)
+                return try fauxAssistantMessage(blocks: [
+                    fauxToolCall(name: "apelin_memory_save", arguments: ["reason": "Note it there", "revision": .string(store.read().revision), "title": "Build", "body": "Runs cmake.", "project": "Weather"], id: "save"),
+                ], stopReason: .toolUse)
+            },
+            .message(fauxAssistantMessage("Saved.")),
+            .factory { context, options, _, _ in
+                await requests.add(context, options)
+                return fauxAssistantMessage("Next.")
+            },
+        ])
+        let session = try await AgentSession(
+            configuration: AgentSessionConfiguration(
+                project: home.project, provider: .registered(provider.getModel()),
+                approval: ApprovalPolicy(mode: .confirm), dataRoot: home.dataRoot,
+            ),
+            backend: backend, digests: MockDigestLedger(), credentials: DeliveredCredentialSource(),
+        )
+        try await session.prompt("Note Weather's build.")
+        await session.waitForIdle()
+        try await session.prompt("Go on.")
+        await session.waitForIdle()
+        await session.close()
+
+        let sent = await requests.all
+        let last = try #require(sent.last?.messages.compactMap(Self.text).last.flatMap(Self.block))
+        #expect(Self.changes(last) == ["  - memory added (this project): Build: Runs make."], "\(last)")
+        #expect(try store.read().records.map(\.projectID) == [home.project.id, weather.id], "the agent's save went to Weather")
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -473,11 +517,12 @@ struct PromptCacheTests {
         #expect(block.contains("- Local time: Saturday 2026-10-24 15:58, GMT (UTC+00:00)."))
         #expect(block.contains("- Approval mode: Full."))
         #expect(block.hasSuffix(SystemState.closingTag + "\n\n"))
-        // Some sixty tokens: about four bytes a token.
-        #expect(block.utf8.count < 400, "\(block.utf8.count) bytes")
+        // A few dozen tokens, at about four bytes a token, the screen
+        // setting's line (2026-10-30) included.
+        #expect(block.utf8.count < 440, "\(block.utf8.count) bytes")
         let none = SystemState.make(SystemState.Facts(languages: [], region: nil, date: Self.beforeMidnight, timeZone: Self.zone, mode: .confirm))
         #expect(none.contains("- System language: not known."))
-        #expect(none.contains("- Reply in the language the user writes in.\n"))
+        #expect(none.contains("- Write to the user in the language they write in, progress notes included.\n"))
     }
 
     @Test

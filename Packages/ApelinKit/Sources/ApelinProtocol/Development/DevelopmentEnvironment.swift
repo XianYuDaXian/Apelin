@@ -284,8 +284,8 @@ public struct ProjectManifestBinding: Sendable, Equatable {
 /// is canonicalised and checked, opened without following a link, and the
 /// descriptor's own path checked again, so a folder swapped for a link in
 /// between leads nowhere.
-enum BoundedFile {
-    static func read(_ path: String, inside root: String, limit: Int) -> Data? {
+public enum BoundedFile {
+    public static func read(_ path: String, inside root: String, limit: Int) -> Data? {
         guard let real = CanonicalPath.resolve(path), CanonicalPath.isCanonical(real, inside: root) else { return nil }
         let descriptor = open(real, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
         guard descriptor >= 0 else { return nil }

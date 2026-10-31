@@ -14,7 +14,7 @@ struct JournalFile: Hashable, Sendable {
     }
 }
 
-/// The journals Dog keeps, one per launch, its 128 newest: the only record
+/// The journals Dog keeps, one per launch, its 100 newest: the only record
 /// of an earlier launch, since the live log keeps no history on iOS.
 enum JournalFiles {
     /// Dog's journals in `directory`, newest first: by the launch in the

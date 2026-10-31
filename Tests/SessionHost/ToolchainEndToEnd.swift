@@ -175,7 +175,9 @@ func toolchainEndToEnd(harness: String) async throws {
     try manager.createDirectory(at: state, withIntermediateDirectories: true)
 
     // The fake irisind installs by unpacking the submitted package with the
-    // harness's reader, and removes by taking the toolchain's folder away.
+    // harness's reader, and removes as roothide's dpkg does: every file and
+    // link the package lists goes, and each of its folders stays behind with
+    // the `.jbroot` link roothide adds to it, which no package lists.
     let irisin = FakeIrisin(root: installRoot)
     irisin.onInstall = { descriptor in
         let copy = base + "/submitted-\(UUID().uuidString).deb"
@@ -200,7 +202,20 @@ func toolchainEndToEnd(harness: String) async throws {
     }
     irisin.onRemove = { packageID in
         let id = String(packageID.dropFirst(ManagedPackagePolicy.toolchainPrefix.count))
-        try? FileManager.default.removeItem(atPath: installRoot + "/usr/lib/apelin/toolchains/" + id)
+        let tree = installRoot + "/usr/lib/apelin/toolchains/" + id
+        var folders = [tree]
+        for case let entry as String in FileManager.default.enumerator(atPath: tree)?.allObjects ?? [] {
+            var metadata = stat()
+            guard lstat(tree + "/" + entry, &metadata) == 0 else { continue }
+            if metadata.st_mode & S_IFMT == S_IFDIR {
+                folders.append(tree + "/" + entry)
+            } else {
+                unlink(tree + "/" + entry)
+            }
+        }
+        for folder in folders {
+            symlink(installRoot, folder + "/.jbroot")
+        }
     }
 
     let registry = TaskRegistry(directory: state.appendingPathComponent("tasks"))
@@ -217,6 +232,7 @@ func toolchainEndToEnd(harness: String) async throws {
         artifacts: ArtifactRegistry(file: state.appendingPathComponent("artifacts.json")),
         installations: installations,
         packages: FakeDatabase(irisin: irisin),
+        fileLists: DpkgFileLists(installRoot: installRoot),
         approvals: ApprovalLedger(directory: state.appendingPathComponent("approvals")),
         pollInterval: 0.01,
     )
@@ -259,7 +275,7 @@ func toolchainEndToEnd(harness: String) async throws {
     check(failed.state == .failed && failure.contains("C self-test"), "e2e: a failed C self-test fails the setup (\(failure))")
     let rolledBack = await installations.all()
     check(rolledBack.count == 1 && rolledBack.first?.origin == .environment && rolledBack.first?.status == .removed, "e2e: its install is rolled back through removePackage (\(rolledBack.map(\.status)))")
-    check(!manager.fileExists(atPath: installed), "e2e: and its files are gone")
+    check(!manager.fileExists(atPath: installed), "e2e: and its files are gone, the folders roothide leaves with them")
     let afterFailure = try await worker.ask(ToolchainStatusRequest())
     check(afterFailure.toolchains.isEmpty, "e2e: nothing is registered")
     let jobs = (try? manager.contentsOfDirectory(atPath: environment.path + "/Toolchains/jobs")) ?? []
@@ -322,7 +338,12 @@ func toolchainEndToEnd(harness: String) async throws {
     check(removal.state == .succeeded, "e2e: toolchainRemove succeeds (\(removal.events.last?.payload?["message"]?.stringValue ?? ""))")
     let removedRecord = await installations.record(record?.installationID ?? "")
     check(removedRecord?.status == .removed, "e2e: the bridge's record says removed")
-    check(!manager.fileExists(atPath: installed), "e2e: the installed tree is gone")
+    check(!manager.fileExists(atPath: installed), "e2e: the installed tree is gone, the folders roothide leaves with it")
+    check(manager.fileExists(atPath: installRoot + "/usr/lib/apelin/toolchains"), "e2e: the toolchains folder stays")
+    let pruned = removal.events.contains {
+        $0.kind == "install.log" && $0.payload?["line"]?.stringValue?.hasPrefix("Removed the empty folders") == true
+    }
+    check(pruned, "e2e: the removal's log says the folders went")
     let afterRemoval = try await worker.ask(ToolchainStatusRequest())
     check(afterRemoval.toolchains.isEmpty && afterRemoval.defaultID == nil, "e2e: and the registry is empty")
 }

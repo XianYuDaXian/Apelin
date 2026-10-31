@@ -132,6 +132,21 @@ final class ConsoleRunnerTests: XCTestCase {
         XCTAssertFalse(log.lines.joined().contains(secret))
     }
 
+    /// A star is given on the reader's GitHub account by their own tap in
+    /// the app, so a script cannot give one; reading whether there is one
+    /// goes out.
+    func testConsoleNeverStarsApelin() async throws {
+        fake.reply(.feedbackStarState, with: FeedbackStarResponse(repository: FeedbackRules.repository, starred: false))
+        let runID = try await runInbox("""
+        [{"op": "feedbackStar", "allowError": true, "label": "star"},
+         {"op": "expect", "request": {"step": "star", "errorCode": "denied"}},
+         {"op": "feedbackStarState", "label": "state"},
+         {"op": "expect", "request": {"step": "state", "path": "response.starred", "equals": false}}]
+        """)
+        XCTAssertEqual(output(runID).last?["ok"], .bool(true))
+        XCTAssertEqual(fake.operations, [.feedbackStarState], "the star never goes out")
+    }
+
     /// Full mode runs a command as root without asking; a human turns it on
     /// in the app after the device-owner check. A script file cannot stand
     /// in for that, so the console refuses to set it on an open or a prompt,

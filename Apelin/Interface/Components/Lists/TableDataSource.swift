@@ -56,6 +56,7 @@ final class TableDataSource<Section: Hashable, Item: Hashable, Content: Equatabl
         _ sections: [(Section, [Content])],
         reconfigure: Bool = false,
         changedItems: Set<Item> = [],
+        animatingDifferences: Bool? = nil,
         completion: (() -> Void)? = nil,
     ) {
         let previous = snapshot()
@@ -106,7 +107,7 @@ final class TableDataSource<Section: Hashable, Item: Hashable, Content: Equatabl
         } else {
             next.reloadItems(changed)
         }
-        let animated = pacing.animatesChange(in: table)
+        let animated = animatingDifferences ?? pacing.animatesChange(in: table)
         let selected = (table.indexPathsForSelectedRows ?? []).compactMap { itemIdentifier(for: $0) }
         applyChange(next, to: table, animated: animated) { [weak self, weak table] in
             if let self, self.generation == generation {

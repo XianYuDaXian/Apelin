@@ -21,12 +21,13 @@ public protocol CredentialSource: OAuthCredentialSource {
     func remove(_ providerID: String) async throws
 }
 
-/// kwwk's store ids for the providers Apelin offers.
+/// Credential store ids, including Apelin's independent DeepSeek account.
 public enum CredentialProviderID {
     public static let anthropicAPIKey = "anthropic-api-key"
     public static let anthropicOAuth = "anthropic"
     public static let openAICompatible = "openai-compatible"
     public static let githubCopilot = "github-copilot"
+    public static let deepSeek = "deepseek-api-key"
 }
 
 /// Credentials delivered by the app for this session, held in memory only.

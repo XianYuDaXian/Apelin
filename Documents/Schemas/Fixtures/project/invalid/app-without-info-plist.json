@@ -5,8 +5,8 @@
   "template": {
     "extensionID": "wiki.qaq.apelin.dev.app",
     "templateID": "uikit-objc",
-    "version": "0.1.0",
-    "digest": "sha256:c7840ea785ae76fdb3a3e807ed27bc9ad921ba1c0914143746034d54df1b4987"
+    "version": "0.1.1",
+    "digest": "sha256:e9addbec114a1e796527c0d5734b42100a5ea286af32be617ee8da406e718c1b"
   },
   "environment": {
     "toolchain": {

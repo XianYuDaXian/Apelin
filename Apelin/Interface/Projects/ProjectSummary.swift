@@ -125,11 +125,21 @@ enum ProjectIcon {
         }
     }
 
-    /// The icon at a menu row's size, in its own colours: a menu draws
-    /// what it is given as a template unless told otherwise.
+    /// Only the built-in artwork needs optical compensation for its inset
+    /// mark and pale plate. User artwork keeps the standard toolbar size.
     static func menuImage(for project: ProjectSummary) -> UIImage? {
-        guard let image = image(for: project) else { return nil }
-        let side: CGFloat = 24
+        let image: UIImage
+        let side: CGFloat
+        if let folder = DataFolder.app.project(named: project.name),
+           let own = thumbnail(of: folder.appendingPathComponent(fileName))
+        {
+            image = rounded(own)
+            side = 24
+        } else {
+            guard let fallback = self.image(for: project.kind) else { return nil }
+            image = fallback
+            side = 28
+        }
         let bounds = CGRect(x: 0, y: 0, width: side, height: side)
         return UIGraphicsImageRenderer(bounds: bounds).image { _ in
             image.draw(in: bounds)

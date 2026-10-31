@@ -17,6 +17,8 @@ struct TableColumn {
 
 final class ColumnTableMetrics {
     let isStacked: Bool
+    let nameLines: Int
+    let symbolSize: CGFloat
     let nameFont: UIFont
     let valueFont: UIFont
     let titleFont: UIFont
@@ -28,31 +30,35 @@ final class ColumnTableMetrics {
     /// heading keeps it empty, so the figures stay under their titles.
     let trailingSymbolWidth: CGFloat
 
-    static let rowPadding: CGFloat = 11
-    static let lineSpacing: CGFloat = 2
+    static let rowPadding: CGFloat = 16
+    static let lineSpacing: CGFloat = 4
 
-    init(columns: [TableColumn], category: UIContentSizeCategory, trailingSymbol: Bool = false) {
+    init(columns: [TableColumn], category: UIContentSizeCategory, trailingSymbol: Bool = false, nameLines: Int = 1, availableWidth: CGFloat? = nil) {
         // a view outside a window reports no text size; the app's stands in
         let category = category == .unspecified ? UIApplication.shared.preferredContentSizeCategory : category
         let traits = UITraitCollection(preferredContentSizeCategory: category)
-        isStacked = category.isAccessibilityCategory
-        nameFont = .preferredFont(forTextStyle: isStacked ? .body : .subheadline, compatibleWith: traits)
-        let footnote = UIFont.preferredFont(forTextStyle: .footnote, compatibleWith: traits)
-        valueFont = .monospacedDigitSystemFont(ofSize: footnote.pointSize, weight: .regular)
+        self.nameLines = nameLines
+        nameFont = .preferredFont(forTextStyle: .body, compatibleWith: traits)
+        valueFont = .monospacedDigitSystemFont(ofSize: nameFont.pointSize, weight: .regular)
         let caption = UIFont.preferredFont(forTextStyle: .caption1, compatibleWith: traits)
         titleFont = .systemFont(ofSize: caption.pointSize, weight: .semibold)
-        columnSpacing = (valueFont.pointSize * 1.25).rounded()
-        minimumNameWidth = (nameFont.pointSize * 5.5).rounded()
-        trailingSymbolWidth = trailingSymbol ? ceil(nameFont.lineHeight) : 0
-        let nameLine = ceil(nameFont.lineHeight)
+        columnSpacing = 12
+        minimumNameWidth = Self.width(of: nameLines > 1 ? "Swift 5.7.2" : "88.8", in: nameFont)
+        symbolSize = UIFontMetrics(forTextStyle: .body).scaledValue(for: 20, compatibleWith: traits)
+        trailingSymbolWidth = trailingSymbol ? ceil(symbolSize) : 0
+        let nameLine = ceil(nameFont.lineHeight) * CGFloat(nameLines) + CGFloat(nameLines - 1) * Self.lineSpacing
         let valueLine = ceil(valueFont.lineHeight)
-        rowHeight = isStacked
-            ? nameLine + CGFloat(max(columns.count, 1)) * (Self.lineSpacing + valueLine) + 2 * Self.rowPadding
-            : max(nameLine, valueLine) + 2 * Self.rowPadding
         widths = columns.map { [valueFont, titleFont] in
             ($0.samples.map { Self.width(of: $0, in: valueFont) }
                 + [Self.width(of: $0.title, in: titleFont)]).max() ?? 0
         }
+        let neededWidth = minimumNameWidth + widths.reduce(0, +)
+            + CGFloat(columns.count) * columnSpacing
+            + (trailingSymbol ? trailingSymbolWidth + columnSpacing : 0)
+        isStacked = category.isAccessibilityCategory || availableWidth.map { $0 < neededWidth } == true
+        rowHeight = isStacked
+            ? nameLine + CGFloat(max(columns.count, 1)) * (Self.lineSpacing + valueLine) + 2 * Self.rowPadding
+            : max(nameLine, valueLine, symbolSize) + 2 * Self.rowPadding
     }
 
     /// The name's span, each column's and the trailing symbol's, across
@@ -175,6 +181,7 @@ final class ColumnTableCell: UITableViewCell {
     static let reuseIdentifier = "columnRow"
 
     private let nameLabel = UILabel()
+    private let subtitleLabel = UILabel()
     private var valueLabels: [UILabel] = []
     private let symbolView = UIImageView().then {
         $0.contentMode = .center
@@ -187,6 +194,8 @@ final class ColumnTableCell: UITableViewCell {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         nameLabel.lineBreakMode = .byTruncatingMiddle
         contentView.addSubview(nameLabel)
+        subtitleLabel.textColor = .secondaryLabel
+        contentView.addSubview(subtitleLabel)
         contentView.addSubview(symbolView)
         // one stop for the row; the figures are named in the value
         isAccessibilityElement = true
@@ -203,6 +212,7 @@ final class ColumnTableCell: UITableViewCell {
     func configure(
         name: NSAttributedString,
         accessibilityName: String,
+        subtitle: String? = nil,
         values: [String],
         columns: [TableColumn],
         metrics: ColumnTableMetrics,
@@ -212,7 +222,7 @@ final class ColumnTableCell: UITableViewCell {
         self.metrics = metrics
         symbolView.image = symbol
         symbolView.tintColor = symbolTint
-        symbolView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(font: metrics.nameFont)
+        symbolView.preferredSymbolConfiguration = UIImage.SymbolConfiguration(pointSize: metrics.symbolSize, weight: .light)
         titles = columns.map(\.title)
         if valueLabels.count != values.count {
             valueLabels.forEach { $0.removeFromSuperview() }
@@ -225,6 +235,10 @@ final class ColumnTableCell: UITableViewCell {
                 }
             }
         }
+        nameLabel.numberOfLines = 1
+        subtitleLabel.text = subtitle
+        subtitleLabel.font = metrics.nameFont
+        subtitleLabel.isHidden = subtitle == nil
         nameLabel.font = metrics.nameFont
         nameLabel.attributedText = name
         for (label, (title, value)) in zip(valueLabels, zip(titles, values)) {
@@ -242,16 +256,26 @@ final class ColumnTableCell: UITableViewCell {
         guard let metrics else { return }
         let content = contentView.bounds.inset(by: contentView.layoutMargins)
         let isRightToLeft = effectiveUserInterfaceLayoutDirection == .rightToLeft
-        let nameHeight = ceil(metrics.nameFont.lineHeight)
+        let nameLineHeight = ceil(metrics.nameFont.lineHeight)
+        let nameHeight = nameLineHeight * CGFloat(metrics.nameLines) + CGFloat(metrics.nameLines - 1) * ColumnTableMetrics.lineSpacing
         let valueHeight = ceil(metrics.valueFont.lineHeight)
         if metrics.isStacked {
-            symbolView.isHidden = true
+            symbolView.isHidden = symbolView.image == nil
+            symbolView.frame = CGRect(
+                x: isRightToLeft ? content.minX : content.maxX - metrics.trailingSymbolWidth,
+                y: content.minY,
+                width: metrics.trailingSymbolWidth,
+                height: metrics.symbolSize,
+            )
+            let textWidth = content.width - metrics.trailingSymbolWidth - metrics.columnSpacing
+            let textX = isRightToLeft ? content.minX + metrics.trailingSymbolWidth + metrics.columnSpacing : content.minX
             var y = contentView.bounds.minY + ColumnTableMetrics.rowPadding
-            nameLabel.frame = CGRect(x: content.minX, y: y, width: content.width, height: nameHeight)
+            nameLabel.frame = CGRect(x: textX, y: y, width: textWidth, height: nameLineHeight)
+            subtitleLabel.frame = CGRect(x: textX, y: y + nameLineHeight + ColumnTableMetrics.lineSpacing, width: textWidth, height: nameLineHeight)
             y += nameHeight
             for label in valueLabels {
                 y += ColumnTableMetrics.lineSpacing
-                label.frame = CGRect(x: content.minX, y: y, width: content.width, height: valueHeight)
+                label.frame = CGRect(x: textX, y: y, width: textWidth, height: valueHeight)
                 label.textAlignment = .natural
                 label.isHidden = false
                 y += valueHeight
@@ -267,9 +291,15 @@ final class ColumnTableCell: UITableViewCell {
             x: layout.name.minX,
             y: pixelAligned(contentView.bounds.midY - nameHeight / 2),
             width: layout.name.width,
-            height: nameHeight,
+            height: nameLineHeight,
         )
-        // names and figures differ in size: they share a baseline
+        subtitleLabel.frame = CGRect(
+            x: nameLabel.frame.minX,
+            y: nameLabel.frame.maxY + ColumnTableMetrics.lineSpacing,
+            width: nameLabel.frame.width,
+            height: nameLineHeight,
+        )
+        // The version and figures share a baseline.
         let baseline = nameLabel.frame.minY + metrics.nameFont.ascender
         let valueY = pixelAligned(baseline - metrics.valueFont.ascender)
         for (label, frame) in zip(valueLabels, layout.columns) {

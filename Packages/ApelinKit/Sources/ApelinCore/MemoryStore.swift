@@ -36,8 +36,6 @@ public enum MemoryStoreError: Error, Equatable {
 /// snapshot is ever written back: every mutation locks, rereads and compares
 /// the supplied revision, including creations after a user deleted a record.
 public struct MemoryStore: Sendable {
-    public static let maximumTitleLength = 120
-    public static let maximumBodyLength = 2000
     public static let maximumRecords = 64
     public static let maximumContentBytes = 32768
     private static let maximumFileBytes = 262_144
@@ -107,8 +105,8 @@ public struct MemoryStore: Sendable {
         guard Set(records.map(\.id)).count == records.count else { throw MemoryStoreError.invalidContent }
         for record in records {
             guard UUID(uuidString: record.id) != nil,
-                  !record.title.isEmpty, record.title.count <= Self.maximumTitleLength,
-                  !record.body.isEmpty, record.body.count <= Self.maximumBodyLength,
+                  !record.title.isEmpty,
+                  !record.body.isEmpty,
                   !record.title.contains(where: \.isNewline),
                   !record.title.utf8.contains(0), !record.body.utf8.contains(0),
                   record.projectID.map({ !$0.isEmpty && $0.utf8.count <= 255 && !$0.utf8.contains(0) }) ?? true

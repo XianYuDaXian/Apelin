@@ -178,6 +178,7 @@ class WelcomeController: UIViewController {
         stackView.addArrangedSubview(UILabel().then {
             $0.text = String(localized: "Build on your device, with an agent beside you.")
             $0.font = WelcomeStyle.subtitleFont
+            $0.adjustsFontForContentSizeCategory = true
             $0.textColor = WelcomeStyle.detailColor
             $0.numberOfLines = 0
         })
@@ -194,7 +195,7 @@ class WelcomeController: UIViewController {
             featureRows.append(row)
             stackView.addArrangedSubview(row)
             if index < Self.features.count - 1 {
-                stackView.setCustomSpacing(10, after: row)
+                stackView.setCustomSpacing(18, after: row)
             }
         }
 

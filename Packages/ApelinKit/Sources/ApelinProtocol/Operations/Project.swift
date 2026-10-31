@@ -134,6 +134,36 @@ public struct ProjectRenameResponse: Codable, Sendable, Equatable {
     }
 }
 
+/// A project deleted for good: its folder under `Projects/` with every file
+/// in it, once the session host has closed its conversations' sessions.
+/// The app takes its conversations away when it sees the folder gone. A
+/// temporary chat's folder is no project and is never deleted so.
+public struct ProjectDeleteRequest: OperationRequest {
+    public typealias Response = ProjectDeleteResponse
+    public static let operation = AppOperation.projectDelete
+    public var projectID: String
+    /// Its folder under `Projects/`, when the caller names it: the project
+    /// is deleted only if that folder holds it. The host forwards the
+    /// folder it resolved.
+    public var projectName: String?
+
+    public init(projectID: String, projectName: String? = nil) {
+        self.projectID = projectID
+        self.projectName = projectName
+    }
+}
+
+public struct ProjectDeleteResponse: Codable, Sendable, Equatable {
+    public var projectID: String
+    /// The folder that went.
+    public var projectName: String
+
+    public init(projectID: String, projectName: String) {
+        self.projectID = projectID
+        self.projectName = projectName
+    }
+}
+
 public struct ProjectCreateResponse: Codable, Sendable, Equatable {
     public var projectID: String
     public var name: String
@@ -386,6 +416,10 @@ public extension ApelinService {
     }
 
     func projectRename(_ request: ProjectRenameRequest) async throws -> ProjectRenameResponse {
+        try await send(request)
+    }
+
+    func projectDelete(_ request: ProjectDeleteRequest) async throws -> ProjectDeleteResponse {
         try await send(request)
     }
 }

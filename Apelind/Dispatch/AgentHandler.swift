@@ -47,21 +47,28 @@ enum AgentHandler: DomainHandler {
             return await attach(request, host: host)
         case .agentList:
             return await request.serve(AgentListRequest.self) { list in
-                // An agent lists its own project's conversations, or another
-                // project's it may reach.
-                let caller = try await callerSession(request, host: host)
-                var projectID = caller?.project.id
+                // An agent lists its own project's conversations, another
+                // project's it may reach, or in General Chat every one's it
+                // may reach, with those that have not run since the host
+                // started.
+                if let caller = try await callerSession(request, host: host) {
+                    return try await AgentConversationList.list(
+                        list,
+                        caller: caller,
+                        table: .shared,
+                        registry: host.registry,
+                        home: host.home,
+                        state: host.stateDirectory,
+                    )
+                }
+                // The app's: the sessions it may follow, every project's or one's.
+                var projectID: String?
                 if list.projectID != nil || list.projectName != nil {
-                    let named = try AgentProjects.resolve(
+                    projectID = try AgentProjects.resolve(
                         home: host.home,
                         projectID: list.projectID,
                         projectName: list.projectName,
-                    )
-                    if let caller {
-                        let reachable = await AgentSessionTable.shared.mayReach(named.id, session: caller.sessionID)
-                        try AgentConversationRules.mayReach(named, caller: caller, reachable: reachable)
-                    }
-                    projectID = named.id
+                    ).id
                 }
                 return await AgentListResponse(sessions: AgentSessionTable.shared.summaries(
                     registry: host.registry,
@@ -71,9 +78,7 @@ enum AgentHandler: DomainHandler {
         case .agentClose:
             let reply = await forward(request, AgentCloseRequest.self, host: host) { $0.sessionID }
             if case .success = reply.0.result, let close = try? request.decode(AgentCloseRequest.self) {
-                await host.approvals.forgetSession(close.sessionID)
-                await AgentSessionTable.shared.forgetGrants(close.sessionID)
-                AgentRunCode.stop(session: close.sessionID)
+                await forgetClosed(close.sessionID, host: host)
             }
             return reply
         case .agentRunCode:
@@ -107,6 +112,40 @@ enum AgentHandler: DomainHandler {
             return await host.cancel(request, AgentSignInCancelRequest.self)
         default:
             return request.fail(ApelinError(.badRequest, "\(request.operation.rawValue) is not an agent operation"))
+        }
+    }
+
+    /// A closed session holds nothing it was granted, and no shell_run of
+    /// it goes on.
+    private static func forgetClosed(_ sessionID: String, host: SessionHost) async {
+        await host.approvals.forgetSession(sessionID)
+        await AgentSessionTable.shared.forgetGrants(sessionID)
+        AgentRunCode.stop(session: sessionID)
+    }
+
+    /// Closes every running session of a project, each as `agentClose`
+    /// closes one, before the project's folder goes (`projectDelete`), as
+    /// the app's Delete closes them first. One its worker will not close
+    /// keeps the project.
+    static func closeSessions(ofProject projectID: String, host: SessionHost) async throws {
+        for entry in await AgentSessionTable.shared.running(project: projectID, registry: host.registry) {
+            guard let worker = await host.workers.existing(.agent, instance: entry.sessionID), !worker.channel.isClosed else {
+                continue
+            }
+            do {
+                let (reply, _) = try await worker.call(WireRequest(AgentCloseRequest(sessionID: entry.sessionID)), descriptors: [])
+                // one that ended meanwhile is closed already
+                if case let .failure(error) = reply.result, error.code != .notFound {
+                    throw error
+                }
+            } catch {
+                let reason = (error as? ApelinError)?.message ?? String(describing: error)
+                throw ApelinError(
+                    .conflict,
+                    "the project's conversation “\(entry.title ?? entry.sessionID)” could not be closed (\(reason)), so the project was not deleted",
+                )
+            }
+            await forgetClosed(entry.sessionID, host: host)
         }
     }
 
@@ -159,20 +198,49 @@ enum AgentHandler: DomainHandler {
         }
     }
 
+    /// Opens the session in its turn (`AgentOpenTurns`): an open of a
+    /// session that is already being opened waits for that one to answer,
+    /// then makes every check of its own, so it answers the task the first
+    /// one registered instead of registering another. The session is the
+    /// one the app names to open again, else a new one; an agent's open is
+    /// always of a new one (`AgentConversationRules.childOpen`).
+    private static func open(_ request: HostRequest, host: SessionHost) async -> HostReply {
+        let asked: AgentOpenRequest
+        do {
+            asked = try request.decode(AgentOpenRequest.self)
+        } catch {
+            return request.fail(error)
+        }
+        let sessionID = (request.caller == .app ? asked.sessionID : nil) ?? UUID().uuidString.lowercased()
+        guard UUID(uuidString: sessionID) != nil else {
+            return request.fail(ApelinError(.badRequest, "a session ID must be a UUID"))
+        }
+        let reply = await AgentOpenTurns.shared.run(for: sessionID) {
+            await open(request, asked, sessionID: sessionID, host: host)
+        }
+        return reply ?? request.fail(ApelinError(.cancelled, "the chat was not opened: the request was cancelled"))
+    }
+
     /// Resolves the project, registers the session's task, starts its worker
-    /// and hands it the request with the project filled in by the host. An
+    /// and hands it the request with the project filled in by the host, and
+    /// `hostRestarted` when the app continues a conversation no message has
+    /// reached since this host started (`AgentHostRun`). An
     /// agent's open is rewritten first (`AgentConversationRules.childOpen`),
     /// in its own project or another one it names — which under Confirm
     /// spends the user's approval of exactly that open —, takes one of that
     /// project's places for agent-opened sessions, and is announced on the
     /// opener's own task as `conversationOpened`.
-    private static func open(_ request: HostRequest, host: SessionHost) async -> HostReply {
+    private static func open(
+        _ request: HostRequest,
+        _ asked: AgentOpenRequest,
+        sessionID: String,
+        host: SessionHost,
+    ) async -> HostReply {
         let opener: AgentSessionTable.Entry?
         let open: AgentOpenRequest
         let project: ResolvedProject
         do {
             opener = try await callerSession(request, host: host)
-            let asked = try request.decode(AgentOpenRequest.self)
             if let opener {
                 let target = asked.projectID == nil && asked.projectName == nil
                     ? opener.project
@@ -206,10 +274,9 @@ enum AgentHandler: DomainHandler {
             return request.fail(error)
         }
 
-        let sessionID = open.sessionID ?? UUID().uuidString.lowercased()
-        guard UUID(uuidString: sessionID) != nil else {
-            return request.fail(ApelinError(.badRequest, "a session ID must be a UUID"))
-        }
+        // No other open of this session runs until this one has answered
+        // (`AgentOpenTurns`), so none registers it between this lookup and
+        // the add below, however long the worker takes to open it.
         let existing = await AgentSessionTable.shared.entry(sessionID)
         // A session an agent opened, opened again after the host restarted.
         let saved = existing == nil && opener == nil && open.sessionID != nil
@@ -242,9 +309,14 @@ enum AgentHandler: DomainHandler {
                 ))
             }
         }
-        var resolved = open
+        // Whether the worker is told the host restarted is the host's
+        // decision (`AgentHostRun`), never the caller's.
+        var resolved = await AgentHostRun.shared.forwarded(open, sessionID: sessionID, byApp: opener == nil)
         resolved.projectID = project.id
         resolved.projectName = project.name
+        // Spelled out, so the worker and the host read it the same way.
+        let asksBeforeScreen = ScreenConsent.asks(open.asksBeforeScreen)
+        resolved.asksBeforeScreen = asksBeforeScreen
         let handle = await host.registry.create(kind: .agent, owner: .agent, ownerKey: sessionID)
         await host.notices.opened(session: sessionID, task: handle.taskID, headless: open.closeWhenFinished == true)
         // The host's own Confirm decisions (builds, installs, removals) read
@@ -267,6 +339,10 @@ enum AgentHandler: DomainHandler {
             }
             return request.fail(failure)
         }
+        // the worker took the open's prompt as the conversation's message
+        if open.prompt?.isEmpty == false {
+            await AgentHostRun.shared.messageReached(sessionID)
+        }
         let title = open.title ?? open.prompt.map { String($0.prefix(AgentConversationRules.maximumTitleLength)) }
         if let opener {
             AgentSessionLineage.save(
@@ -283,6 +359,7 @@ enum AgentHandler: DomainHandler {
                 task: handle,
                 project: project,
                 mode: open.approvalMode,
+                asksBeforeScreen: asksBeforeScreen,
                 title: title ?? existing?.title,
                 createdAt: Date(),
                 parentSessionID: opener?.sessionID ?? existing?.parentSessionID ?? saved?.parentSessionID,
@@ -307,8 +384,11 @@ enum AgentHandler: DomainHandler {
     }
 
     /// The app's prompt goes as it is, minus any `fromSessionID`, and sets
-    /// the session's mode first; an agent's is rewritten as a message from
-    /// its session (`AgentConversationRules.childPrompt`) and changes no mode.
+    /// the session's mode and Ask Before Using the Screen first; an agent's
+    /// is rewritten as a message from its session
+    /// (`AgentConversationRules.childPrompt`) and changes neither.
+    /// Either one its worker took has reached the session in this host's
+    /// run (`AgentHostRun`).
     private static func prompt(_ request: HostRequest, host: SessionHost) async -> HostReply {
         let prompt: AgentPromptRequest
         var wire: WireRequest
@@ -343,26 +423,34 @@ enum AgentHandler: DomainHandler {
         } catch {
             return request.fail(error)
         }
-        return await deliver(request, wire, to: prompt.sessionID, host: host) {
-            guard let mode = prompt.approvalMode else { return }
+        let reply = await deliver(request, wire, to: prompt.sessionID, host: host) {
             // Applied before forwarding: the worker can start tools before its reply arrives.
+            if let asks = prompt.asksBeforeScreen {
+                await AgentSessionTable.shared.setAsksBeforeScreen(asks, session: prompt.sessionID)
+            }
+            guard let mode = prompt.approvalMode else { return }
             await host.approvals.setMode(mode, session: prompt.sessionID)
             await AgentSessionTable.shared.setMode(mode, session: prompt.sessionID)
         }
+        if case .success = reply.0.result {
+            await AgentHostRun.shared.messageReached(prompt.sessionID)
+        }
+        return reply
     }
 
     /// An agent reads its own project's conversations, and another
-    /// project's it may reach.
+    /// project's it may reach (`AgentConversationList.mayAttach`).
     private static func attach(_ request: HostRequest, host: SessionHost) async -> HostReply {
         do {
             if let caller = try await callerSession(request, host: host) {
                 let attach = try request.decode(AgentAttachRequest.self)
-                let target = await AgentSessionTable.shared.entry(task: attach.taskID)
-                var reachable = false
-                if let target {
-                    reachable = await AgentSessionTable.shared.mayReach(target.project.id, session: caller.sessionID)
-                }
-                try AgentConversationRules.mayRead(attach.taskID, target: target, caller: caller, reachable: reachable)
+                try await AgentConversationList.mayAttach(
+                    attach.taskID,
+                    caller: caller,
+                    table: .shared,
+                    registry: host.registry,
+                    home: host.home,
+                )
             }
         } catch {
             return request.fail(error)

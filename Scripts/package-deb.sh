@@ -205,7 +205,7 @@ temporary_deb="$output_directory/.$output_name.tmp.$$"
 # Scratch files live in their own per-run directory: macOS mktemp only
 # substitutes trailing Xs, so a file template with a suffix is a fixed path.
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/apelin-deb-scratch.XXXXXX")"
-trap 'rm -rf "$staging" "$scratch"; rm -f "$temporary_deb"' EXIT
+trap 'rm -rf -- "${staging:?}" "${scratch:?}"; rm -f "$temporary_deb"' EXIT
 app_signed_entitlements="$scratch/app-entitlements.plist"
 daemon_signed_entitlements="$scratch/daemon-entitlements.plist"
 chmod 0755 "$staging"
@@ -231,7 +231,7 @@ sed -e "s|@PREFIX@|$install_prefix|g" -e "s|@ROOTFS@|$rootfs|g" "$launch_plist" 
     echo "error: the launch daemon does not point at the installed apelind" >&2
     exit 65
 }
-rm -rf "$installed_app/_CodeSignature"
+rm -rf -- "${installed_app:?}/_CodeSignature"
 rm -f "$installed_app/embedded.mobileprovision"
 chmod 0755 "$installed_daemon"
 # The session host spawns these only if they are root-owned and writable by
@@ -277,7 +277,7 @@ embedded=("$installed_app/Frameworks"/*.dylib "$installed_app/Frameworks"/*.fram
 shopt -u nullglob
 for library in ${embedded[@]+"${embedded[@]}"}; do
     if [[ -d "$library" ]]; then
-        rm -rf "$library/_CodeSignature"
+        rm -rf -- "${library:?}/_CodeSignature"
         library_binary="$library/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$library/Info.plist")"
     else
         library_binary="$library"
@@ -305,7 +305,7 @@ done
 # useless as the app's, and the system refuses to load an appex whose
 # signature does not verify.
 installed_widget="$installed_app/PlugIns/$widget_appex"
-rm -rf "$installed_widget/_CodeSignature"
+rm -rf -- "${installed_widget:?}/_CodeSignature"
 rm -f "$installed_widget/embedded.mobileprovision"
 strip_and_check_private_paths "$installed_widget/$widget_executable"
 ldid -S"$widget_entitlements" -Cadhoc "$installed_widget/$widget_executable"

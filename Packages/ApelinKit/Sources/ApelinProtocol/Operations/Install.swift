@@ -3,13 +3,16 @@ import Foundation
 
 // Install: the session host copies the approved artifact to private staging,
 // checks its digest and hands it to irisind by descriptor; removal only of
-// packages this bridge installed; respring through irisind.
+// packages this bridge installed, which `installationList` lists; respring
+// through irisind.
 // Served by the session host (Apelind/Dispatch/InstallHandler.swift).
 //
 // An install is a task of kind `install`, read with `buildAttach`. Its events:
 // `stage` {stage: staging|submitted|following|recorded}, `irisin` (one per
 // irisind event: {seq, kind, text, phase?, step?, package?, version?,
 // done?, total?, exit?, problem?}), `result` (an InstallResult) and the final
+// `state`. An install irisind refused also has a `conflict` (an
+// InstallConflict) for each installed package in its way, before the final
 // `state`. A removal is the same, kind `install`, ending in a `removed`
 // {installationID, packageID, transactionID} event.
 //
@@ -50,6 +53,47 @@ public struct InstallResult: Codable, Sendable, Equatable {
     }
 }
 
+/// An installed package in the way of an install irisind refused, as the
+/// host found it in the package database afterwards: irisind decided, and
+/// this only says who and what to do.
+public struct InstallConflict: Codable, Sendable, Hashable {
+    public enum Relation: String, Codable, Sendable {
+        /// It already lists a path this package installs.
+        case file
+        /// This package's `Conflicts` names it.
+        case conflicts
+        /// This package's `Breaks` names it.
+        case breaks
+    }
+
+    public var relation: Relation
+    /// For `file`: the first such path, as dpkg lists it.
+    public var file: String?
+    public var packageID: String
+    /// The version installed now.
+    public var version: String
+    /// The installation `removePackage` takes, when Apelin installed this
+    /// version; nil when Apelin did not.
+    public var installationID: String?
+    public var projectID: String?
+
+    public init(
+        relation: Relation,
+        file: String? = nil,
+        packageID: String,
+        version: String,
+        installationID: String? = nil,
+        projectID: String? = nil,
+    ) {
+        self.relation = relation
+        self.file = file
+        self.packageID = packageID
+        self.version = version
+        self.installationID = installationID
+        self.projectID = projectID
+    }
+}
+
 public struct InstallPackageRequest: OperationRequest {
     public typealias Response = TaskHandle
     public static let operation = AppOperation.installPackage
@@ -70,6 +114,69 @@ public struct RemovePackageRequest: OperationRequest {
     public var installationID: String
     public init(installationID: String) {
         self.installationID = installationID
+    }
+}
+
+/// The packages this bridge installed that are still on the device: per
+/// package, its newest installation record — the one a removal acts on,
+/// any older one being superseded —, newest first. The records are root's;
+/// this is how a conversation finds an installation it did not make.
+public struct InstallationListRequest: OperationRequest {
+    public typealias Response = InstallationListResponse
+    public static let operation = AppOperation.installationList
+    /// Only this package.
+    public var packageID: String?
+    /// Only what this project's builds installed.
+    public var projectID: String?
+
+    public init(packageID: String? = nil, projectID: String? = nil) {
+        self.packageID = packageID
+        self.projectID = projectID
+    }
+}
+
+public struct InstallationSummary: Codable, Sendable, Equatable {
+    public var installationID: String
+    public var packageID: String
+    public var version: String
+    /// The project and build whose artifact it was; nil for a file the app
+    /// installed and for a toolchain.
+    public var projectID: String?
+    public var buildID: String?
+    /// When irisind reported the install finished.
+    public var installedAt: Date
+    /// Whether `removePackage` from this caller would act on it. An agent's
+    /// removal still asks under Confirm.
+    public var removable: Bool
+    /// Why it would not, in the words of that refusal.
+    public var reason: String?
+
+    public init(
+        installationID: String,
+        packageID: String,
+        version: String,
+        projectID: String? = nil,
+        buildID: String? = nil,
+        installedAt: Date,
+        removable: Bool,
+        reason: String? = nil,
+    ) {
+        self.installationID = installationID
+        self.packageID = packageID
+        self.version = version
+        self.projectID = projectID
+        self.buildID = buildID
+        self.installedAt = installedAt
+        self.removable = removable
+        self.reason = reason
+    }
+}
+
+public struct InstallationListResponse: Codable, Sendable, Equatable {
+    public var installations: [InstallationSummary]
+
+    public init(installations: [InstallationSummary]) {
+        self.installations = installations
     }
 }
 
@@ -140,6 +247,10 @@ public extension ApelinService {
 
     func removePackage(installationID: String) async throws -> TaskHandle {
         try await send(RemovePackageRequest(installationID: installationID))
+    }
+
+    func installationList(packageID: String? = nil, projectID: String? = nil) async throws -> InstallationListResponse {
+        try await send(InstallationListRequest(packageID: packageID, projectID: projectID))
     }
 
     func respring() async throws {

@@ -235,10 +235,36 @@ public final class SchemaValidator: @unchecked Sendable {
         if let cached = patterns[pattern] {
             expression = cached
         } else {
-            expression = try! NSRegularExpression(pattern: pattern)
+            expression = try! NSRegularExpression(pattern: Self.endAnchored(pattern))
             patterns[pattern] = expression
         }
         lock.unlock()
         return expression.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+
+    /// ECMA-262's `$`, which matches only at the end of input, as
+    /// `_pattern_matches` spells it: ICU's `$` also matches before a final
+    /// line terminator, so "x\n" would pass `^[a-z]+$`. An anchor `$` (not
+    /// escaped, not in a character class) becomes `\z`.
+    private static func endAnchored(_ pattern: String) -> String {
+        var translated = ""
+        var escaped = false
+        var inClass = false
+        for character in pattern {
+            if escaped {
+                escaped = false
+            } else if character == "\\" {
+                escaped = true
+            } else if character == "[" {
+                inClass = true
+            } else if character == "]" {
+                inClass = false
+            } else if character == "$", !inClass {
+                translated += "\\z"
+                continue
+            }
+            translated.append(character)
+        }
+        return translated
     }
 }

@@ -5,7 +5,9 @@ import Foundation
 /// Conversations an agent opened (`AgentConversations`), taken in as the
 /// app's own: listed in the project it was opened in — the opener's, or
 /// another one the opener named, General Chat's included —, followed like
-/// any other, and never selected on their own.
+/// any other, and never selected on their own. Each is listed by `now`, the
+/// time it was taken in, until the reader writes in it
+/// (`ChatSummary.lastInteraction`): never by when its agent last wrote.
 enum ChatAdoption {
     /// The record for a `conversationOpened` event on `parent`'s task, or
     /// nil when a record already has that session or the event names none.
@@ -23,7 +25,7 @@ enum ChatAdoption {
         else { return nil }
         let title = title(payload?["title"]?.stringValue, prompt: payload?["prompt"]?.stringValue)
         return ChatRecord(
-            summary: ChatSummary(title: title, updated: now, projectName: project, isWorking: true),
+            summary: ChatSummary(title: title, lastInteraction: now, projectName: project, isWorking: true),
             sessionID: sessionID,
             task: task,
         )
@@ -33,7 +35,7 @@ enum ChatAdoption {
     /// not following its opener, or nil when it has one already, has ended,
     /// or its opener has no record. Its project is the one the host lists
     /// it in, else the opener's.
-    static func record(session: AgentSessionSummary, records: [ChatRecord]) -> ChatRecord? {
+    static func record(session: AgentSessionSummary, records: [ChatRecord], now: Date = Date()) -> ChatRecord? {
         guard let parentID = session.parentSessionID, !session.state.isTerminal,
               !records.contains(where: { $0.sessionID == session.sessionID }),
               let parent = records.first(where: { $0.sessionID == parentID }),
@@ -42,7 +44,7 @@ enum ChatAdoption {
         return ChatRecord(
             summary: ChatSummary(
                 title: title(session.title, prompt: nil),
-                updated: session.updatedAt,
+                lastInteraction: now,
                 projectName: project,
             ),
             sessionID: session.sessionID,
@@ -54,12 +56,17 @@ enum ChatAdoption {
     /// has no opener to take the project from, in `projectName`, the
     /// project the host names for it; nil when a record has it already.
     /// Ended or not: the link asked for it, and its log still reads.
-    static func record(linked session: AgentSessionSummary, projectName: String, records: [ChatRecord]) -> ChatRecord? {
+    static func record(
+        linked session: AgentSessionSummary,
+        projectName: String,
+        records: [ChatRecord],
+        now: Date = Date(),
+    ) -> ChatRecord? {
         guard !records.contains(where: { $0.sessionID == session.sessionID }) else { return nil }
         return ChatRecord(
             summary: ChatSummary(
                 title: title(session.title, prompt: nil),
-                updated: session.updatedAt,
+                lastInteraction: now,
                 projectName: projectName,
                 isWorking: !session.state.isTerminal,
             ),

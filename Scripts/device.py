@@ -713,7 +713,10 @@ class Run:
             target.run(f'mkdir -p "{folder}" && cat > "{destination}.part" && mv -f "{destination}.part" "{destination}"',
                        stdin=source.read_bytes())
         elif 'removeProject' in action:
-            target.run(f'rm -rf "$DATA/Projects/"{shlex.quote(action["removeProject"])}')
+            name = action['removeProject']
+            if not name or '/' in name:
+                raise HarnessError(f'removeProject needs a folder name, not {name!r}')
+            target.run(f'rm -rf "${{DATA:?}}/Projects/"{shlex.quote(name)}')
         elif 'stageSDK' in action:
             # The inbox import moves its source in; a registered SDK's tree is
             # an SDK folder too, so a copy of one stands in for a new one. An
@@ -837,7 +840,8 @@ echo "fired at $(date +%H:%M:%S.%N | cut -c1-12)"
                 except HarnessError as error:
                     warn(f'cleanup after {self.name}: {error}')
             for name in self.staged:
-                target.run(f'rm -rf "$DATA/inbox/"{shlex.quote(name)}', check=False)
+                if name and '/' not in name:
+                    target.run(f'rm -rf "${{DATA:?}}/inbox/"{shlex.quote(name)}', check=False)
         return self.done(self.status or 'PASS', self.reason)
 
     def guard_orphans(self, facts):

@@ -71,6 +71,10 @@ enum EnvironmentPrompt {
         /// Which of `probedCommands` shell_run finds on its search path; nil
         /// when nobody looked.
         var commandsFound: Set<String>?
+        /// The folders the read tools reach besides the project.
+        var readOnlyRoots: ReadOnlyRoots = .none
+        /// The agent tool extensions whose tools the session offers.
+        var toolExtensions: [OfferedToolExtension] = []
 
         var environment: DevelopmentEnvironment {
             DevelopmentEnvironment.resolve(registered, binding: binding)
@@ -90,8 +94,13 @@ enum EnvironmentPrompt {
     }
 
     /// Read from the registries in the data folder and, in a project, its
-    /// `apelin-project.json`.
-    static func inputs(_ configuration: AgentSessionConfiguration, root: ScopedRoot, device: DeviceFacts) -> Inputs {
+    /// `apelin-project.json`; the extensions are the session's offer.
+    static func inputs(
+        _ configuration: AgentSessionConfiguration,
+        root: ScopedRoot,
+        device: DeviceFacts,
+        toolExtensions: [OfferedToolExtension] = [],
+    ) -> Inputs {
         let inProject = !configuration.project.isTemporary
         return Inputs(
             registered: RegisteredEnvironment.read(DataFolder(root: configuration.dataRoot.url)),
@@ -101,6 +110,8 @@ enum EnvironmentPrompt {
             installRoot: configuration.installRoot,
             home: configuration.dataRoot.home.path,
             commandsFound: configuration.installRoot.map(commandsFound(installRoot:)),
+            readOnlyRoots: ReadOnlyRoots(installRoot: configuration.installRoot, dataRoot: configuration.dataRoot),
+            toolExtensions: toolExtensions,
         )
     }
 
@@ -128,10 +139,19 @@ enum EnvironmentPrompt {
             lines.append(
                 "- On roothide the bootstrap's shell and tools see the bootstrap as `/` and the real root as `/rootfs`, so `pwd -P`, `realpath` and the like print `/var/mobile/…` or `/rootfs/…` for a path the toolchain's compilers know by another name: give the compilers paths relative to the working directory, or under `$APELIN_PROJECT_ROOT`, the project's real path.",
             )
+            // The jbroot was renamed on a device between two runs of one
+            // chat, which trusted the paths it had written down.
+            lines.append(
+                "- roothide can rename the install root when the device is rebooted or jailbroken again, and everything under it moves: Apelin's data folder (in the jbroot's own `var/mobile`), the project's real path, `$APELIN_PROJECT_ROOT`, `$APELIN_TOOLCHAIN_BIN`, `SDKROOT`, every toolchain and SDK path above. Never write such a path into anything that outlives this run (project files, build scripts, Makefiles, AGENTS.md or CLAUDE.md, memory, skills, package scripts, code): code finds it at run time as roothide's `jbroot()` does (the apelin-bootstrap-paths skill's `ApelinBootstrapPath()`), plists and maintainer scripts use `@PREFIX@` and `@ROOTFS@`, and a script uses the variables Apelin sets when it runs or paths relative to the project.",
+            )
         }
         if let found = inputs.commandsFound {
             lines.append(commandsLine(found))
         }
+        if let line = readOnlyLine(inputs.readOnlyRoots) {
+            lines.append(line)
+        }
+        lines += ToolExtensionOffer.environmentLines(inputs.toolExtensions)
         // The records are files mobile can write: whatever they hold stays
         // on its line.
         return lines.map(ProjectTree.printable).joined(separator: "\n")
@@ -150,7 +170,7 @@ enum EnvironmentPrompt {
         guard !toolchains.isEmpty else {
             return ["- Toolchains: none installed. Building needs one: the user sets it up in Settings ▸ Toolchains."]
         }
-        var lines = ["- Toolchains (each registered only after its installed tools passed the self-test):"]
+        var lines = ["- Toolchains (each registered only after its installed tools passed the self-test; the user removes one in Settings ▸ Toolchains):"]
         for record in toolchains {
             var facts = ["Command Line Tools \(record.version)", languages(record)]
             if let host = record.compatibility?.minimumHost {
@@ -190,7 +210,7 @@ enum EnvironmentPrompt {
         guard !sdks.isEmpty else {
             return ["- SDKs: none registered. Building needs one: the user imports it in Settings ▸ SDKs."]
         }
-        var lines = ["- iPhoneOS SDKs (registered):"]
+        var lines = ["- iPhoneOS SDKs (registered; the user removes one in Settings ▸ SDKs):"]
         let prepared = environment.toolchain?.record
         for record in sdks {
             var marks: [String] = []
@@ -234,7 +254,24 @@ enum EnvironmentPrompt {
         if !found.isEmpty, !missing.isEmpty {
             line += " Not installed: " + missing.joined(separator: ", ") + "."
         }
+        // A package is apelin_project_build's: dpkg-deb builds one only in
+        // the script a workspace declares for it.
+        if found.contains("dpkg-deb") {
+            line += " dpkg-deb builds a package only inside a workspace's declared build script, which apelin_project_build runs; never build one with it yourself."
+        }
         return line + " The bootstrap's other commands are not macOS's (GNU sed, a different plutil): read a Mac build script's commands before running it, and say what is missing rather than looking for it."
+    }
+
+    /// Where a header the project does not hold is read: a template's
+    /// support headers (the Preferences framework's among them) are in its
+    /// extension's folder, an SDK's under the SDK's path.
+    private static func readOnlyLine(_ roots: ReadOnlyRoots) -> String? {
+        guard let described = roots.described else { return nil }
+        var line = "- file_read, file_list, file_grep and file_find also read, never write, an absolute path inside \(described)."
+        if roots.developmentExtensions != nil {
+            line += " The headers a template's support component adds, such as the Preferences framework's, are in `<extension id>/support/include` there."
+        }
+        return line
     }
 
     private static func preparedLine(_ inputs: Inputs, environment: DevelopmentEnvironment) -> String {

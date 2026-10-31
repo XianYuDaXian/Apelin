@@ -295,6 +295,9 @@ public struct ProjectDocument: Codable, Sendable, Equatable {
         public var version: String
         public var description: String
         public var longDescription: [String]?
+        /// The control's `Icon`, an https URL; templates write their
+        /// extension's icon on Apelin's Pages.
+        public var icon: String?
         public var author: String
         public var maintainer: String?
         public var section: String

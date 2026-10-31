@@ -16,6 +16,7 @@ enum BuiltInSkills {
         preferenceBundle,
         projectDescription,
         externalBuild,
+        deviceExecutables,
         packagingAndInstall,
         packageDependencies,
         crashTriage,

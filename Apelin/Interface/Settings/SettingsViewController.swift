@@ -1,15 +1,10 @@
-import ApelinProtocol
+import ApelinCore
 import Then
 import UIKit
 
-/// Settings, in a sheet off the sidebar's gear. Model Providers first — one
-/// row, how many are signed in beside it, opening the providers agent
-/// sessions sign in to (`ModelProvidersController`) —, then Environment —
-/// the toolchain and the SDKs a project builds with, each with what is
-/// installed beside its name — then Git, the commit author and HTTPS
-/// credentials (`GitSettingsController`), then About: the version this build
-/// carries, the licenses it ships under and its logs (`LogsController`).
-/// The `…` in the bar opens the onboarding again, or a new GitHub issue.
+/// Settings groups agent preferences, the development environment, Git and About.
+/// Only Memories shows a count, refreshed whenever Settings appears.
+/// The `…` in the bar opens onboarding again or a new GitHub issue.
 final class SettingsViewController: TableController {
     private enum Section: Hashable, CaseIterable {
         case agent
@@ -50,11 +45,8 @@ final class SettingsViewController: TableController {
         dataSource.update(Section.allCases.map { section in
             (section, rows(in: section).map { row in
                 let detail: String? = switch row {
-                case .modelProviders: providerSummary
                 case .permissionMode: AgentPermissions.title(for: AgentPermissions.mode)
-                case .toolchain: toolchainSummary
-                case .sdks: sdkSummary
-                case .templates: templateSummary
+                case .memories: memorySummary
                 default: nil
                 }
                 return RowContent(row: row, detail: detail)
@@ -62,14 +54,8 @@ final class SettingsViewController: TableController {
         }, reconfigure: true)
     }
 
-    /// What the rows show beside their names, read on every appearance; nil
-    /// until the first answer.
-    private var providerSummary: String?
-    private var toolchainSummary: String?
-    private var sdkSummary: String?
-    private var templateSummary: String?
+    private var memorySummary: String?
     private var loader: Task<Void, Never>?
-    private var providerLoader: Task<Void, Never>?
 
     init() {
         super.init(style: .insetGrouped)
@@ -104,8 +90,7 @@ final class SettingsViewController: TableController {
         super.viewWillAppear(animated)
         dataSource.beginLoad()
         updateRows()
-        loadSummaries()
-        loadProviderSummary()
+        loadMemorySummary()
     }
 
     private func rows(in section: Section) -> [Row] {
@@ -117,66 +102,15 @@ final class SettingsViewController: TableController {
         }
     }
 
-    private func loadSummaries() {
+    private func loadMemorySummary() {
         loader?.cancel()
+        let store = MemoryStore(root: DataFolder.app.root)
         loader = Task { [weak self] in
-            async let toolchain = Self.toolchainSummary()
-            async let sdks = Self.sdkSummary()
-            async let templates = Self.templateSummary()
-            let (toolchainText, sdkText) = await (toolchain, sdks)
+            let count = await Task.detached { try? store.read().records.count }.value
             guard !Task.isCancelled, let self else { return }
-            toolchainSummary = toolchainText
-            sdkSummary = sdkText
-            templateSummary = await templates
+            memorySummary = count?.formatted()
             updateRows()
         }
-    }
-
-    private func loadProviderSummary() {
-        providerLoader?.cancel()
-        providerLoader = Task { [weak self] in
-            let text = await Self.providerSummary()
-            guard !Task.isCancelled, let self else { return }
-            providerSummary = text
-            updateRows()
-        }
-    }
-
-    /// How many providers are signed in; "None" before the first.
-    private static func providerSummary() async -> String {
-        guard let list = try? await ApelinService.app.agentAccountList() else {
-            return String(localized: "Unavailable")
-        }
-        let signedIn = list.accounts.filter(\.signedIn).count
-        return signedIn == 0 ? String(localized: "None") : signedIn.formatted()
-    }
-
-    /// How many are installed; "In Progress" while one is being set up.
-    private static func toolchainSummary() async -> String {
-        guard let status = try? await ApelinService.app.toolchainStatus() else {
-            return String(localized: "Unavailable")
-        }
-        if !status.activeTasks.isEmpty {
-            return String(localized: "In Progress")
-        }
-        return status.toolchains.count.formatted()
-    }
-
-    private static func sdkSummary() async -> String {
-        guard let list = try? await ApelinService.app.sdkList() else {
-            return String(localized: "Unavailable")
-        }
-        if !list.activeTasks.isEmpty {
-            return String(localized: "In Progress")
-        }
-        return list.sdks.count.formatted()
-    }
-
-    private static func templateSummary() async -> String {
-        guard let catalog = try? await ApelinService.app.extensionList() else {
-            return String(localized: "Unavailable")
-        }
-        return catalog.extensions.filter(\.problems.isEmpty).reduce(0) { $0 + $1.templates.count }.formatted()
     }
 
     private func header(for section: Section) -> String? {
@@ -190,8 +124,8 @@ final class SettingsViewController: TableController {
 
     private func footer(for section: Section) -> String? {
         switch section {
-        case .agent: AgentPermissions.explanation
-        case .environment: String(localized: "Toolchains, SDKs and project templates available on this device.")
+        case .agent: nil
+        case .environment: nil
         case .git:
             String(localized: "The author of your commits, your GitHub account, and the package repository your releases are published to.")
         case .about: nil
@@ -264,6 +198,17 @@ final class SettingsViewController: TableController {
         case .version: return
         }
         navigationController?.pushViewController(page, animated: true)
+    }
+
+    /// Settings as the sidebar's gear opens it, but already at Git, for a
+    /// page whose next step is set up there: a package repository, and the
+    /// GitHub sign-in it needs. Back leads to the rest of Settings.
+    static func presentGit(from presenter: UIViewController) {
+        let settings = SettingsViewController()
+        // the Git page's Back is made from the title and back button mode
+        // this page sets as it loads
+        settings.loadViewIfNeeded()
+        presenter.presentPageAsFormSheet(settings, openedAt: GitSettingsController())
     }
 
     /// Closes Settings and shows the welcome pages from the start.

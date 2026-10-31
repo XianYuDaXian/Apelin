@@ -1,4 +1,5 @@
 @testable import ApelinAgent
+import struct ApelinProtocol.ApelinError
 import Foundation
 
 /// A throwaway home with `Documents/wiki.qaq.apelin/Projects/<name>/`.
@@ -89,6 +90,7 @@ actor MockBackend: AgentHostBackend {
         case confirmLoaded(build: String, target: String)
         case createProject(template: String, name: String, values: [String: TemplateValue])
         case renameProject(projectID: String, displayName: String, automatic: Bool)
+        case deleteProject(projectID: String, folder: String, evidence: ApprovalEvidence)
         case gitStatus
         case gitDiff(path: String?, staged: Bool)
         case gitStage([String])
@@ -97,7 +99,7 @@ actor MockBackend: AgentHostBackend {
         case gitInit
         case gitFetch(remote: String?)
         case gitPull(remote: String?)
-        case gitPush(remote: String?, branch: String?, evidence: ApprovalEvidence)
+        case gitPush(remote: String?, branch: String?, url: String?, evidence: ApprovalEvidence)
         case gitClone(url: String, branch: String?)
         case gitSetAuthor(name: String?, email: String?)
         case gitSaveCredential(host: String, username: String, token: String)
@@ -115,7 +117,52 @@ actor MockBackend: AgentHostBackend {
         case toolchainSelfTest(String)
         case sdkImport(url: String, branch: String, evidence: ApprovalEvidence)
         case checkEnvironment(toolchainID: String?, sdkID: String?)
+        case feedback(title: String, body: String, evidence: ApprovalEvidence)
+        case feedbackRead(Int)
+        case feedbackEdit(FeedbackEditToolRequest)
+        case createRepository(RepositoryCreateApproval, evidence: ApprovalEvidence)
+        case createIssue(IssueCreateApproval, evidence: ApprovalEvidence)
+        case publishPackages(PackagePublishApproval, evidence: ApprovalEvidence)
         case other(String)
+    }
+
+    /// What apelin_package_publish reads before it asks: a linked
+    /// repository, a sign-in, and the builds a test records.
+    var publishRepository: PackagePublication.Repository? = .init(
+        fullName: "someone/packages",
+        sourceURL: "https://someone.github.io/packages/",
+    )
+    var publishSignedIn: Bool? = true
+    var buildRecords: [String: PackageBuildRecord] = [:]
+
+    func setPublishing(repository: PackagePublication.Repository?, signedIn: Bool?) {
+        publishRepository = repository
+        publishSignedIn = signedIn
+    }
+
+    func record(_ build: PackageBuildRecord) {
+        buildRecords[build.buildID] = build
+    }
+
+    func packagePublication(_ request: PackagePublicationRequest) -> PackagePublication {
+        PackagePublication(
+            repository: publishRepository,
+            signedIn: publishSignedIn,
+            builds: request.buildIDs.map { buildRecords[$0] },
+        )
+    }
+
+    func publishPackages(_ request: PackagePublishToolRequest) -> PackagePublishToolResponse {
+        calls.append(.publishPackages(request.publication, evidence: request.context.approval))
+        let files = request.publication.packages.map { "\($0.packageID)_\($0.version)_\($0.architecture).deb" }
+        return PackagePublishToolResponse(
+            repository: request.publication.repository,
+            sourceURL: request.publication.sourceURL,
+            published: files,
+            alreadyPublished: [],
+            commit: "abc123",
+            next: "Package managers see them once the repository's workflow on GitHub has indexed debs/.",
+        )
     }
 
     /// What apelin_toolchain_list and apelin_sdk_list answer.
@@ -138,9 +185,17 @@ actor MockBackend: AgentHostBackend {
     /// Other projects resolve_project finds, by name or id.
     var otherProjects: [String: ProjectIdentity] = [:]
 
+    /// What apelin_project_list answers: none, as a backend without other
+    /// projects answers, unless a test lists some.
+    var listedProjects = ProjectListToolResponse(projects: [], truncated: false)
+
     func addProject(_ identity: ProjectIdentity) {
         otherProjects[identity.id] = identity
         otherProjects[identity.name.rawValue] = identity
+    }
+
+    func setListedProjects(_ listing: ProjectListToolResponse) {
+        listedProjects = listing
     }
 
     func setFindings(_ findings: [EnvironmentDiagnostic], forSDK sdkID: String) {
@@ -193,14 +248,60 @@ actor MockBackend: AgentHostBackend {
         )
     }
 
-    func install(_ request: InstallRequest) -> InstallResponse {
-        calls.append(.install(artifact: request.artifactID, digest: request.artifactDigest, packaging: request.packagingDescriptionDigest, evidence: request.context.approval))
-        return InstallResponse(transactionID: "tx-1", installationID: "inst-1", packageID: "wiki.qaq.hello", version: "1.0", succeeded: true)
+    /// Whether the installer reports success.
+    var installSucceeds = true
+
+    func setInstallSucceeds(_ succeeds: Bool) {
+        installSucceeds = succeeds
     }
 
-    func removePackage(_ request: RemovePackageRequest) -> RemovePackageResponse {
+    func install(_ request: InstallRequest) -> InstallResponse {
+        calls.append(.install(artifact: request.artifactID, digest: request.artifactDigest, packaging: request.packagingDescriptionDigest, evidence: request.context.approval))
+        return InstallResponse(
+            transactionID: "tx-1",
+            installationID: installSucceeds ? "inst-1" : nil,
+            packageID: "wiki.qaq.hello",
+            version: "1.0",
+            succeeded: installSucceeds,
+        )
+    }
+
+    /// What apelin_package_list answers, newest first, as the host would;
+    /// nil for a host that cannot list them, so a removal goes by its id.
+    var installedPackages: [ListedInstallation]?
+    /// Whether that list was cut short.
+    var installationsTruncated = false
+    /// Every installation list asked for, package and project; a read, so
+    /// not among `calls`.
+    var installationQueries: [InstallationListToolRequest] = []
+    /// What the host answers a removal with instead of removing.
+    var removalRefusal: ApelinError?
+
+    func setInstallations(_ installations: [ListedInstallation], truncated: Bool = false) {
+        installedPackages = installations
+        installationsTruncated = truncated
+    }
+
+    func setRemovalRefusal(_ refusal: ApelinError?) {
+        removalRefusal = refusal
+    }
+
+    func removePackage(_ request: RemovePackageRequest) throws -> RemovePackageResponse {
+        if let removalRefusal {
+            throw removalRefusal
+        }
         calls.append(.removePackage(request.installationID))
         return RemovePackageResponse(transactionID: "tx-2", succeeded: true)
+    }
+
+    func installations(_ request: InstallationListToolRequest) throws -> InstallationListToolResponse {
+        installationQueries.append(request)
+        guard let installedPackages else { throw ToolDeniedError(message: "installed packages are not available here") }
+        let listed = installedPackages.filter {
+            (request.packageID == nil || $0.packageID == request.packageID)
+                && (request.projectID == nil || $0.projectID == request.projectID)
+        }
+        return InstallationListToolResponse(installations: listed, truncated: installationsTruncated)
     }
 
     func respring(_: RespringRequest) -> RespringResponse {
@@ -210,7 +311,7 @@ actor MockBackend: AgentHostBackend {
 
     func confirmLoaded(_ request: ConfirmLoadedRequest) -> ConfirmLoadedResponse {
         calls.append(.confirmLoaded(build: request.buildID, target: request.target))
-        return ConfirmLoadedResponse(markerLogged: true, imageLoaded: true, filterMatches: true, logEvidence: ["Hello loaded build-1"])
+        return ConfirmLoadedResponse(loaded: true, markerLogged: true, filterMatches: true, logEvidence: ["Hello loaded build-1"])
     }
 
     func readLogs(_: ReadLogsRequest) -> ReadLogsResponse {
@@ -310,7 +411,12 @@ actor MockBackend: AgentHostBackend {
     }
 
     func gitPush(_ request: GitRemoteToolRequest) -> GitTaskToolResponse {
-        calls.append(.gitPush(remote: request.remote, branch: request.branch, evidence: request.context.approval))
+        calls.append(.gitPush(
+            remote: request.remote,
+            branch: request.branch,
+            url: request.url,
+            evidence: request.context.approval,
+        ))
         return GitTaskToolResponse(remote: request.remote ?? "origin", branch: request.branch, commit: "abc123")
     }
 
@@ -337,6 +443,29 @@ actor MockBackend: AgentHostBackend {
     func gitRemoveCredential(_ request: GitCredentialRemoveToolRequest) -> GitSettingsToolResponse {
         calls.append(.gitRemoveCredential(host: request.host))
         return GitSettingsToolResponse()
+    }
+
+    func createIssue(_ request: IssueCreateToolRequest) -> IssueCreateToolResponse {
+        let issue = IssueCreateApproval(repository: request.repository, title: request.title, body: request.body)
+        calls.append(.createIssue(issue, evidence: request.context.approval))
+        return IssueCreateToolResponse(repository: request.repository, issue: 7, url: "https://github.com/\(request.repository)/issues/7")
+    }
+
+    func createRepository(_ request: RepositoryCreateToolRequest) -> RepositoryCreateToolResponse {
+        let repository = RepositoryCreateApproval(
+            owner: request.owner,
+            name: request.name,
+            visibility: request.visibility,
+            description: request.description,
+        )
+        calls.append(.createRepository(repository, evidence: request.context.approval))
+        let fullName = (request.owner ?? "someone") + "/" + request.name
+        return RepositoryCreateToolResponse(
+            fullName: fullName,
+            cloneURL: "https://github.com/\(fullName).git",
+            url: "https://github.com/\(fullName)",
+            next: "git_push with url https://github.com/\(fullName).git",
+        )
     }
 
     func conversationCreate(_ request: ConversationCreateToolRequest) -> ConversationCreateToolResponse {
@@ -380,9 +509,18 @@ actor MockBackend: AgentHostBackend {
         return found
     }
 
+    func projects() -> ProjectListToolResponse {
+        listedProjects
+    }
+
     func renameProject(_ request: ProjectRenameToolRequest) -> ProjectRenameToolResponse {
         calls.append(.renameProject(projectID: request.projectID, displayName: request.displayName, automatic: request.automatic))
         return ProjectRenameToolResponse(projectID: request.projectID, folder: request.folder, displayName: request.displayName, changed: true)
+    }
+
+    func deleteProject(_ request: ProjectDeleteToolRequest) -> ProjectDeleteToolResponse {
+        calls.append(.deleteProject(projectID: request.projectID, folder: request.folder, evidence: request.context.approval))
+        return ProjectDeleteToolResponse(projectID: request.projectID, folder: request.folder)
     }
 
     func toolchains(context _: HostCallContext) -> ToolchainListToolResponse {
@@ -411,6 +549,64 @@ actor MockBackend: AgentHostBackend {
     }
 
     /// The registry's digest of each id is `sha256:<id>`.
+    func sendFeedback(_ request: FeedbackToolRequest) -> FeedbackToolResponse {
+        calls.append(.feedback(title: request.title, body: request.body, evidence: request.context.approval))
+        return FeedbackToolResponse(repository: "owngoal-dev/Apelin", issue: 7, url: "https://github.com/owngoal-dev/Apelin/issues/7")
+    }
+
+    /// What apelin_feedback_read answers, by number: #12, the user's own,
+    /// unless a test sets others.
+    var feedbackIssues: [Int: FeedbackReadToolResponse] = [12: FeedbackReadToolResponse(
+        repository: "owngoal-dev/Apelin",
+        issue: 12,
+        url: "https://github.com/owngoal-dev/Apelin/issues/12",
+        title: "The build log stops early",
+        state: "open",
+        author: "someone",
+        openedByUser: true,
+        body: "It ends before the link step.",
+        footer: "Sent with Apelin 0.2.7 (18) · iOS 17.3.1 · rootless",
+    )]
+
+    func setFeedbackIssue(_ issue: FeedbackReadToolResponse) {
+        feedbackIssues[issue.issue] = issue
+    }
+
+    func readFeedback(_ request: FeedbackReadToolRequest) throws -> FeedbackReadToolResponse {
+        calls.append(.feedbackRead(request.number))
+        guard let issue = feedbackIssues[request.number] else {
+            throw ToolDeniedError(message: "owngoal-dev/Apelin has no issue #\(request.number)")
+        }
+        return issue
+    }
+
+    /// Applied to the issue, as GitHub would, so a read after it sees it.
+    func editFeedback(_ request: FeedbackEditToolRequest) -> FeedbackEditToolResponse {
+        calls.append(.feedbackEdit(request))
+        if let issue = feedbackIssues[request.number] {
+            feedbackIssues[request.number] = FeedbackReadToolResponse(
+                repository: issue.repository,
+                issue: issue.issue,
+                url: issue.url,
+                title: request.title ?? issue.title,
+                state: issue.state,
+                author: issue.author,
+                openedByUser: issue.openedByUser,
+                body: request.body ?? issue.body,
+                footer: issue.footer,
+            )
+        }
+        let changed: [String] = [request.title.map { _ in "title" }, request.body.map { _ in "body" }].compactMap(\.self)
+        return FeedbackEditToolResponse(
+            repository: "owngoal-dev/Apelin",
+            issue: request.number,
+            url: "https://github.com/owngoal-dev/Apelin/issues/\(request.number)",
+            changed: changed,
+            title: request.title ?? request.expectedTitle,
+            body: request.body ?? request.expectedBody,
+        )
+    }
+
     func checkEnvironment(_ request: EnvironmentCheckToolRequest) -> EnvironmentCheckToolResponse {
         calls.append(.checkEnvironment(toolchainID: request.toolchainID, sdkID: request.sdkID))
         let toolchain = request.toolchainID ?? "clt-16.4-c"
@@ -425,6 +621,47 @@ actor MockBackend: AgentHostBackend {
     func conversationStop(_ request: ConversationStopToolRequest) -> ConversationActionToolResponse {
         calls.append(.conversationStop(sessionID: request.sessionID, close: request.close))
         return ConversationActionToolResponse(sessionID: request.sessionID, done: request.close ? "closed" : "stopped")
+    }
+
+    // MARK: Agent tool extensions
+
+    /// The extension of each tool session the host opened, in order; the
+    /// session's ID is `tool-session-<n>`.
+    var toolSessionsOpened: [String] = []
+    var toolSessionsClosed: [String] = []
+    /// Every call made, in a session the host had or not.
+    var toolCalls: [ToolExtensionCallRequest] = []
+    /// Sessions the host let go when their extension exited.
+    var toolSessionsEnded: Set<String> = []
+    /// What a call in a session the host has answers.
+    var toolAnswer: @Sendable (ToolExtensionCallRequest) -> ToolExtensionCallResponse = { request in
+        ToolExtensionCallResponse(text: "\(request.tool) ran")
+    }
+
+    func setToolAnswer(_ answer: @escaping @Sendable (ToolExtensionCallRequest) -> ToolExtensionCallResponse) {
+        toolAnswer = answer
+    }
+
+    /// The extension of `sessionID` exits, and the host lets the session go.
+    func endToolSession(_ sessionID: String) {
+        toolSessionsEnded.insert(sessionID)
+    }
+
+    func openToolExtension(id: String) -> String {
+        toolSessionsOpened.append(id)
+        return "tool-session-\(toolSessionsOpened.count)"
+    }
+
+    func callToolExtension(_ request: ToolExtensionCallRequest) throws -> ToolExtensionCallResponse {
+        toolCalls.append(request)
+        guard !toolSessionsEnded.contains(request.sessionID) else {
+            throw ApelinError(.notFound, "no tool session \(request.sessionID)")
+        }
+        return toolAnswer(request)
+    }
+
+    func closeToolExtension(sessionID: String) {
+        toolSessionsClosed.append(sessionID)
     }
 }
 

@@ -21,7 +21,7 @@ public enum ProviderKeyVerification {
                         ?? (ProviderModels.isDeepSeek(credentials)
                             ? ProviderModels.list(provider, credentials: credentials).first
                             : nil)
-                    guard let resolved = try await registerStored(storeId: provider.storeID, manager: manager, modelOverride: model) else {
+                    guard let resolved = try await ProviderRegistration.resolve(storeID: provider.storeID, manager: manager, modelOverride: model) else {
                         throw ApelinError(.badRequest, "The provider could not be configured.")
                     }
                     let auth = try await resolved.authResolver?(resolved.model, nil)

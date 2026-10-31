@@ -132,6 +132,31 @@ final class ExternalBuildTests: XCTestCase {
         }
     }
 
+    /// A workspace rewritten by hand as a description lacks what only
+    /// projectCreate writes. A switch of its SDK is answered with the check
+    /// that says so, field by field, and no binding, not refused unread.
+    func testASwitchOnAWorkspaceRewrittenAsADescriptionAnswersItsCheck() throws {
+        let imported = try workspace(script: "exit 0\n")
+        let manifest = imported.root.appendingPathComponent("apelin-project.json")
+        var document = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: manifest)) as? [String: Any])
+        document["kind"] = "tweak"
+        document["buildSystem"] = nil
+        document["external"] = nil
+        try JSONSerialization.data(withJSONObject: document, options: [.sortedKeys]).write(to: manifest)
+
+        let check = try worker.projectCheck(ProjectCheckRequest(
+            projectID: imported.id,
+            environment: ProjectEnvironmentChoice(sdkID: "iPhoneOS18.2-aaaaaaaa"),
+        ))
+        XCTAssertFalse(check.passed)
+        XCTAssertNil(check.environment, "the project file did not read")
+        XCTAssertNil(check.buildSystem)
+        let invalid = check.diagnostics.filter { $0.code == "project.invalid" }
+        for missing in ["missing template", "missing environment"] {
+            XCTAssertTrue(invalid.contains { $0.field == "/" && $0.message == missing }, "\(missing): \(check.diagnostics)")
+        }
+    }
+
     func testBuildRunsTheScriptAndRegistersItsOnePackage() throws {
         let deb = try package(.roothide)
         let project = try workspace(
@@ -154,6 +179,11 @@ final class ExternalBuildTests: XCTestCase {
         let work = worker.store.buildsDirectory.appendingPathComponent(project.id).appendingPathComponent(taskID.rawValue)
         XCTAssertEqual(artifact.path, work.appendingPathComponent("package/\(deb.lastPathComponent)").path, "the package stays in the build's folder")
         XCTAssertEqual(artifact.digest, try CanonicalJSON.sha256Tag(Data(contentsOf: deb)))
+        XCTAssertEqual(
+            artifact.packageFiles,
+            ["/Library/MobileSubstrate/DynamicLibraries/Imported.dylib", "/Library/MobileSubstrate/DynamicLibraries/Imported.plist"],
+            "the workspace's own package is listed for the host, folders left out",
+        )
 
         let record = try ArtifactStore(store: worker.store).load(taskID.rawValue)
         XCTAssertEqual(record.buildSystem, .external)
@@ -174,6 +204,19 @@ final class ExternalBuildTests: XCTestCase {
         ] {
             XCTAssertTrue(environment.split(separator: "\n").contains(Substring(line)), "\(line) in\n\(environment)")
         }
+    }
+
+    /// Either build's record lists what the deb installs for the host: no
+    /// folder, links too, fewest components first, so a list cut at its
+    /// limit keeps an app's executable before its resources.
+    func testPackageFilesKeepTheShallowestWhenCapped() throws {
+        var writer = DebPackageWriter(control: DebianControlFile(package: "com.example.big", version: "1", architecture: "iphoneos-arm64e", description: "Big"))
+        writer.entries = (0 ..< 300).map { .file(String(format: "/Applications/Big.app/Assets/a%03d", $0), contents: Data()) }
+            + [.file("/Applications/Big.app/Big", contents: Data(), mode: 0o755), .symbolicLink("/usr/bin/big", target: "../../Applications/Big.app/Big")]
+        let files = try ArtifactRecord.packageFiles(of: DebArchiveReader.contents(of: .data(writer.data())))
+        XCTAssertEqual(files.count, BuildArtifact.maximumPackageFiles)
+        XCTAssertEqual(Array(files.prefix(3)), ["/Applications/Big.app/Big", "/usr/bin/big", "/Applications/Big.app/Assets/a000"])
+        XCTAssertFalse(files.contains("/Applications/Big.app"), "a folder is no one's file")
     }
 
     /// A workspace has no description for the distribution check to read,

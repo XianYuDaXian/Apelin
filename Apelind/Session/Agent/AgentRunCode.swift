@@ -65,32 +65,86 @@ enum AgentRunCode {
         installRoot == "/" ? "" : installRoot
     }
 
-    static func resolveExecutable(_ name: String, installRoot: String) throws -> String {
-        guard !name.isEmpty, !name.contains("/"), !CanonicalPath.containsNUL(name), name != ".", name != ".." else {
-            throw ApelinError(.badRequest, "shell_run takes an executable name, not a path")
-        }
-        for directory in DevelopmentEnvironment.searchPath(installRoot: installRoot) {
-            guard let path = CanonicalPath.resolve(directory + "/" + name) else { continue }
-            var metadata = stat()
-            if stat(path, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG, metadata.st_mode & 0o111 != 0 {
-                return path
-            }
-        }
-        throw ApelinError(.notFound, "\(name) is not in the bootstrap's bin directories")
+    /// Where `sh` would find the command `name`: the first directory of
+    /// `searchPath` holding an executable file of that name, canonical. Nil
+    /// when none does, and for a path, which is not looked up.
+    static func findExecutable(_ name: String, in searchPath: [String]) -> String? {
+        guard !name.isEmpty, !name.contains("/"), name != ".", name != ".." else { return nil }
+        return searchPath.lazy.compactMap { executableFile($0 + "/" + name) }.first
     }
 
-    /// The argv to exec, its first element a canonical path.
-    private static func argv(for spec: RunCodeSpec, installRoot: String) throws -> [String] {
+    /// `path` canonicalised, when that is a regular file with an execute bit.
+    private static func executableFile(_ path: String) -> String? {
+        guard let real = CanonicalPath.resolve(path) else { return nil }
+        var metadata = stat()
+        guard stat(real, &metadata) == 0, metadata.st_mode & S_IFMT == S_IFREG, metadata.st_mode & 0o111 != 0 else {
+            return nil
+        }
+        return real
+    }
+
+    /// Where a run looks a bare command name up. An ordinary one looks
+    /// where its shell would, on the `PATH` it gets, the prepared
+    /// toolchain's tools first, so `argv: ["clang", …]` runs what
+    /// `bash -c "clang …"` does. A preset and a run as root look in the
+    /// bootstrap's and the system's directories alone: a preset's checks
+    /// vetted the bootstrap's git, and root runs a dependency install, never
+    /// a compiler, so it takes no command from the toolchain's place, which
+    /// a record in mobile's folder names.
+    static func searchPath(for identity: Identity, environment: [String], installRoot: String) -> [String] {
+        guard identity == .mobile(preset: nil), let path = environment.first(where: { $0.hasPrefix("PATH=") }) else {
+            return DevelopmentEnvironment.searchPath(installRoot: installRoot)
+        }
+        return path.dropFirst("PATH=".count).split(separator: ":").map(String.init)
+    }
+
+    /// What a run execs and the argv it hands over. A word with a slash is
+    /// a path, read from `directory` unless absolute; any other is looked
+    /// up in `searchPath(for:)`. What runs is the canonical file checked
+    /// here, but an argv keeps the request's own words, as a shell's does:
+    /// `clang++` and `swiftc` are links to tools that read the name they
+    /// were called by, and called `clang` or `swift-frontend` they would not
+    /// compile C++ or Swift.
+    static func invocation(
+        _ spec: RunCodeSpec,
+        as identity: Identity,
+        environment: [String],
+        installRoot: String,
+        directory: String,
+    ) throws -> (executable: String, argv: [String]) {
+        let searched = searchPath(for: identity, environment: environment, installRoot: installRoot)
+        let lookedIn = switch identity {
+        case .mobile(preset: nil):
+            "on shell_run's PATH (the prepared toolchain's tools, when one is installed, then the bootstrap's bin directories)"
+        case .mobile:
+            "in the bootstrap's bin directories, where a preset looks"
+        case .root:
+            "in the bootstrap's bin directories, where a run as root looks"
+        }
         switch spec {
         case let .argv(argv):
-            guard let name = argv.first else { throw ApelinError(.badRequest, "shell_run needs an executable") }
+            guard let name = argv.first, !name.isEmpty else {
+                throw ApelinError(.badRequest, "shell_run needs an executable")
+            }
             guard argv.allSatisfy({ !CanonicalPath.containsNUL($0) }), argv.count <= maximumArguments else {
                 throw ApelinError(
                     .badRequest,
                     "shell_run takes at most \(maximumArguments) arguments, and none may contain a NUL byte",
                 )
             }
-            return try [resolveExecutable(name, installRoot: installRoot)] + argv.dropFirst()
+            if name.contains("/") {
+                guard let path = executableFile(name.hasPrefix("/") ? name : directory + "/" + name) else {
+                    throw ApelinError(.notFound, "\(name) is not an executable file")
+                }
+                return (path, argv)
+            }
+            guard let path = findExecutable(name, in: searched) else {
+                throw ApelinError(
+                    .notFound,
+                    "\(name) is not \(lookedIn): give the executable's path, or run a shell builtin with bash -c",
+                )
+            }
+            return (path, argv)
         case let .script(interpreter, source):
             guard let flag = interpreters.first(where: { $0.name == interpreter })?.flag else {
                 let names = interpreters.map(\.name).joined(separator: ", ")
@@ -102,7 +156,10 @@ enum AgentRunCode {
                     "the script must not contain a NUL byte or be larger than \(maximumSourceBytes / 1024) KiB",
                 )
             }
-            return try [resolveExecutable(interpreter, installRoot: installRoot), flag, source]
+            guard let path = findExecutable(interpreter, in: searched) else {
+                throw ApelinError(.notFound, "\(interpreter) is not \(lookedIn)")
+            }
+            return (path, [path, flag, source])
         }
     }
 
@@ -145,7 +202,6 @@ enum AgentRunCode {
             nil
         }
         let asRoot = identity == .root
-        let argv = try argv(for: preset.map { .argv($0.argv) } ?? request.spec, installRoot: installRoot)
         let directory = try workingDirectory(request.workingDirectory, project: project.path)
         let environment = Self.environment(
             preset: preset,
@@ -154,11 +210,19 @@ enum AgentRunCode {
             home: home,
             asRoot: asRoot,
         )
+        let command = try invocation(
+            preset.map { .argv($0.argv) } ?? request.spec,
+            as: identity,
+            environment: environment,
+            installRoot: installRoot,
+            directory: directory,
+        )
         let timeout = request.timeoutSeconds
         let session = request.sessionID
         return try await offThePool {
             try execute(
-                argv: argv,
+                command.executable,
+                argv: command.argv,
                 environment: environment,
                 directory: directory,
                 timeoutSeconds: timeout,
@@ -236,6 +300,7 @@ enum AgentRunCode {
     ) async -> AgentRunCodeResponse? {
         try? await offThePool {
             try execute(
+                argv[0],
                 argv: argv,
                 environment: environment,
                 directory: directory,
@@ -247,7 +312,10 @@ enum AgentRunCode {
         }
     }
 
+    /// Execs `executable` with `argv`, which a run takes from the request
+    /// (`invocation`) and `capture` starts with the path itself.
     private static func execute(
+        _ executable: String,
         argv: [String],
         environment: [String],
         directory: String,
@@ -309,14 +377,14 @@ enum AgentRunCode {
         var pid: pid_t = 0
         let status = cStrings(argv) { argvPointer in
             cStrings(environment) { environmentPointer in
-                posix_spawn(&pid, argv[0], &actions, &attributes, argvPointer, environmentPointer)
+                posix_spawn(&pid, executable, &actions, &attributes, argvPointer, environmentPointer)
             }
         }
         close(out[1])
         close(err[1])
         guard status == 0 else {
             close(out[0]); close(err[0])
-            throw ApelinError(.internal, "posix_spawn \(argv[0]): \(String(cString: strerror(status)))")
+            throw ApelinError(.internal, "posix_spawn \(executable): \(String(cString: strerror(status)))")
         }
 
         let stdout = CappedReader(descriptor: out[0], cap: outputCap)

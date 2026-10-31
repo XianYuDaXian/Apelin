@@ -221,7 +221,7 @@ public struct ToolchainTaskToolResponse: Sendable, Hashable, Codable {
     public var succeeded: Bool
     public var toolchain: InstalledToolchain?
     public var stages: [String]
-    /// Self-test cases that failed: `swift · arm64e: <detail>`.
+    /// A sentence naming each failed self-test, followed by its diagnostic on a new line.
     public var failedTests: [String]
     public var warnings: [String]
     public var message: String?

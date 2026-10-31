@@ -22,6 +22,25 @@ struct EventRelayTests {
         var tokens: [Double] {
             lock.withLock { events.filter { $0.0 == "received" }.compactMap { $0.1?["tokens"]?.doubleValue } }
         }
+
+        func payloads(of kind: String) -> [ApelinCore.JSONValue?] {
+            lock.withLock { events.filter { $0.0 == kind }.map(\.1) }
+        }
+    }
+
+    /// kwwk asks again for a message it had begun: the app takes back what
+    /// it showed, then hears the request is being made again.
+    @Test
+    func `a message given up follows its text out, and the request made again follows it`() async {
+        let emitted = Emitted()
+        let relay = EventRelay { emitted.append($0, $1) }
+        await relay.relay(.messageStarted)
+        await relay.relay(.textDelta("Partial"))
+        await relay.relay(.messageDiscarded)
+        await relay.relay(.reconnecting)
+        await relay.relay(.messageStarted)
+        #expect(emitted.kinds == ["messageStarted", "text", "messageDiscarded", "reconnecting", "messageStarted"])
+        #expect(emitted.payloads(of: "messageDiscarded") == [nil] && emitted.payloads(of: "reconnecting") == [nil])
     }
 
     @Test

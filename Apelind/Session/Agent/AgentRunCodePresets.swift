@@ -151,7 +151,7 @@ extension AgentRunCode {
         project: String,
         installRoot: String,
     ) async -> Bool {
-        guard let git = try? resolveExecutable("git", installRoot: installRoot),
+        guard let git = findExecutable("git", in: DevelopmentEnvironment.searchPath(installRoot: installRoot)),
               let found = await capture(
                   [git] + gitOverrides + ["rev-parse", "--absolute-git-dir", "--git-common-dir", "--show-toplevel"],
                   environment: gitEnvironment(project: project) + ["HOME=/var/empty"],
@@ -198,7 +198,7 @@ extension AgentRunCode {
     /// or global config, as mobile (`capture`): every key's name, or nil
     /// when git cannot read the file.
     private static func configNames(at path: String, installRoot: String) async -> [String]? {
-        guard let git = try? resolveExecutable("git", installRoot: installRoot),
+        guard let git = findExecutable("git", in: DevelopmentEnvironment.searchPath(installRoot: installRoot)),
               let listed = await capture(
                   [git, "config", "--file", path, "--list", "--name-only", "--null"],
                   environment: ["GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL=/dev/null", "HOME=/var/empty"],

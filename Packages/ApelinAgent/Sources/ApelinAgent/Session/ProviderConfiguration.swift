@@ -19,8 +19,8 @@ public enum ProviderConfiguration: Sendable, Hashable, Codable {
     case githubCopilot(model: String)
     /// Any other login kwwk stores, by its store id (`openai-codex`,
     /// `kimi-coding`, `google-api-key`, …), registered by kwwk's own
-    /// `registerStored` exactly as the cases above are. A nil model is the
-    /// provider's own default, kwwk's choice.
+    /// `registerStored`, or Apelin's DeepSeek registration. A nil model is
+    /// the provider's own default.
     case stored(storeID: String, model: String?)
     /// A model already registered on kwwk's `APIRegistry` (tests and
     /// in-process fakes). Needs no credential.
@@ -114,8 +114,8 @@ enum ProviderReasoning {
 }
 
 enum ProviderResolver {
-    /// Registers the provider on kwwk's registry from `credentials`, through
-    /// kwwk's own stored-provider code, and returns the model to use.
+    /// Registers the provider on kwwk's registry from `credentials`, with
+    /// the same model capabilities used when verifying the account.
     static func resolve(
         _ configuration: ProviderConfiguration,
         credentials: any CredentialSource,
@@ -134,8 +134,8 @@ enum ProviderResolver {
         // never writes them anywhere. Its refreshers are kwwk's own, with
         // Kimi's given an identity so that it never reaches for ~/.kwwk.
         let manager = OAuthManager(source: credentials, providers: KimiIdentity.refreshers())
-        guard let resolved = try await registerStored(
-            storeId: storeID,
+        guard let resolved = try await ProviderRegistration.resolve(
+            storeID: storeID,
             manager: manager,
             modelOverride: configuration.modelID,
         ) else {

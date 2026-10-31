@@ -324,6 +324,7 @@ final class FixtureProtocolTests: XCTestCase {
                     .merging(fields("done", "total", "exit", as: .number)) { a, _ in a },
             ),
             "result": Shape(type: .typed(InstallResult.self)),
+            "conflict": Shape(type: .typed(InstallConflict.self)),
             "state": state(["result": .typed(InstallResult.self)]),
         ],
         // Apelind ▸ Session/Terminal/TerminalHost.swift.

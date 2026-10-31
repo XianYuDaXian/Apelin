@@ -29,18 +29,26 @@ struct PromptState: Equatable {
     /// to read them.
     static let maximumDelta = 4000
 
+    /// `toolExtensions`: the extensions whose tools the session offers now,
+    /// which only change between runs; nil reads what is installed.
     static func read(
         _ configuration: AgentSessionConfiguration,
         root: ScopedRoot,
         skills: [SkillDocument],
         device: DeviceFacts = .current,
+        toolExtensions: [OfferedToolExtension]? = nil,
     ) -> PromptState {
         let memory = try? MemoryStore(root: configuration.dataRoot.url).read().forProject(configuration.project.id)
+        let extensions = toolExtensions ?? ToolExtensionOffer.read(
+            installRoot: configuration.installRoot,
+            policy: configuration.toolExtensionPolicy,
+        ).extensions
+        let inputs = EnvironmentPrompt.inputs(configuration, root: root, device: device, toolExtensions: extensions)
         return PromptState(
             instructions: SystemPrompt.projectInstructions(in: root),
             skills: skills,
             memory: memory?.records,
-            environment: EnvironmentPrompt.section(EnvironmentPrompt.inputs(configuration, root: root, device: device)),
+            environment: EnvironmentPrompt.section(inputs),
             buildSystem: ProjectBuildSystem.read(in: root),
         )
     }
@@ -171,6 +179,7 @@ struct PromptState: Equatable {
         arguments: JSONValue,
         into told: PromptState,
         now: PromptState,
+        project: ProjectIdentity,
     ) -> PromptState {
         var told = told
         switch tool {
@@ -180,7 +189,16 @@ struct PromptState: Equatable {
             let id = arguments.argString("id").flatMap { $0.isEmpty ? nil : $0 }
             let title = arguments.argString("title")?.trimmingCharacters(in: .whitespacesAndNewlines)
             let known = Set((told.memory ?? []).map(\.id))
-            let saved = memory.filter { $0.id == id || (id == nil && $0.title == title && !known.contains($0.id)) }
+            // A new record kept for another project is not one this chat
+            // sees: one of its title here was made by someone else.
+            let named = arguments.argNonEmptyString("project")?.trimmingCharacters(in: .whitespaces)
+            let elsewhere = named.map { $0 != project.id && $0 != project.name.rawValue } ?? false
+            let global = arguments.argString("scope") == "global"
+            let made = { (record: MemoryRecord) in
+                id == nil && record.title == title && !known.contains(record.id)
+                    && (global ? record.projectID == nil : !elsewhere && record.projectID != nil)
+            }
+            let saved = memory.filter { $0.id == id || made($0) }
             var records = told.memory ?? []
             for record in saved {
                 if let index = records.firstIndex(where: { $0.id == record.id }) {

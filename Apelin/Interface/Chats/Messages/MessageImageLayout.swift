@@ -4,6 +4,53 @@ import Foundation
 /// Aspect-aware album rows. Keep input order and use small, uniform gutters.
 enum MessageImageLayout {
     static let spacing: CGFloat = 2
+    /// The least a tile is drawn at, however few pixels its image has.
+    static let minimumSide: CGFloat = 32
+
+    /// The album `frames(aspectRatios:width:maximumHeight:)` lays out, made
+    /// no larger than its images: shrunk until the image it enlarges least
+    /// is drawn at `naturalSizes`, its own size in points, but never below
+    /// `minimumSide` on a tile's shorter side, nor above the limits. An
+    /// image of unknown size (nil) keeps the album as large as the limits.
+    static func frames(
+        aspectRatios: [CGFloat],
+        naturalSizes: [CGSize?],
+        width: CGFloat,
+        maximumHeight: CGFloat = .greatestFiniteMagnitude,
+    ) -> [CGRect] {
+        let full = frames(aspectRatios: aspectRatios, width: width, maximumHeight: maximumHeight)
+        guard !full.isEmpty, naturalSizes.count == full.count else { return full }
+        var leastEnlargement = CGFloat.infinity
+        var shortestSide = CGFloat.infinity
+        for (frame, natural) in zip(full, naturalSizes) {
+            guard let natural, natural.width.isFinite, natural.height.isFinite,
+                  natural.width > 0, natural.height > 0
+            else { return full }
+            // a tile fills with its image, so the image covers both sides
+            leastEnlargement = min(leastEnlargement, max(frame.width / natural.width, frame.height / natural.height))
+            shortestSide = min(shortestSide, frame.width, frame.height)
+        }
+        var scale = min(1, 1 / leastEnlargement)
+        if scale * shortestSide < minimumSide {
+            scale = min(1, minimumSide / shortestSide)
+        }
+        guard scale < 1 else { return full }
+        // Laid out again at the smaller width. The gutters stay as wide, so
+        // the tiles shrink a little more than the album does: it is widened
+        // until its shortest side is back at the minimum (a side grows at
+        // least as fast as the album, so one step reaches it), never past
+        // the album the limits allow.
+        let fullWidth = full.map(\.maxX).max() ?? 0
+        var albumWidth = fullWidth * scale
+        var fitted = frames(aspectRatios: aspectRatios, width: albumWidth, maximumHeight: maximumHeight)
+        for _ in 0 ..< 3 {
+            let shortest = fitted.map { min($0.width, $0.height) }.min() ?? 0
+            guard shortest > 0, shortest < minimumSide - 0.001, albumWidth < fullWidth else { break }
+            albumWidth = min(fullWidth, albumWidth * minimumSide / shortest)
+            fitted = frames(aspectRatios: aspectRatios, width: albumWidth, maximumHeight: maximumHeight)
+        }
+        return fitted
+    }
 
     static func frames(
         aspectRatios: [CGFloat],

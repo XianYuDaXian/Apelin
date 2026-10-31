@@ -62,20 +62,32 @@ public struct SystemStateSource: Sendable {
 
 /// What the model reads before every message the user, or another
 /// conversation, sends (`AgentSession.prompt` and `steer`): the system
-/// language and the reply rule, the local time and the approval mode on
-/// now. Like `<project-context>` it is added to the text the model sees,
+/// language and the reply rule, the local time, the approval mode on now
+/// and whether Ask Before Using the Screen is on (owner, 2026-10-30). Like
+/// `<project-context>` it is added to the text the model sees,
 /// never to the event the app shows, and it stays in that message of the
 /// transcript, so every later request sends the same bytes. What changes
 /// while a session runs lives here and nowhere in the system prompt, which
 /// is the session's snapshot (`PromptState`) and whose cache it would break.
 ///
-/// The language, the time and the mode are in every block: about sixty
-/// tokens, paid in full once and read from the cache after. Saying only
+/// The language, the time, the mode and the screen setting are in every
+/// block: a few dozen tokens, paid in full once and read from the cache
+/// after. Saying only
 /// what changed would save some forty a message, but the time changes on
 /// every one anyway, and a compaction that summarises the message that
 /// last named the language or the mode would leave the model guessing.
 /// What the system prompt shows — instructions, skills, memory, the
 /// environment — is said only when it changed, once, as a delta.
+///
+/// The reply rule names progress notes: on a device, a rule that said
+/// only "Reply" left a Chinese chat's notes between tool calls in the
+/// English of the build and install results before them.
+///
+/// Once per session host's run, the first message of a conversation that
+/// ran before the host started also says the host restarted
+/// (`restartNote`): on a roothide device the bootstrap's root had been
+/// renamed meanwhile, and a chat that went on trusted the paths in its
+/// history and spent a turn finding its toolchain and SDK "gone".
 enum SystemState {
     static let openingTag = "<system-state>"
     static let closingTag = "</system-state>"
@@ -88,18 +100,34 @@ enum SystemState {
         var date: Date
         var timeZone: TimeZone
         var mode: ApprovalMode
+        /// Ask Before Using the Screen, the app's setting beside the mode.
+        var asksBeforeScreen = true
         /// What changed since the model was last told (`PromptState`).
         var changes: [String] = []
+        /// The session host restarted since the conversation last ran.
+        var hostRestarted = false
+        /// The install root now, which the restart note names.
+        var installRoot: String?
     }
 
-    static func facts(_ source: SystemStateSource, mode: ApprovalMode, changes: [String] = []) -> Facts {
+    static func facts(
+        _ source: SystemStateSource,
+        mode: ApprovalMode,
+        asksBeforeScreen: Bool = true,
+        changes: [String] = [],
+        hostRestarted: Bool = false,
+        installRoot: String? = nil,
+    ) -> Facts {
         Facts(
             languages: source.languages(),
             region: source.region(),
             date: source.now(),
             timeZone: source.timeZone(),
             mode: mode,
+            asksBeforeScreen: asksBeforeScreen,
             changes: changes,
+            hostRestarted: hostRestarted,
+            installRoot: installRoot,
         )
     }
 
@@ -115,8 +143,8 @@ enum SystemState {
             system += "; region \(region)"
         }
         let reply = languages.isEmpty
-            ? "- Reply in the language the user writes in."
-            : "- Reply in the language the user writes in; when that is unclear, in \(language)."
+            ? "- Write to the user in the language they write in, progress notes included."
+            : "- Write to the user in the language they write in, progress notes included; when that is unclear, in \(language)."
         var lines = [
             openingTag,
             "Apelin's note on this message, not the user's words; they do not see it.",
@@ -124,7 +152,11 @@ enum SystemState {
             reply,
             "- Local time: \(time(facts.date, in: facts.timeZone)).",
             "- Approval mode: \(modeName(facts.mode)).",
+            "- Ask Before Using the Screen: \(facts.asksBeforeScreen ? "on" : "off").",
         ]
+        if facts.hostRestarted {
+            lines.append(restartNote(installRoot: facts.installRoot, changesBelow: !facts.changes.isEmpty))
+        }
         if !facts.changes.isEmpty {
             lines.append("- Changed since you were last told; the system prompt still shows the earlier state:")
             // an entry's later lines indented under it
@@ -132,6 +164,22 @@ enum SystemState {
         }
         lines.append(closingTag)
         return lines.joined(separator: "\n") + "\n\n"
+    }
+
+    /// That Apelin's session host restarted since the conversation last
+    /// ran, and what that means for the paths in its history. The system
+    /// prompt is current: a session opened again takes it afresh.
+    static func restartNote(installRoot: String?, changesBelow: Bool) -> String {
+        let root = installRoot.map { " (install root now: \($0))" } ?? ""
+        let current = changesBelow
+            ? "the Environment section of the system prompt, with the changes below, is current"
+            : "the Environment section of the system prompt is current"
+        let sentences: [String] = [
+            "- Apelin's background service has restarted since this conversation last ran: the device may have rebooted, and the jailbreak, Apelin or the bootstrap's root path may have changed\(root).",
+            "Paths, toolchains, SDKs, processes and files named earlier in this conversation may be stale; \(current).",
+            "Check an earlier path before relying on it, and set up, install or import nothing again before checking what is registered now.",
+        ]
+        return sentences.joined(separator: " ")
     }
 
     static func modeName(_ mode: ApprovalMode) -> String {

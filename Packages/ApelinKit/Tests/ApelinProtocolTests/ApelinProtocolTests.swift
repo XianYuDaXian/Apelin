@@ -99,6 +99,15 @@ final class OperationTableTests: XCTestCase {
         XCTAssertNil(old.contextWindow)
     }
 
+    /// A tap answers nothing, as `Acknowledged` did; a `type` answers what
+    /// the fields hold.
+    func testAUIActionAnswersOnlyWhatATypeLeft() throws {
+        XCTAssertEqual(try JSONCoding.decode(UIActionResponse.self, from: Data("{}".utf8)), UIActionResponse())
+        let typed = UIActionResponse(typedTextMatches: false, fieldValues: ["Hello wrd"])
+        XCTAssertEqual(try JSONCoding.decode(UIActionResponse.self, from: JSONCoding.encode(typed)), typed)
+        XCTAssertEqual(try String(decoding: JSONCoding.encode(UIActionResponse()), as: UTF8.self), "{}")
+    }
+
     /// Full is a new mode; old stored and wire values still decode, and a
     /// shell_run request carries `asRoot` and the approve request
     /// `ownerVerified` through the wire.
@@ -116,6 +125,17 @@ final class OperationTableTests: XCTestCase {
         // An open request written before Full decodes unchanged.
         let open = try JSONCoding.decode(AgentOpenRequest.self, from: Data(#"{"approvalMode":"confirm"}"#.utf8))
         XCTAssertEqual(open.approvalMode, .confirm)
+        // Ask Before Using the Screen: absent is on, so a caller that never
+        // heard of it cannot turn it off; only false does.
+        XCTAssertNil(open.asksBeforeScreen)
+        XCTAssertTrue(ScreenConsent.asks(open.asksBeforeScreen))
+        XCTAssertFalse(try ScreenConsent.asks(request(for: AgentOpenRequest(asksBeforeScreen: false)).asksBeforeScreen))
+        let prompt = try request(for: AgentPromptRequest(sessionID: "s", text: "t", asksBeforeScreen: true))
+        XCTAssertEqual(prompt.asksBeforeScreen, true)
+        XCTAssertNil(try request(for: AgentPromptRequest(sessionID: "s", text: "t")).asksBeforeScreen)
+        XCTAssertTrue(ScreenConsent.usesScreen(.argv(["icli", "url", "open", "https://example.com"])))
+        XCTAssertTrue(ScreenConsent.usesScreen(.script(interpreter: "sh", source: "icli screen info | head")))
+        XCTAssertFalse(ScreenConsent.usesScreen(.argv(["make", "all"])))
 
         let root = AgentRunCodeRequest(sessionID: "s", spec: .argv(["irisin-cli", "install"]), approval: .relaxed, asRoot: true)
         let rootWire = try request(for: root)

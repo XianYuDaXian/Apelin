@@ -99,7 +99,7 @@ output_deb="$output_directory/${package_id}_${version}_${architecture}.deb"
 staging="$(mktemp -d "${TMPDIR:-/tmp}/apelin-agent-tool.XXXXXX")"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/apelin-agent-tool-scratch.XXXXXX")"
 temporary_deb="$output_directory/.$(basename "$output_deb").tmp.$$"
-trap 'rm -rf "$staging" "$scratch"; rm -f "$temporary_deb"' EXIT
+trap 'rm -rf -- "${staging:?}" "${scratch:?}"; rm -f "$temporary_deb"' EXIT
 chmod 0755 "$staging"
 
 root="$staging$install_prefix"

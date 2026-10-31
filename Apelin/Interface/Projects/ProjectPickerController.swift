@@ -111,11 +111,10 @@ final class ProjectPickerController: UIViewController {
             primaryAction: UIAction { [weak self] _ in self?.openNewProject() },
         ).then { $0.accessibilityLabel = String(localized: "New Project") }
         collectionView.delegate = self
-        // the symbol alone, as the sidebar's empty list; the words are for VoiceOver
         collectionView.backgroundView = EmptyStateView(
             symbolName: "folder.fill",
-            text: String(localized: "No projects yet. Use New Project to create one."),
-            showsText: true,
+            title: String(localized: "No Projects Yet"),
+            text: String(localized: "Tap “+” to create a project."),
         )
         collectionView.backgroundView?.isHidden = !projects.isEmpty
         view.addSubview(collectionView)
@@ -162,12 +161,19 @@ final class ProjectPickerController: UIViewController {
             snapshot.appendSections([kind.rawValue])
             snapshot.appendItems(matches, toSection: kind.rawValue)
         }
-        if dataSource.snapshot().sectionIdentifiers.isEmpty {
+        collectionView.backgroundView?.isHidden = !projects.isEmpty
+        if !collectionView.isFilled {
             dataSource.applyFirst(snapshot, to: collectionView)
         } else {
-            dataSource.applyChange(snapshot, to: collectionView)
+            let currentSnapshot = dataSource.snapshot()
+            // Deleting also publishes a catalog notification. Its identical
+            // result must not interrupt the removal animation already running.
+            guard currentSnapshot.sectionIdentifiers != snapshot.sectionIdentifiers
+                || currentSnapshot.itemIdentifiers != snapshot.itemIdentifiers
+            else { return }
+            let animated = collectionView.window != nil && !UIAccessibility.isReduceMotionEnabled
+            dataSource.apply(snapshot, animatingDifferences: animated)
         }
-        collectionView.backgroundView?.isHidden = !projects.isEmpty
     }
 
     private func confirmDelete(_ project: ProjectSummary) {

@@ -4,8 +4,8 @@
 import UIKit
 
 /// FlowDown's square icon tile with its caption underneath.
-final class ComposerGiantButton: UIControl {
-    private let imageView = UIImageView()
+final class ComposerGiantButton: UIButton {
+    private let iconView = UIImageView()
     private let backgroundView = UIView()
     private let labelView = UILabel()
     var actionBlock: () -> Void = {}
@@ -17,10 +17,10 @@ final class ComposerGiantButton: UIControl {
         backgroundView.layer.cornerCurve = .continuous
         backgroundView.isUserInteractionEnabled = false
         addSubview(backgroundView)
-        imageView.contentMode = .scaleAspectFit
-        imageView.tintColor = .label.withAlphaComponent(0.75)
-        imageView.image = UIImage(named: icon)?.withRenderingMode(.alwaysTemplate)
-        backgroundView.addSubview(imageView)
+        iconView.contentMode = .scaleAspectFit
+        iconView.tintColor = .label.withAlphaComponent(0.75)
+        iconView.image = UIImage(named: icon)?.withRenderingMode(.alwaysTemplate)
+        backgroundView.addSubview(iconView)
         labelView.text = title
         labelView.textAlignment = .center
         labelView.font = .preferredFont(forTextStyle: .footnote)
@@ -32,7 +32,7 @@ final class ComposerGiantButton: UIControl {
         isAccessibilityElement = true
         accessibilityTraits = .button
         accessibilityLabel = title
-        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(onTapped)))
+        addTarget(self, action: #selector(onTapped), for: .primaryActionTriggered)
     }
 
     @available(*, unavailable)
@@ -41,20 +41,21 @@ final class ComposerGiantButton: UIControl {
     }
 
     @objc private func onTapped() {
-        puddingAnimate()
         actionBlock()
     }
 
-    override func accessibilityActivate() -> Bool {
-        actionBlock()
-        return true
+    override var isHighlighted: Bool {
+        didSet {
+            backgroundView.alpha = isHighlighted ? 0.4 : 1
+            labelView.alpha = isHighlighted ? 0.4 : 1
+        }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
         let labelHeight = max(32, labelView.font.lineHeight + 12)
         backgroundView.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height - labelHeight)
-        imageView.frame = CGRect(
+        iconView.frame = CGRect(
             x: (backgroundView.bounds.width - 28) / 2,
             y: (backgroundView.bounds.height - 28) / 2,
             width: 28,

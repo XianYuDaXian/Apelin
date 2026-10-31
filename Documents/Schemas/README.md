@@ -58,7 +58,7 @@ other hidden configuration.
 | `configurations` | `Debug` and `Release`, each `{optimization: "0"…"3"/"s"/"z", debugInfo, defines?, cFlags?, swiftFlags?, linkFlags?}`. A define's name may not start with `APELIN_`. A flag is one argv element starting with `-`; nothing here is ever given to a shell. |
 | `products` | 1–8 of `{id, type, name, sources, headerSearchPaths?, resources?, infoPlist?, entitlements?, installName?, objcARC?, frameworks?, weakFrameworks?, libraries?, frameworkSearchPaths?, librarySearchPaths?, extensionSupport?}`. `app` and `bundle` require `infoPlist`; only they may have `resources`; only `dylib` may set `installName` (default `@rpath/<name>.dylib`). `extensionSupport` names `{extension, component}` from an installed extension's manifest; the build adds that component's include directories, link-stub directories for the bootstrap being built and rpaths. Ids and names are unique (beyond the schema). |
 | `build.steps` | The typed steps, below. |
-| `package` | `{id, name, version, description, longDescription?, author, maintainer?, section, depends?, dependsByBootstrap?, recommends?, suggests?, conflicts?, breaks?, replaces?, provides?, layout, maintainerScripts?, tweakFilter?}`. |
+| `package` | `{id, name, version, description, longDescription?, icon?, author, maintainer?, section, depends?, dependsByBootstrap?, recommends?, suggests?, conflicts?, breaks?, replaces?, provides?, layout, maintainerScripts?, tweakFilter?}`. |
 
 ### Build steps
 
@@ -108,6 +108,14 @@ Swift gets the bootstrap and configuration names as `-D` conditions.
   (added by the packager; a `firmware` relation in `depends` is refused),
   then `depends`, then `dependsByBootstrap[<bootstrap>]`, which may only name
   bootstraps the project builds for.
+- `icon` is written as the control's `Icon`, the image a package manager
+  shows beside the package (not an app's own icon), and nothing is written
+  without it: an `https://` URL whose host starts with a letter or digit, in
+  printable ASCII, so it has no space or control character, and at most
+  2048 characters, which are 2048 bytes. Every template writes its
+  extension's icon on Apelin's Pages,
+  `https://owngoal-dev.github.io/Apelin/icons/<extension id>.png`; a project
+  may keep it, name its own or drop it.
 - `maintainerScripts` are project files; the packager substitutes `@PREFIX@`
   and `@ROOTFS@` and nothing else, requires `sh -n` to pass, and the install
   card shows them in full.
@@ -307,7 +315,7 @@ digest project and applies an edit
 table (source edited, new source under a glob, version bumped, members
 reordered, toolchain rebound, flag added, build script edited, entitlements
 edited, deployment target raised, postinst edited, installed data file
-edited, dependency added, install path changed), and requires each to move
+edited, dependency added, icon set, install path changed), and requires each to move
 exactly the digests this file says it moves. `--update` rewrites
 `expected.json`; a changed digest changes every project's baseline, so read
 that diff before committing it.

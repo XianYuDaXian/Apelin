@@ -71,7 +71,7 @@ final class DistributionRepositoryPickerController: TableController {
             return WaitingCell().then { $0.show(String(localized: "Loading…")) }
         case let .unavailable(message):
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            var content = UIListContentConfiguration.subtitleCell()
+            var content = UIListContentConfiguration.stackedValueCell()
             content.text = String(localized: "Repositories Unavailable")
             content.secondaryText = message
             content.secondaryTextProperties.color = .secondaryLabel
@@ -87,25 +87,7 @@ final class DistributionRepositoryPickerController: TableController {
             cell.selectionStyle = .none
             return cell
         case let .repository(candidate):
-            let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-            var content = UIListContentConfiguration.subtitleCell()
-            content.text = candidate.fullName
-            var notes: [String] = []
-            if candidate.isPrivate {
-                notes.append(String(localized: "Private"))
-            }
-            if candidate.hasPages {
-                notes.append(String(localized: "Has GitHub Pages"))
-            }
-            if let description = candidate.description, !description.isEmpty {
-                notes.append(description)
-            }
-            content.secondaryText = notes.isEmpty ? nil : notes.joined(separator: " · ")
-            content.secondaryTextProperties.color = .secondaryLabel
-            content.secondaryTextProperties.numberOfLines = 2
-            cell.contentConfiguration = content
-            cell.accessoryType = .disclosureIndicator
-            return cell
+            return RepositoryCandidateCell(candidate: candidate)
         }
     }
 
@@ -120,5 +102,125 @@ final class DistributionRepositoryPickerController: TableController {
         tableView.deselectRow(at: indexPath, animated: true)
         guard case let .repository(candidate)? = dataSource.value(at: indexPath) else { return }
         onPick(candidate)
+    }
+}
+
+/// Repository identity and description, followed by separate capability badges.
+private final class RepositoryCandidateCell: UITableViewCell {
+    private let badges = UIStackView()
+
+    init(candidate: DistributionRepositoryCandidate) {
+        super.init(style: .default, reuseIdentifier: nil)
+        accessoryType = .disclosureIndicator
+        let style = UIListContentConfiguration.explanatoryCell()
+        let title = UILabel()
+        title.text = candidate.fullName
+        title.font = style.textProperties.font
+        title.adjustsFontForContentSizeCategory = true
+        title.textColor = .label
+        title.setContentHuggingPriority(.required, for: .vertical)
+        let stack = UIStackView(arrangedSubviews: [title])
+        stack.axis = .vertical
+        stack.spacing = 8
+        let description = candidate.description?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let description, !description.isEmpty {
+            let subtitle = UILabel()
+            subtitle.text = description
+            subtitle.font = style.secondaryTextProperties.font
+            subtitle.adjustsFontForContentSizeCategory = true
+            subtitle.textColor = .secondaryLabel
+            subtitle.numberOfLines = 2
+            subtitle.setContentHuggingPriority(.required, for: .vertical)
+            stack.addArrangedSubview(subtitle)
+            stack.setCustomSpacing(style.textToSecondaryTextVerticalPadding, after: title)
+        }
+        badges.spacing = 8
+        updateBadgeLayout()
+        var states: [String] = []
+        if candidate.isPrivate {
+            let title = String(localized: "Private")
+            badges.addArrangedSubview(RepositoryBadge(text: title, color: .systemPurple))
+            states.append(title)
+        }
+        if candidate.hasPages {
+            badges.addArrangedSubview(RepositoryBadge(text: String(localized: "GitHub Pages"), color: .systemBlue))
+            states.append(String(localized: "Has GitHub Pages"))
+        }
+        if !states.isEmpty {
+            let badgeContainer = UIView()
+            badgeContainer.addSubview(badges)
+            badges.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                badges.leadingAnchor.constraint(equalTo: badgeContainer.leadingAnchor),
+                badges.trailingAnchor.constraint(lessThanOrEqualTo: badgeContainer.trailingAnchor),
+                badges.topAnchor.constraint(equalTo: badgeContainer.topAnchor),
+                badges.bottomAnchor.constraint(equalTo: badgeContainer.bottomAnchor),
+            ])
+            stack.addArrangedSubview(badgeContainer)
+        }
+        contentView.addSubview(stack)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        let margins = contentView.layoutMarginsGuide
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: margins.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: margins.trailingAnchor),
+            stack.topAnchor.constraint(equalTo: margins.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: margins.bottomAnchor),
+        ])
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = candidate.fullName
+        accessibilityValue = ([description].compactMap(\.self).filter { !$0.isEmpty } + states).joined(separator: "\n")
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("Use init(candidate:)")
+    }
+
+    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
+        super.traitCollectionDidChange(previousTraitCollection)
+        updateBadgeLayout()
+    }
+
+    private func updateBadgeLayout() {
+        let stacked = traitCollection.preferredContentSizeCategory.isAccessibilityCategory
+        badges.axis = stacked ? .vertical : .horizontal
+        badges.alignment = stacked ? .leading : .center
+    }
+}
+
+private final class RepositoryBadge: UILabel {
+    private let padding = UIEdgeInsets(top: 3, left: 8, bottom: 3, right: 8)
+
+    init(text: String, color: UIColor) {
+        super.init(frame: .zero)
+        self.text = text
+        font = UIFontMetrics(forTextStyle: .caption1).scaledFont(for: .systemFont(ofSize: 12, weight: .medium))
+        adjustsFontForContentSizeCategory = true
+        textColor = color
+        backgroundColor = color.withAlphaComponent(0.12)
+        clipsToBounds = true
+        setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.required, for: .horizontal)
+    }
+
+    @available(*, unavailable)
+    required init?(coder _: NSCoder) {
+        fatalError("Use init(text:color:)")
+    }
+
+    override var intrinsicContentSize: CGSize {
+        let size = super.intrinsicContentSize
+        return CGSize(width: size.width + padding.left + padding.right, height: size.height + padding.top + padding.bottom)
+    }
+
+    override func drawText(in rect: CGRect) {
+        super.drawText(in: rect.inset(by: padding))
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        layer.cornerRadius = bounds.height / 2
     }
 }

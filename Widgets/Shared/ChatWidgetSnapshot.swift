@@ -55,9 +55,10 @@ struct ChatWidgetSnapshot: Codable, Hashable, Sendable {
     /// to 4 KB; neither of its presentations shows more than three.
     static let activityLimit = 4
 
-    /// `chats`, each with when it was last active, put in the order the
-    /// widgets list them: waiting for an approval, then working, then the
-    /// rest, newest first within each.
+    /// `chats`, each with the time the sidebar lists it by (when the reader
+    /// last started or wrote in it), put in the order the widgets list
+    /// them: waiting for an approval, then working, then the rest, newest
+    /// first within each.
     init(chats: [(chat: Chat, updated: Date)], limit: Int = listLimit) {
         let ordered = chats.sorted { lhs, rhs in
             let left = Self.rank(lhs.chat.status), right = Self.rank(rhs.chat.status)

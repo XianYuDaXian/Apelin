@@ -33,6 +33,14 @@ extension BuiltInSkills {
           private: it is reached through the preferences extension's support
           component (apelin-project-description), which supplies the declarations and
           a link stub — do not expect SDK headers for it.
+        - **The declarations** are one header,
+          `<install root>/usr/share/apelin/development/wiki.qaq.apelin.dev.preferences/support/include/Preferences/PSListController.h`
+          (the install root # Environment names), which
+          `#import <Preferences/PSListController.h>` finds. Read it with
+          file_read before calling the framework from code: it is what the
+          compiler knows of `PSListController` and `PSSpecifier`. A method
+          it lacks is declared in a category in the project's own source;
+          never edit the support folder.
         - **Root.plist** is `items`, an array of specifiers, each a `cell`
           plus its keys:
           - `PSGroupCell` — a section header with `label` and optional
@@ -48,8 +56,14 @@ extension BuiltInSkills {
           `/Library/PreferenceLoader/Preferences/<Name>.plist` with one
           `entry` dictionary: `bundle` (the bundle's name), `detail` (the
           controller class), `cell` `PSLinkCell`, `isController` true,
-          `label` (the Settings row). The package depends on
-          `preferenceloader`.
+          `label` (the Settings row) and `icon` (the row's image, a file
+          name in the bundle). The package depends on `preferenceloader`.
+        - **The row's icon** is `icon.png` with `icon@2x.png` and
+          `icon@3x.png`, 29 points (29, 58 and 87 pixels), a rounded square
+          on a clear ground, listed in the product's `resources` so the
+          bundle carries them. The template ships Apelin's preferences
+          plate; replace the three files, same names and sizes, to give the
+          pane its own. Without `icon` the row shows no image.
         - **The bundle Info.plist** names `NSPrincipalClass` and
           `CFBundlePackageType` `BNDL`.
 
@@ -63,7 +77,7 @@ extension BuiltInSkills {
         ## Layout
         - The bundle: `/Library/PreferenceBundles/<Name>.bundle` (a `bundle`
           product, with a `bundle-resources` step and `resources`:
-          `Resources/Root.plist`).
+          `Resources/Root.plist` and the three icon files).
         - The entry: `/Library/PreferenceLoader/Preferences/<Name>.plist`, a
           `{path, file}` layout entry, mode `0644`.
         Settings reads the row at launch; a change to the entry or the bundle

@@ -14,6 +14,7 @@ import UIKit
 final class DistributionRepositoryFlow {
     private weak var presenter: UIViewController?
     private let onChange: () -> Void
+    private var isPreparingCreation = false
 
     init(presenter: UIViewController, onChange: @escaping () -> Void) {
         self.presenter = presenter
@@ -21,11 +22,19 @@ final class DistributionRepositoryFlow {
     }
 
     /// The account or one of its organizations, when it has any, then the name.
-    func create() {
+    func create(onLoadingChange: @escaping (Bool) -> Void = { _ in }) {
+        guard !isPreparingCreation else { return }
+        isPreparingCreation = true
+        onLoadingChange(true)
         Task { [weak self] in
+            guard let self else {
+                onLoadingChange(false)
+                return
+            }
             // without the list (no network, say) the account is the owner
             let answer = try? await ApelinService.app.distributionRepositoryList(repositories: true)
-            guard let self else { return }
+            isPreparingCreation = false
+            onLoadingChange(false)
             guard let account = answer?.account, let organizations = answer?.organizations, !organizations.isEmpty else {
                 askName(owner: nil)
                 return
@@ -97,7 +106,7 @@ final class DistributionRepositoryFlow {
     private func confirmLink(_ candidate: DistributionRepositoryCandidate) {
         presenter?.presentConfirmation(
             title: "Link \(candidate.fullName)?",
-            message: "Apelin clones it as a project, adds the package index's files it lacks — a GitHub Pages workflow and an index script — without changing any it has, pushes them, and turns on GitHub Pages.",
+            message: "Apelin clones it as a project, adds the package index’s files it lacks — a GitHub Pages workflow and an index script — without changing any it has, pushes them, and turns on GitHub Pages.",
             confirmTitle: "Link",
         ) { [weak self] in
             self?.start(
@@ -113,7 +122,7 @@ final class DistributionRepositoryFlow {
     func confirmUpdate(_ repository: DistributionRepository) {
         presenter?.presentConfirmation(
             title: "Update \(repository.fullName)?",
-            message: "This overwrites the repository's home page, README, icon, GitHub Pages workflow and index script with Apelin's current template, replacing any changes made to them, then commits and pushes. Packages, depictions and banners stay as they are.",
+            message: "This overwrites the repository’s home page, README, icon, GitHub Pages workflow and index script with Apelin’s current template, replacing any changes made to them, then commits and pushes. Packages, depictions and banners stay as they are.",
             confirmTitle: "Update",
             destructive: true,
         ) { [weak self] in
@@ -128,7 +137,7 @@ final class DistributionRepositoryFlow {
     func confirmUnlink(_ repository: DistributionRepository) {
         presenter?.presentConfirmation(
             title: "Unlink \(repository.fullName)?",
-            message: "Distribute… stops publishing to it. The repository on GitHub and its project stay as they are.",
+            message: "“Distribute…” stops publishing to it. The repository on GitHub and its project stay as they are.",
             confirmTitle: "Unlink",
             destructive: true,
         ) { [weak self] in

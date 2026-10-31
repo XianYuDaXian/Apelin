@@ -23,6 +23,15 @@ final class MessageAttachmentsView: UIView {
         }
     }
 
+    /// The screen's, as `height(for:…)` was given it.
+    var displayScale: CGFloat = 0 {
+        didSet {
+            if displayScale != oldValue {
+                setNeedsLayout()
+            }
+        }
+    }
+
     private let grid = MessageImageGrid()
     private var cards: [MessageDocumentCard] = []
     private var attachments: [ComposerAttachment] = []
@@ -93,7 +102,13 @@ final class MessageAttachmentsView: UIView {
         super.layoutSubviews()
         let images = Self.images(in: attachments)
         grid.maximumSize = CGSize(width: bounds.width, height: previewHeightLimit)
-        let size = MessageImageGrid.size(for: images, width: bounds.width, maximumHeight: previewHeightLimit)
+        grid.displayScale = displayScale
+        let size = MessageImageGrid.size(
+            for: images,
+            width: bounds.width,
+            maximumHeight: previewHeightLimit,
+            displayScale: displayScale,
+        )
         grid.frame = directionalFrame(
             CGRect(x: trailing ? bounds.width - size.width : 0, y: 0, width: size.width, height: size.height),
         )
@@ -116,11 +131,13 @@ final class MessageAttachmentsView: UIView {
         width: CGFloat,
         documentWidthLimit: CGFloat,
         maximumPreviewHeight: CGFloat,
+        displayScale: CGFloat,
     ) -> CGFloat {
         var height = MessageImageGrid.size(
             for: images(in: attachments),
             width: width,
             maximumHeight: maximumPreviewHeight,
+            displayScale: displayScale,
         ).height
         for item in files(in: attachments) {
             if height > 0 {

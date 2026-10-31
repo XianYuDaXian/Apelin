@@ -5,7 +5,7 @@ import ApelinProtocol
 enum ToolchainHandler: DomainHandler {
     static func handle(_ request: HostRequest, host: SessionHost) async -> HostReply {
         switch request.operation {
-        case .toolchainStatus, .toolchainCatalog:
+        case .toolchainStatus, .toolchainCatalog, .toolchainSetDefault:
             return await host.forward(request, to: .environment)
         case .toolchainSetup, .toolchainRemove:
             if let refusal = await agentRefusal(request, host: host) {

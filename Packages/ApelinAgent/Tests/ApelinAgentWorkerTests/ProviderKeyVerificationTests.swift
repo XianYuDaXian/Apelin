@@ -8,8 +8,8 @@ import Testing
 
 @Suite(.timeLimit(.minutes(1)))
 struct ProviderKeyVerificationTests {
-    @Test
-    func `verification sends an authenticated model request and rejects HTTP errors and empty answers`() async throws {
+    @Test(arguments: [AgentProvider.openAICompatible, .deepSeek])
+    func `verification sends an authenticated model request and rejects HTTP errors and empty answers`(provider: AgentProvider) async throws {
         let answer = "data: {\"id\":\"test\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
         let empty = "data: {\"id\":\"test\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
         for (status, body, succeeds) in [(200, answer, true), (200, empty, false), (401, "{\"error\":{\"message\":\"candidate-secret\"}}", false)] {
@@ -44,10 +44,10 @@ struct ProviderKeyVerificationTests {
                 "baseUrl": .string("http://127.0.0.1:\(port)/v1"), "defaultModel": .string("verification-model"),
             ])
             if succeeds {
-                try await ProviderKeyVerification.verify(.openAICompatible, credentials)
+                try await ProviderKeyVerification.verify(provider, credentials)
             } else {
                 do {
-                    try await ProviderKeyVerification.verify(.openAICompatible, credentials)
+                    try await ProviderKeyVerification.verify(provider, credentials)
                     Issue.record("verification accepted an error or empty answer")
                 } catch let error as ApelinError {
                     #expect(error.code == .unavailable)

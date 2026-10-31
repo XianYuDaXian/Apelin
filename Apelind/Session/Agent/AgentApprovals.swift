@@ -10,7 +10,7 @@ enum AgentApprovals {
     /// `approvalID`, read from the registry wherever it is in the session's
     /// log: an attach batch stops at a thousand events, a long session does
     /// not.
-    private static func requested(
+    static func requested(
         _ approvalID: String,
         entry: AgentSessionTable.Entry,
         registry: TaskRegistry,
@@ -180,6 +180,9 @@ enum AgentApprovals {
     /// Whether the session may run `run`, and as whom: as root only for a
     /// root request (`authorizeRoot`); as mobile otherwise, under Confirm as
     /// a preset with the preset to run in its place (`AgentRunCode.preset`).
+    /// While the session asks before the screen is used, a command that runs
+    /// icli or another of `ScreenConsent.programs` runs, in every mode, only
+    /// on the one approval the user gave for exactly it (`AgentScreenRules`).
     @discardableResult
     static func authorize(
         _ run: AgentRunCodeRequest,
@@ -188,6 +191,13 @@ enum AgentApprovals {
         ledger: ApprovalLedger,
         installRoot: String,
     ) async throws -> AgentRunCode.Identity {
+        if entry.asksBeforeScreen, ScreenConsent.usesScreen(run.spec) {
+            if run.asRoot == true {
+                try await requireLive(entry, registry: registry)
+            }
+            try await AgentScreenRules.spend(run, entry: entry, registry: registry)
+            return run.asRoot == true ? .root : .mobile(preset: nil)
+        }
         if run.asRoot == true {
             try await authorizeRoot(run, entry: entry, registry: registry, ledger: ledger)
             return .root
@@ -251,9 +261,7 @@ enum AgentApprovals {
         registry: TaskRegistry,
         ledger: ApprovalLedger,
     ) async throws {
-        guard let record = await registry.record(entry.task.taskID), !record.state.isTerminal else {
-            throw ApelinError(.denied, "this session has ended; nothing more runs as root for it")
-        }
+        try await requireLive(entry, registry: registry)
         if entry.mode == .full, await ledger.mode(session: entry.sessionID) == .full {
             return
         }
@@ -272,6 +280,13 @@ enum AgentApprovals {
         }
     }
 
+    /// Nothing runs as root for a session whose task has ended.
+    private static func requireLive(_ entry: AgentSessionTable.Entry, registry: TaskRegistry) async throws {
+        guard let record = await registry.record(entry.task.taskID), !record.state.isTerminal else {
+            throw ApelinError(.denied, "this session has ended; nothing more runs as root for it")
+        }
+    }
+
     /// Whether `asked`, one of the session's own `approvalRequested` events,
     /// is for a command as root: what the app must check the device owner
     /// for before approving it.
@@ -285,7 +300,7 @@ enum AgentApprovals {
     /// request — (ApelinAgent's `RunCodeInvocation`, in its synthesized
     /// Codable shape) and hands shell text to `sh`
     /// (`ChannelHostBackend.spec`). A request without one approves nothing.
-    private static func approvedSpec(_ asked: JSONValue, key: String = "command") -> RunCodeSpec? {
+    static func approvedSpec(_ asked: JSONValue, key: String = "command") -> RunCodeSpec? {
         guard let command = asked["detail"]?[key],
               let invocation = try? command.decode(RequestedInvocation.self)
         else { return nil }
@@ -305,7 +320,7 @@ enum AgentApprovals {
     }
 
     /// The working directory as both sides spell it, the project root `.`.
-    private static func directoryName(_ name: String?) -> String {
+    static func directoryName(_ name: String?) -> String {
         guard let name, !name.isEmpty else { return "." }
         return name
     }
@@ -320,7 +335,8 @@ struct RunCodeGrant: Equatable, Sendable {
 }
 
 /// What the host keeps about each agent session it opened: the project it
-/// resolved, the approval mode the app chose, the approvals the app gave,
+/// resolved, the approval mode the app chose and whether it asks before
+/// the screen is used (`ScreenConsent`), the approvals the app gave,
 /// the shell_run calls it approved for the session, and, for one an agent
 /// opened (`AgentConversations`), the session that opened it.
 actor AgentSessionTable {
@@ -331,6 +347,9 @@ actor AgentSessionTable {
         var task: TaskHandle
         var project: ResolvedProject
         var mode: ApprovalMode
+        /// Ask Before Using the Screen, as the app last sent it; an agent's
+        /// session has its opener's.
+        var asksBeforeScreen = true
         var title: String?
         var createdAt: Date
         var approvals: [String: ApprovalDecision] = [:]
@@ -370,6 +389,18 @@ actor AgentSessionTable {
         entries.values.first { $0.task.taskID == taskID }
     }
 
+    /// The sessions of `projectID` whose task has not ended, oldest first:
+    /// the ones a deletion of the project closes.
+    func running(project projectID: String, registry: TaskRegistry) async -> [Entry] {
+        var running: [Entry] = []
+        for entry in entries.values.filter({ $0.project.id == projectID }).sorted(by: { $0.createdAt < $1.createdAt }) {
+            if let record = await registry.record(entry.task.taskID), !record.state.isTerminal {
+                running.append(entry)
+            }
+        }
+        return running
+    }
+
     /// The title the session's agent gave it (its `title` event).
     func setTitle(_ title: String, session: String) {
         entries[session]?.title = title
@@ -404,6 +435,10 @@ actor AgentSessionTable {
 
     func setMode(_ mode: ApprovalMode, session: String) {
         entries[session]?.mode = mode
+    }
+
+    func setAsksBeforeScreen(_ asks: Bool, session: String) {
+        entries[session]?.asksBeforeScreen = asks
     }
 
     /// Nil forgets the decision.

@@ -11,9 +11,8 @@ extension ChatWidgetSnapshot.Chat {
         }
     }
 
-    /// The status line: what it waits for, when the approval names a step
-    /// worth naming ("Approve: Install", 需要授权 · 安装). Short enough for
-    /// the small widget's one line, where "Needs Approval · Install" was not.
+    /// Name the approval action directly, e.g. "Approve: Install" or "允许安装".
+    /// Keep it short enough for the small widget’s single status line.
     var statusLine: String {
         guard status == .waiting, let step = approvalStep else { return statusWord }
         return String(localized: "Approve: \(step)")
@@ -36,6 +35,7 @@ extension ChatWidgetSnapshot.Chat {
         case "git_commit": String(localized: "Commit")
         case "git_pull": String(localized: "Pull")
         case "git_push": String(localized: "Push")
+        case "apelin_package_publish": String(localized: "Publish")
         case "apelin_git_set_author", "apelin_git_save_credential", "apelin_git_remove_credential": String(localized: "Git Settings")
         case "apelin_project_create": String(localized: "Create Project")
         case "apelin_project_rename": String(localized: "Rename Project")
@@ -48,17 +48,15 @@ extension ChatWidgetSnapshot.Chat {
 }
 
 extension ChatWidgetSnapshot {
-    /// "2 working · 1 awaiting approval", skipping an empty group; nil when
-    /// nothing is in progress.
+    /// Prioritize pending approvals; otherwise show active work, or nothing when idle.
     var summaryLine: String? {
-        var parts: [String] = []
-        if workingCount > 0 {
-            parts.append(String(localized: "\(workingCount) working"))
-        }
         if waitingCount > 0 {
-            parts.append(String(localized: "\(waitingCount) awaiting approval"))
+            return String(localized: "\(waitingCount) awaiting approval")
         }
-        return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        if workingCount > 0 {
+            return String(localized: "\(workingCount) working")
+        }
+        return nil
     }
 }
 

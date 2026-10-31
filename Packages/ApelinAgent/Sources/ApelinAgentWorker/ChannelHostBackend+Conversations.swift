@@ -43,14 +43,17 @@ public extension ChannelHostBackend {
         return ConversationActionToolResponse(sessionID: request.sessionID, done: "sent")
     }
 
+    /// General Chat names no project and gets every project's it may reach,
+    /// each with its project; the host says how many it left out.
     func conversationList(_ request: ConversationListToolRequest) async throws -> ConversationListToolResponse {
-        let sessions = try await conversation("apelin_conversation_list") {
-            try await service.agentList(projectID: request.target?.id).sessions
+        let listed = try await conversation("apelin_conversation_list") {
+            try await service.agentList(projectID: request.target?.id)
         }
-        return ConversationListToolResponse(conversations: sessions.map { summary in
+        let conversations = listed.sessions.map { summary in
             ConversationSummary(
                 sessionID: summary.sessionID,
                 title: summary.title,
+                project: summary.projectID == project.id ? nil : summary.projectName,
                 state: summary.state.isTerminal
                     ? "ended"
                     : summary.state == .waitingForApproval ? "waitingForApproval" : "open",
@@ -58,7 +61,12 @@ public extension ChannelHostBackend {
                 updatedAt: summary.updatedAt,
                 isThisConversation: summary.sessionID == sessionID,
             )
-        })
+        }
+        let note = listed.unreachedProjects.map { count in
+            let projects = count == 1 ? "1 more project" : "\(count) more projects"
+            return "The conversations of \(projects) are not listed: name one with project to list its conversations; the user is asked each time in Strict mode. apelin_project_list names every project."
+        }
+        return ConversationListToolResponse(conversations: conversations, note: note)
     }
 
     func conversationRead(_ request: ConversationReadToolRequest) async throws -> ConversationReadToolResponse {

@@ -71,6 +71,20 @@ enum AgentProjects {
         throw ApelinError(.notFound, "no project has the id \(projectID)")
     }
 
+    /// Every project under `Projects/`, by id, as `resolve` finds each by
+    /// its id: the first folder by name when two share one.
+    static func all(home: String) -> [String: ResolvedProject] {
+        guard let root = CanonicalPath.resolve(DataFolder(home: home).projects.path) else { return [:] }
+        var projects: [String: ResolvedProject] = [:]
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: root)) ?? []
+        for name in names.sorted() where ProjectName.validate(name) == nil {
+            if let project = try? candidate(root: root, name: name), projects[project.id] == nil {
+                projects[project.id] = project
+            }
+        }
+        return projects
+    }
+
     /// `Projects/<name>` whose canonical path is a direct child of the
     /// canonical `Projects`, with a readable `apelin-project.json`.
     private static func candidate(root: String, name: String) throws -> ResolvedProject {

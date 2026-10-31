@@ -81,13 +81,28 @@ final class MemoryStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.read())
     }
 
+    func testLongMemoryPersistsWithoutPerRecordCharacterLimits() throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = MemoryStore(root: root)
+        let record = MemoryRecord(title: String(repeating: "标题", count: 100), body: String(repeating: "正文", count: 1500))
+        let saved = try store.save(record, revision: store.read().revision)
+        XCTAssertEqual(try MemoryStore(root: root).read(), saved)
+        XCTAssertEqual(saved.records, [record])
+        let oversized = MemoryRecord(id: record.id, title: "Large", body: String(repeating: "x", count: MemoryStore.maximumContentBytes))
+        XCTAssertThrowsError(try store.save(oversized, replacing: record.id, revision: saved.revision)) {
+            XCTAssertEqual($0 as? MemoryStoreError, .full)
+        }
+        XCTAssertEqual(try store.read(), saved)
+    }
+
     func testBoundsAreAtomicAndScopeCannotBeChangedByUpdate() throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = MemoryStore(root: root)
         var snapshot = try store.read()
         XCTAssertThrowsError(try store.save(MemoryRecord(title: " ", body: "text"), revision: snapshot.revision))
-        XCTAssertThrowsError(try store.save(MemoryRecord(title: "Title", body: String(repeating: "x", count: 2001)), revision: snapshot.revision))
+        XCTAssertThrowsError(try store.save(MemoryRecord(title: "Two\nlines", body: "text"), revision: snapshot.revision))
         let scoped = MemoryRecord(title: "Target", body: "iPhone", projectID: "project")
         snapshot = try store.save(scoped, revision: snapshot.revision)
         XCTAssertThrowsError(try store.save(MemoryRecord(id: scoped.id, title: scoped.title, body: scoped.body), replacing: scoped.id, revision: snapshot.revision))

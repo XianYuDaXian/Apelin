@@ -1,6 +1,8 @@
+import struct ApelinCore.MemorySnapshot
 import struct ApelinCore.MemoryStore
 import enum ApelinCore.MemoryStoreError
 import enum ApelinProtocol.AgentToolName
+import struct ApelinProtocol.ApelinError
 import enum ApelinProtocol.BuildBootstrap
 import Foundation
 import KWWKAgent
@@ -25,8 +27,13 @@ actor ToolRunner {
     let gate: ApprovalGate
     let memory: MemoryStore?
     let skills: URL?
+    /// Where the read tools reach besides the project.
+    let readOnlyRoots: ReadOnlyRoots
     /// Writes an event to the session's log: apelin_notification_send's `notice`.
     let record: (@Sendable (AgentSessionEvent) async throws -> Void)?
+    let webFetch: WebFetch
+    /// The agent tool extensions' sessions, opened as their tools are called.
+    let toolExtensions: ToolExtensionSessions
     private var notices = UserNotices()
 
     init(
@@ -39,7 +46,9 @@ actor ToolRunner {
         gate: ApprovalGate,
         memory: MemoryStore? = nil,
         skills: URL? = nil,
+        readOnlyRoots: ReadOnlyRoots = .none,
         record: (@Sendable (AgentSessionEvent) async throws -> Void)? = nil,
+        webFetch: WebFetch = .shared,
     ) {
         self.sessionID = sessionID
         self.project = project
@@ -50,7 +59,10 @@ actor ToolRunner {
         self.gate = gate
         self.memory = memory
         self.skills = skills
+        self.readOnlyRoots = readOnlyRoots
         self.record = record
+        self.webFetch = webFetch
+        toolExtensions = ToolExtensionSessions(backend: backend)
     }
 
     @discardableResult
@@ -64,15 +76,29 @@ actor ToolRunner {
         policy.mode
     }
 
+    func setAsksBeforeScreen(_ asks: Bool) {
+        policy.asksBeforeScreen = asks
+    }
+
+    var asksBeforeScreen: Bool {
+        policy.asksBeforeScreen
+    }
+
     /// A run ended: the next one may send its own notices.
     func turnEnded() {
         notices.turnEnded()
     }
 
+    /// The session closes: the extensions it started go with it.
+    func closeToolExtensions() async {
+        await toolExtensions.closeAll()
+    }
+
     static let maxImageBytes = 4 * 1024 * 1024
 
-    /// kwwk tool definitions for the §7 tools plus wrapped MCP tools.
-    nonisolated func agentTools(mcp: [AgentTool]) -> [AgentTool] {
+    /// kwwk tool definitions for the §7 tools, then wrapped MCP tools, then
+    /// the tools of the agent tool extensions offered.
+    nonisolated func agentTools(mcp: [AgentTool], extensions: [OfferedToolExtension] = []) -> [AgentTool] {
         let offered = AgentToolName.allCases.filter { !project.isTemporary || !$0.isProjectOnly }
         var tools = offered.map { name in
             AgentTool(
@@ -107,6 +133,27 @@ actor ToolRunner {
             }
             tools.append(wrapped)
         }
+        for definition in extensions.flatMap(\.definitions) {
+            let extensionTool = definition.tool
+            var agentTool = AgentTool(
+                name: extensionTool.name,
+                label: extensionTool.name,
+                description: definition.description,
+                parameters: definition.parameters,
+            ) { id, args, cancellation, _ in
+                try await self.run(
+                    .toolExtension(extensionTool),
+                    toolCallID: id,
+                    arguments: ToolReason.removing(from: args),
+                    cancellation: cancellation,
+                    mcp: nil,
+                )
+            }
+            // A blank optional argument is dropped before kwwk holds the
+            // call to the schema, which an empty enum or `minLength` fails.
+            agentTool.omitsBlankOptionalArguments = true
+            tools.append(agentTool)
+        }
         return tools
     }
 
@@ -121,6 +168,8 @@ actor ToolRunner {
     ) async throws -> AgentToolResult {
         let arguments = switch tool {
         case let .local(name): ToolArguments.normalized(arguments, for: name)
+        // The host holds the arguments to the extension's own schema.
+        case let .toolExtension(tool): ToolArguments.normalized(arguments, keeping: tool.required)
         case .mcp: arguments
         }
         // Before the gate: a workspace that declares no build has nothing to
@@ -135,13 +184,21 @@ actor ToolRunner {
         let toolName: String = switch tool {
         case let .local(name): name.rawValue
         case let .mcp(name): name
+        case let .toolExtension(tool): tool.name
+        }
+        // A grant for an extension's tool holds for the version it was
+        // given for: an upgrade mid-session asks again.
+        let bound: String? = if case let .toolExtension(tool) = tool {
+            "\(tool.extensionID) \(tool.extensionVersion)"
+        } else {
+            facts.description?.digest
         }
         let fingerprint = ApprovalFingerprint.make(
             tool: toolName,
             arguments: arguments,
             workingDirectory: workingDirectory,
             projectID: project.id,
-            digest: facts.description?.digest,
+            digest: bound,
         )
 
         let ask = { (reason: String, detail: ApprovalDetail) async throws -> ApprovalEvidence in
@@ -163,7 +220,7 @@ actor ToolRunner {
         case let .allow(allowed):
             evidence = allowed
         case let .deny(reason):
-            throw ToolDeniedError(message: "refused: \(reason)")
+            throw ToolDeniedError(message: "refused: \(reason)\(readOnlyNote(tool))")
         case let .ask(reason, detail):
             evidence = try await ask(reason, detail)
         }
@@ -171,6 +228,9 @@ actor ToolRunner {
 
         if let mcp {
             return try await mcp(arguments)
+        }
+        if case let .toolExtension(tool) = tool {
+            return try await runExtension(tool, arguments: arguments, cancellation: cancellation)
         }
         guard case let .local(name) = tool else { throw ToolDeniedError(message: "unknown tool") }
         var context = HostCallContext(
@@ -250,18 +310,24 @@ actor ToolRunner {
     /// Nor for a push: each one publishes, so each one is asked. Nor for a
     /// toolchain or SDK install, which changes the device for every
     /// project, nor for a call that reaches another project, nor for a
-    /// command as root.
+    /// command as root, nor for an issue filed or edited in public as
+    /// feedback, nor for a repository made on GitHub or an issue opened on
+    /// one, nor for a project's deletion, which cannot be undone, nor for
+    /// packages published to the user's package repository, nor for a use
+    /// of the screen while Ask Before Using the Screen is on.
     static func allowsSessionScope(_ tool: InvocationFacts.Tool, detail: ApprovalDetail) -> Bool {
         switch tool {
         case .local(.packageRemove), .local(.gitPush), .local(.toolchainSetup), .local(.sdkImport),
-             .local(.skillSave), .local(.skillRemove):
+             .local(.skillSave), .local(.skillRemove), .local(.feedbackSend), .local(.gitCreateRepository),
+             .local(.projectDelete), .local(.packagePublish), .local(.feedbackEdit), .local(.gitCreateIssue):
             return false
         default:
             break
         }
         switch detail {
         case .gitSettings, .descriptionChanged, .toolchainSetup, .sdkImport, .otherProject, .externalBuild, .skillChange,
-             .projectRename, .rootCommand:
+             .projectRename, .rootCommand, .feedback, .feedbackEdit, .repositoryCreate, .issueCreate, .projectDelete,
+             .packagePublish, .screenControl:
             return false
         case .none, .command, .packageRemoval, .gitPush:
             return true
@@ -281,8 +347,15 @@ actor ToolRunner {
         switch name {
         case .memoryList, .memorySave, .memoryDelete:
             guard let memory else { throw ToolDeniedError(message: "Memory storage is unavailable.") }
-            let tools = MemoryTools(store: memory, projectID: project.id)
             do {
+                if name == .memoryList, arguments.argBool("all_projects") == true {
+                    guard arguments.argNonEmptyString("project") == nil else {
+                        throw ToolArgumentError("Name one project with project, or every project with all_projects, not both.")
+                    }
+                    let snapshot = try memory.read()
+                    return try await json(MemoryTools.listEveryProject(snapshot, projects: memoryProjects(snapshot)))
+                }
+                let tools = try await memoryTools(memory, naming: arguments.argNonEmptyString("project"))
                 switch name {
                 case .memoryList: return try json(tools.list())
                 case .memorySave: return try json(tools.save(arguments))
@@ -291,7 +364,7 @@ actor ToolRunner {
             } catch MemoryStoreError.changed {
                 throw ToolDeniedError(message: "Memory changed. Read apelin_memory_list again and respect the user's latest corrections or deletions; do not blindly retry.")
             } catch MemoryStoreError.invalidContent {
-                throw ToolArgumentError("Memory needs a valid title (1–\(MemoryStore.maximumTitleLength) characters) and body (1–\(MemoryStore.maximumBodyLength) characters), without NUL bytes.")
+                throw ToolArgumentError("Memory needs a nonempty, single-line title and nonempty body, without NUL bytes.")
             } catch MemoryStoreError.full {
                 throw ToolArgumentError("Memory is full (\(MemoryStore.maximumRecords) records or \(MemoryStore.maximumContentBytes) content bytes). Consolidate outdated records before adding more.")
             }
@@ -319,19 +392,36 @@ actor ToolRunner {
             try await record(.notice(title: notice.title, body: notice.body))
             return text(notices.sentMessage)
 
+        case .webFetch:
+            // No host request either: the worker fetches the page itself,
+            // as mobile, and answers its text.
+            let webFetch = webFetch
+            return try await text(Self.untilCancelled(cancellation) { try await webFetch.fetch(arguments) }.answer)
+
         case .fileWrite: return try text(files.writeFile(arguments))
 
         case .fileEdit: return try text(files.patchFile(arguments))
 
         case .fileCreate: return try text(files.createFile(arguments))
 
-        case .fileRead: return try text(files.readFile(arguments))
+        case .fileRead:
+            // An image comes back as a picture, as a screenshot does.
+            let reader = readFiles(arguments)
+            if let image = try reader.readImage(arguments) {
+                return AgentToolResult(content: [
+                    .text(TextContent(text: image.summary)),
+                    .image(ImageContent(data: image.data.base64EncodedString(), mimeType: image.mimeType)),
+                ])
+            }
+            return try text(reader.readFile(arguments))
 
-        case .fileList: return try text(files.list(arguments))
+        case .fileList: return try text(readFiles(arguments).list(arguments))
 
-        case .fileGrep: return try text(files.grep(arguments))
+        case .fileGrep: return try text(readFiles(arguments).grep(arguments))
 
-        case .fileFind: return try text(files.find(arguments))
+        case .fileFind: return try text(readFiles(arguments).find(arguments))
+
+        case .fileShow: return try files.show(arguments)
 
         case .projectCheckDistribution:
             let bootstrap = try Self.bootstrap(arguments)
@@ -352,12 +442,30 @@ actor ToolRunner {
             guard let target = facts.renamedProject else {
                 throw ToolDeniedError(message: "the project to rename could not be identified")
             }
-            return try await json(backend.renameProject(ProjectRenameToolRequest(
+            let automatic = arguments.argBool("automatic") ?? false
+            var renamed = try await backend.renameProject(ProjectRenameToolRequest(
                 context: context,
                 projectID: target.id,
                 folder: target.name.rawValue,
                 displayName: arguments.requireString("display_name").trimmingCharacters(in: .whitespaces),
-                automatic: arguments.argBool("automatic") ?? false,
+                automatic: automatic,
+            ))
+            // A new project named for its goal: the moment to settle the
+            // identifiers Apelin made up for it.
+            if automatic, target.id == project.id {
+                renamed.identifierHint = PlaceholderIdentifiers.renameHint(in: root)
+            }
+            return json(renamed)
+
+        case .projectDelete:
+            // The project the card named.
+            guard let deletion = facts.projectDeletion else {
+                throw ToolDeniedError(message: "the project to delete could not be identified")
+            }
+            return try await json(backend.deleteProject(ProjectDeleteToolRequest(
+                context: context,
+                projectID: deletion.projectID,
+                folder: deletion.folder,
             )))
 
         case .projectCreate:
@@ -402,28 +510,62 @@ actor ToolRunner {
                 throw ToolDeniedError(message: "the build description could not be checked")
             }
             let configuration = BuildConfiguration(rawValue: arguments.argString("configuration") ?? "debug") ?? .debug
-            return try await json(backend.build(BuildRequest(
+            var built = try await backend.build(BuildRequest(
                 context: context,
                 configuration: configuration,
                 buildDescriptionDigest: digest,
                 bootstrap: Self.bootstrap(arguments),
-            )))
+            ))
+            if built.succeeded, configuration == .debug, facts.externalBuild == nil {
+                built.identifierHint = await firstInstallIdentifierHint()
+            }
+            return json(built)
 
         case .packageInstall:
             guard let state = facts.description else {
                 throw ToolDeniedError(message: "the packaging description could not be checked")
             }
-            return try await json(backend.install(InstallRequest(
+            var installed = try await backend.install(InstallRequest(
                 context: context,
                 artifactID: arguments.requireString("artifact_id"),
                 artifactDigest: arguments.requireString("artifact_digest"),
                 packagingDescriptionDigest: state.digest,
-            )))
+            ))
+            if installed.succeeded {
+                installed.relaunchHint = AppRelaunch.hint(in: root)
+            }
+            return json(installed)
 
         case .packageRemove:
-            return try await json(backend.removePackage(RemovePackageRequest(
-                context: context,
-                installationID: arguments.requireString("installation_id"),
+            // The installation the card named, by its id or found for the package.
+            guard let installationID = facts.installationID else {
+                throw ToolDeniedError(message: "the package to remove could not be identified")
+            }
+            do {
+                return try await json(backend.removePackage(RemovePackageRequest(
+                    context: context,
+                    installationID: installationID,
+                )))
+            } catch let refusal as ApelinError where [.badRequest, .notFound, .conflict].contains(refusal.code) {
+                let instead = await removableInstead()
+                throw ToolDeniedError(message: refusal.message + instead)
+            }
+
+        case .packagePublish:
+            // The repository and packages the card named.
+            guard let publication = facts.packagePublish else {
+                throw ToolDeniedError(message: "the packages to publish could not be read")
+            }
+            return try await json(backend.publishPackages(PackagePublishToolRequest(context: context, publication: publication)))
+
+        case .packageList:
+            var projectID: String?
+            if let reference = arguments.argNonEmptyString("project") {
+                projectID = try await backend.resolveProject(reference).id
+            }
+            return try await json(backend.installations(InstallationListToolRequest(
+                packageID: arguments.argNonEmptyString("package_id"),
+                projectID: projectID,
             )))
 
         case .deviceRespring:
@@ -541,6 +683,7 @@ actor ToolRunner {
                 context: context,
                 remote: arguments.argNonEmptyString("remote"),
                 branch: facts.push?.branch,
+                url: facts.push?.url,
             )))
 
         case .gitClone:
@@ -572,6 +715,31 @@ actor ToolRunner {
             return try await json(backend.gitRemoveCredential(GitCredentialRemoveToolRequest(
                 context: context,
                 host: arguments.requireString("host"),
+            )))
+
+        case .gitCreateRepository:
+            // The repository the card named.
+            guard let repository = facts.repositoryCreate else {
+                throw ToolDeniedError(message: "the repository to create could not be read")
+            }
+            return try await json(backend.createRepository(RepositoryCreateToolRequest(
+                context: context,
+                owner: repository.owner,
+                name: repository.name,
+                visibility: repository.visibility,
+                description: repository.description,
+            )))
+
+        case .gitCreateIssue:
+            // The repository and the issue the card named.
+            guard let issue = facts.issueCreate else {
+                throw ToolDeniedError(message: "the issue to open could not be read")
+            }
+            return try await json(backend.createIssue(IssueCreateToolRequest(
+                context: context,
+                repository: issue.repository,
+                title: issue.title,
+                body: issue.body,
             )))
 
         case .conversationCreate:
@@ -661,6 +829,37 @@ actor ToolRunner {
 
         case .projectSetEnvironment:
             return try await json(setEnvironment(arguments, context: context))
+
+        case .feedbackSend:
+            // The issue the card named.
+            guard let feedback = facts.feedback else {
+                throw ToolDeniedError(message: "the feedback to send could not be read")
+            }
+            return try await json(backend.sendFeedback(FeedbackToolRequest(
+                context: context,
+                title: feedback.title,
+                body: feedback.body,
+            )))
+
+        case .feedbackRead:
+            return try await json(backend.readFeedback(FeedbackReadToolRequest(
+                context: context,
+                number: FeedbackEdit.number(arguments),
+            )))
+
+        case .feedbackEdit:
+            // The edit the card named, against the text read before asking.
+            guard let edit = facts.feedbackEdit else {
+                throw ToolDeniedError(message: "the edit to make could not be read")
+            }
+            return try await json(backend.editFeedback(FeedbackEditToolRequest(
+                context: context,
+                number: edit.number,
+                title: edit.title,
+                body: edit.body,
+                expectedTitle: edit.currentTitle,
+                expectedBody: edit.currentBody,
+            )))
         }
     }
 
@@ -704,10 +903,86 @@ actor ToolRunner {
         )
     }
 
+    /// A Debug build's note on the identifiers Apelin made up, while
+    /// nothing this project built is installed; nil too when that list does
+    /// not read, since then nothing says the first install is still ahead.
+    private func firstInstallIdentifierHint() async -> String? {
+        guard let hint = PlaceholderIdentifiers.buildHint(in: root),
+              let installed = try? await backend.installations(InstallationListToolRequest(projectID: project.id)),
+              installed.installations.isEmpty
+        else { return nil }
+        return hint
+    }
+
     /// The skills folder's tools; unavailable where the session has none.
     func skillTools() throws -> SkillTools {
         guard let skills else { throw ToolDeniedError(message: "Skills are unavailable.") }
         return SkillTools(directory: skills)
+    }
+
+    /// The memory a call reaches: this session's project's, or the
+    /// project it names, by projectID or folder as apelin_project_list
+    /// answers them. A projectID no project has now still reaches the
+    /// records kept for it, to change or delete, but takes no new one.
+    private func memoryTools(_ store: MemoryStore, naming reference: String?) async throws -> MemoryTools {
+        guard let reference else {
+            let refusal = project.isTemporary
+                ? "General Chat has no project of its own: name it with project (its projectID or folder name, as apelin_project_list answers them), or use scope global."
+                : nil
+            return MemoryTools(store: store, projectID: project.id, newRecordRefusal: refusal)
+        }
+        let target: ProjectIdentity
+        do {
+            target = try await backend.resolveProject(reference)
+        } catch {
+            guard (try? store.read())?.records.contains(where: { $0.projectID == reference }) == true else { throw error }
+            return MemoryTools(
+                store: store,
+                projectID: reference,
+                newRecordRefusal: "No project has the id \(reference) now: its memories can be changed or deleted, not added to.",
+            )
+        }
+        guard !target.isTemporary else { throw ToolDeniedError(message: "a temporary chat keeps no memories of its own") }
+        return MemoryTools(store: store, projectID: target.id)
+    }
+
+    /// The projects the records of `snapshot` are kept for, by projectID,
+    /// as apelin_project_list names them; one that is not there is gone.
+    private func memoryProjects(_ snapshot: MemorySnapshot) async throws -> [String: MemoryListing.Project] {
+        let listing = try await backend.projects()
+        var projects: [String: MemoryListing.Project] = [:]
+        for listed in listing.projects {
+            projects[listed.projectID] = MemoryListing.Project(folder: listed.folder, displayName: listed.displayName)
+        }
+        // a list cut short is no proof that a project is gone
+        guard listing.truncated else { return projects }
+        for id in Set(snapshot.records.compactMap(\.projectID)) where projects[id] == nil {
+            guard let found = try? await backend.resolveProject(id), found.id == id else { continue }
+            projects[id] = MemoryListing.Project(folder: found.name.rawValue, displayName: nil)
+        }
+        return projects
+    }
+
+    /// The root a read tool reads `path` from: the project's, unless the
+    /// path is absolute and lies in one of the read-only roots.
+    func readRoot(for path: String) -> ScopedRoot {
+        readOnlyRoots.root(containing: path)?.root ?? root
+    }
+
+    /// The read tools against the root this call's `path` lies in.
+    private func readFiles(_ arguments: JSONValue) -> ProjectFileTools {
+        let path = arguments.argString("path") ?? "."
+        guard let readOnly = readOnlyRoots.root(containing: path) else { return ProjectFileTools(root: root) }
+        return ProjectFileTools(root: readOnly.root, shownRoot: readOnly.shownAs)
+    }
+
+    /// What a read tool's refusal of a path outside the project adds: the
+    /// folders it reads besides.
+    private func readOnlyNote(_ tool: InvocationFacts.Tool) -> String {
+        guard case let .local(name) = tool, ReadOnlyRoots.tools.contains(name),
+              let note = readOnlyRoots.refusalNote
+        else { return "" }
+        return "; " + note
     }
 
     /// Runs `body` until it answers or the call is cancelled: a stop does

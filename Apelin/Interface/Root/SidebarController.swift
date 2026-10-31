@@ -11,10 +11,10 @@ import UIKit
 /// the detail column's bar. With no project open the title is Apelin's,
 /// with no menu, and a new conversation is a temporary one, kept apart from
 /// every project's. Below it the project's conversations, a plain inset
-/// grouped table: the pinned ones, then the rest under the day they were
-/// last active. At the bottom a new conversation on the
-/// left, and Projects beside Settings on the right: glass on iOS 26, the toolbar's blur
-/// before it.
+/// grouped table: the pinned ones, then the rest under the day the reader
+/// last started or wrote in each (`SidebarOrder`). At the bottom a new
+/// conversation on the left, and Projects beside Settings on the right:
+/// glass on iOS 26, the toolbar's blur before it.
 final class SidebarController: UIViewController {
     private enum Section: Hashable {
         case pinned
@@ -47,6 +47,9 @@ final class SidebarController: UIViewController {
     func refresh() {
         let previous = Dictionary(uniqueKeysWithValues: chats.map { ($0.id, $0) })
         chats = runtime.summaries.filter { $0.projectName == project?.name }
+        let pinChanged = chats.contains { chat in
+            previous[chat.id].map { $0.isPinned != chat.isPinned } ?? false
+        }
         let changedRows = chats.compactMap { chat -> UUID? in
             guard let old = previous[chat.id],
                   old.title != chat.title || old.isWorking != chat.isWorking
@@ -54,7 +57,7 @@ final class SidebarController: UIViewController {
             return chat.id
         }
         if isViewLoaded {
-            applySnapshot(changedRows: changedRows, restoreSelection: false)
+            applySnapshot(changedRows: changedRows, restoreSelection: false, animateMove: pinChanged)
         }
     }
 
@@ -84,7 +87,7 @@ final class SidebarController: UIViewController {
             return
         }
         project = candidate
-        selectedID = chats.max { $0.updated < $1.updated }?.id
+        selectedID = SidebarOrder.newest(chats)?.id
         applySnapshot()
         onSelect?(selectedID.flatMap(chat), false)
     }
@@ -123,9 +126,8 @@ final class SidebarController: UIViewController {
         var configuration = UIButton.Configuration.plain()
         configuration.title = String(localized: "New Chat")
         configuration.image = UIImage(systemName: "square.and.pencil")
-        // the symbol at the text's own size and weight, not a step above it
         let font = UIFontMetrics(forTextStyle: .body).scaledFont(for: .systemFont(ofSize: 17, weight: .semibold))
-        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(font: font, scale: .small)
+        configuration.preferredSymbolConfigurationForImage = UIImage.SymbolConfiguration(pointSize: 18, weight: .regular)
         configuration.imagePadding = 6
         configuration.baseForegroundColor = .label
         configuration.titleTextAttributesTransformer = UIConfigurationTextAttributesTransformer { attributes in
@@ -180,7 +182,7 @@ final class SidebarController: UIViewController {
         // the symbol alone; the words are for VoiceOver
         $0.backgroundView = EmptyStateView(
             symbolName: "bubble.left.and.bubble.right.fill",
-            text: String(localized: "No chats yet. Tap New Chat to start one."),
+            text: String(localized: "No chats yet. Tap “New Chat” to start one."),
             showsText: false,
         )
     }
@@ -292,22 +294,19 @@ final class SidebarController: UIViewController {
         chats.first { $0.id == id }
     }
 
-    private func applySnapshot(changedRows: [UUID] = [], restoreSelection: Bool = true) {
+    private func applySnapshot(changedRows: [UUID] = [], restoreSelection: Bool = true, animateMove: Bool = false) {
         var snapshot = NSDiffableDataSourceSnapshot<Section, UUID>()
         let shown = query.isEmpty ? chats : chats.filter {
             $0.displayTitle.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
         }
-        let newestFirst = shown.sorted { $0.updated > $1.updated }
-        let pinned = newestFirst.filter(\.isPinned)
-        if !pinned.isEmpty {
-            snapshot.appendSections([.pinned])
-            snapshot.appendItems(pinned.map(\.id))
-        }
-        let calendar = Calendar.current
-        let days = Dictionary(grouping: newestFirst.filter { !$0.isPinned }) { calendar.startOfDay(for: $0.updated) }
-        for (day, rows) in days.sorted(by: { $0.key > $1.key }) {
-            snapshot.appendSections([.day(day)])
-            snapshot.appendItems(rows.map(\.id))
+        let order = SidebarOrder.sections(of: shown)
+        // Pinning moves a row between existing sections. Inserting or deleting
+        // its section in the same diff turns that move into a section fade.
+        snapshot.appendSections([.pinned])
+        snapshot.appendItems(order.pinned)
+        for day in order.days {
+            snapshot.appendSections([.day(day.start)])
+            snapshot.appendItems(day.chats)
         }
         let current = dataSource.snapshot()
         let old = Set(current.itemIdentifiers)
@@ -315,8 +314,9 @@ final class SidebarController: UIViewController {
         snapshot.reconfigureItems(reconfigured)
         let hasChanges = !reconfigured.isEmpty || current.sectionIdentifiers != snapshot.sectionIdentifiers
             || current.itemIdentifiers != snapshot.itemIdentifiers
-        // Streamed text changes the runtime timestamp on every batch, but it
-        // must not rebuild an unchanged row while its swipe actions are open.
+            || snapshot.itemIdentifiers.contains { current.sectionIdentifier(containingItem: $0) != snapshot.sectionIdentifier(containingItem: $0) }
+        // Streamed text changes nothing here, and an unchanged row is never
+        // rebuilt: its open swipe actions would close.
         tableView.backgroundView?.isHidden = !shown.isEmpty
         guard tableView.isFilled else {
             pacing.begin()
@@ -324,9 +324,15 @@ final class SidebarController: UIViewController {
             return
         }
         if hasChanges {
-            dataSource.applyChange(snapshot, to: tableView, animated: pacing.animatesChange(in: tableView))
+            let pacedAnimation = pacing.animatesChange(in: tableView)
+            let animated = animateMove
+                ? tableView.window != nil && !UIAccessibility.isReduceMotionEnabled
+                : pacedAnimation
+            dataSource.applyChange(snapshot, to: tableView, animated: animated) { [weak self] in
+                self?.selectPicked()
+            }
         }
-        if hasChanges || restoreSelection {
+        if !hasChanges, restoreSelection {
             selectPicked()
         }
     }
@@ -366,8 +372,46 @@ final class SidebarController: UIViewController {
         }
     }
 
+    /// Deletes a conversation, from its row or the chat's More menu
+    /// (`origin`), asking first as `ChatDeletion` says; `presenter` asks,
+    /// the sidebar when it is nil. One still working is stopped first.
+    func delete(_ id: UUID, from origin: ChatDeletion.Origin, presenter: UIViewController? = nil) {
+        guard let chat = runtime.records[id]?.summary else { return }
+        guard let confirmation = ChatDeletion.confirmation(for: chat, from: origin) else {
+            delete(id)
+            return
+        }
+        let onConfirm: () -> Void = { [weak self] in self?.delete(id) }
+        let presenter = presenter ?? self
+        let name = chat.displayTitle
+        switch confirmation {
+        case .delete:
+            presenter.presentConfirmation(
+                title: "Delete Conversation?",
+                message: "“\(name)” and its messages will be deleted. This cannot be undone.",
+                confirmTitle: "Delete",
+                destructive: true,
+                onConfirm: onConfirm,
+            )
+        case .stopAndDelete:
+            presenter.presentConfirmation(
+                title: "Delete Conversation?",
+                message: "“\(name)” is still working. It will be stopped, then deleted with its messages. This cannot be undone.",
+                confirmTitle: "Stop and Delete",
+                destructive: true,
+                onConfirm: onConfirm,
+            )
+        }
+    }
+
+    /// Stops it if it is working by then, as Stop does, closes its session,
+    /// removes its history and leaves the page to what is picked next. A
+    /// stop that fails leaves the run to the close, which ends it too.
     private func delete(_ id: UUID) {
         Task {
+            if runtime.records[id]?.summary.isWorking == true {
+                try? await runtime.stop(id)
+            }
             do {
                 try await runtime.delete(id)
                 if selectedID == id {
@@ -436,8 +480,13 @@ final class SidebarController: UIViewController {
     private func refreshProjects() async {
         do {
             projects = try await ProjectSummary.load()
-            if let name = project?.name, let resolved = projects.first(where: { $0.name == name }),
-               resolved != project
+            // A project whose folder went takes its conversations, and the
+            // sidebar leaves it for General Chat, as Delete in All Projects does.
+            let deleted = await runtime.forgetDeletedProjects()
+            if let name = project?.name, deleted.contains(name) {
+                switchProject(to: nil)
+            } else if let name = project?.name, let resolved = projects.first(where: { $0.name == name }),
+                      resolved != project
             {
                 project = resolved
             } else if let name = UserDefaults.standard.string(forKey: "chat.selectedProject"),
@@ -504,59 +553,86 @@ extension SidebarController: UISearchResultsUpdating {
 }
 
 extension SidebarController: UITableViewDelegate {
+    /// Keep empty groups available as move destinations without showing a
+    /// heading or leaving a gap in the list.
+    func tableView(_ tableView: UITableView, heightForHeaderInSection section: Int) -> CGFloat {
+        tableView.numberOfRows(inSection: section) == 0 ? .leastNormalMagnitude : UITableView.automaticDimension
+    }
+
+    func tableView(_ tableView: UITableView, heightForFooterInSection section: Int) -> CGFloat {
+        tableView.numberOfRows(inSection: section) == 0 ? .leastNormalMagnitude : UITableView.automaticDimension
+    }
+
     /// Again on the row already picked, which puts a drawer away.
     func tableView(_: UITableView, didSelectRowAt indexPath: IndexPath) {
         selectedID = dataSource.itemIdentifier(for: indexPath)
         onSelect?(selectedID.flatMap(chat), true)
     }
 
-    // MARK: Pin and delete
+    // MARK: Pin, stop and delete
 
     func tableView(
         _: UITableView,
         leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath,
     ) -> UISwipeActionsConfiguration? {
         guard let id = dataSource.itemIdentifier(for: indexPath), let chat = chat(id) else { return nil }
-        let pin = UIContextualAction(
-            style: .normal,
-            title: chat.isPinned ? String(localized: "Unpin") : String(localized: "Pin"),
-        ) { [weak self] _, _, completion in
-            // the swipe's own transaction has to end for the row to settle
-            completion(true)
-            self?.togglePin(id)
-        }
-        pin.image = UIImage(systemName: chat.isPinned ? "pin.slash.fill" : "pin.fill")
-        pin.backgroundColor = .systemOrange
-        return UISwipeActionsConfiguration(actions: [pin])
+        return UISwipeActionsConfiguration(actions: ChatRowAction.leadingSwipe(for: chat).map { swipeAction($0, for: id) })
     }
 
+    /// Never nil, which would put UIKit's default Delete on the row, one
+    /// that does nothing here.
     func tableView(
         _: UITableView,
         trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath,
     ) -> UISwipeActionsConfiguration? {
-        guard let id = dataSource.itemIdentifier(for: indexPath), let chat = chat(id) else { return nil }
-        let delete = UIContextualAction(
-            style: .destructive,
-            title: String(localized: "Delete"),
-        ) { [weak self] _, _, completion in
-            // The snapshot removes the row only after deletion succeeds.
-            completion(false)
-            self?.delete(id)
+        guard let id = dataSource.itemIdentifier(for: indexPath), let chat = chat(id) else {
+            return UISwipeActionsConfiguration(actions: [])
         }
-        delete.image = UIImage(systemName: "trash.fill")
-        guard chat.isWorking else { return UISwipeActionsConfiguration(actions: [delete]) }
-        let stop = UIContextualAction(
-            style: .normal,
-            title: String(localized: "Stop"),
-        ) { [weak self] _, _, completion in
-            completion(true)
-            self?.stop(id)
-        }
-        stop.image = UIImage(systemName: "stop.fill")
-        stop.backgroundColor = .darkGray
-        let actions = UISwipeActionsConfiguration(actions: [delete, stop])
-        actions.performsFirstActionWithFullSwipe = false
+        let actions = UISwipeActionsConfiguration(
+            actions: ChatRowAction.trailingSwipe(for: chat).map { swipeAction($0, for: id) },
+        )
+        // a full swipe deletes one at rest; one that works keeps Stop beside Delete
+        actions.performsFirstActionWithFullSwipe = !chat.isWorking
         return actions
+    }
+
+    private func swipeAction(_ action: ChatRowAction, for id: UUID) -> UIContextualAction {
+        switch action {
+        case .pin, .unpin:
+            let pin = UIContextualAction(
+                style: .normal,
+                title: action == .unpin ? String(localized: "Unpin") : String(localized: "Pin"),
+            ) { [weak self] _, _, completion in
+                // the swipe's own transaction has to end for the row to settle
+                completion(true)
+                DispatchQueue.main.async { [weak self] in self?.togglePin(id) }
+            }
+            pin.image = UIImage(systemName: action == .unpin ? "pin.slash.fill" : "pin.fill")
+            pin.backgroundColor = .systemOrange
+            return pin
+        case .stop:
+            let stop = UIContextualAction(
+                style: .normal,
+                title: String(localized: "Stop"),
+            ) { [weak self] _, _, completion in
+                completion(true)
+                self?.stop(id)
+            }
+            stop.image = UIImage(systemName: "stop.fill")
+            stop.backgroundColor = .darkGray
+            return stop
+        case .delete:
+            let delete = UIContextualAction(
+                style: .destructive,
+                title: String(localized: "Delete"),
+            ) { [weak self] _, _, completion in
+                // The snapshot removes the row only after deletion succeeds.
+                completion(false)
+                self?.delete(id, from: .sidebarRow)
+            }
+            delete.image = UIImage(systemName: "trash.fill")
+            return delete
+        }
     }
 
     /// A swipe that ends after the list changed under it, as deleting the
@@ -565,7 +641,7 @@ extension SidebarController: UITableViewDelegate {
         applySnapshot()
     }
 
-    /// The swipes' two actions, for a long press and a pointer.
+    /// The swipes' actions, for a long press and a pointer.
     func tableView(
         _: UITableView,
         contextMenuConfigurationForRowAt indexPath: IndexPath,
@@ -573,26 +649,28 @@ extension SidebarController: UITableViewDelegate {
     ) -> UIContextMenuConfiguration? {
         guard let id = dataSource.itemIdentifier(for: indexPath), let chat = chat(id) else { return nil }
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-            let pin = UIAction(
-                title: chat.isPinned ? String(localized: "Unpin") : String(localized: "Pin"),
-                image: UIImage(systemName: chat.isPinned ? "pin.slash" : "pin"),
-            ) { _ in self?.togglePin(id) }
-            let delete = UIAction(
+            UIMenu(children: ChatRowAction.menu(for: chat).compactMap { self?.menuAction($0, for: id) })
+        }
+    }
+
+    private func menuAction(_ action: ChatRowAction, for id: UUID) -> UIAction {
+        switch action {
+        case .pin, .unpin:
+            UIAction(
+                title: action == .unpin ? String(localized: "Unpin") : String(localized: "Pin"),
+                image: UIImage(systemName: action == .unpin ? "pin.slash" : "pin"),
+            ) { [weak self] _ in self?.togglePin(id) }
+        case .stop:
+            UIAction(
+                title: String(localized: "Stop"),
+                image: UIImage(systemName: "stop.fill"),
+            ) { [weak self] _ in self?.stop(id) }
+        case .delete:
+            UIAction(
                 title: String(localized: "Delete"),
                 image: UIImage(systemName: "trash"),
                 attributes: .destructive,
-            ) { _ in self?.delete(id) }
-            var actions = [pin, delete]
-            if chat.isWorking {
-                actions.insert(
-                    UIAction(
-                        title: String(localized: "Stop"),
-                        image: UIImage(systemName: "stop.fill"),
-                    ) { _ in self?.stop(id) },
-                    at: 0,
-                )
-            }
-            return UIMenu(children: actions)
+            ) { [weak self] _ in self?.delete(id, from: .sidebarRow) }
         }
     }
 }

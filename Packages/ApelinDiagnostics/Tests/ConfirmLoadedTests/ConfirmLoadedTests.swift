@@ -122,7 +122,10 @@ final class ConfirmLoadedTests: XCTestCase {
         let confirm = ConfirmLoaded(logs: FakeLogs(entries: [line("SpringBoard", 1200, "ApelinHello: loaded into SpringBoard")]))
         let result = confirm.run(request())
         XCTAssertEqual(result.image.status, .notRead)
-        XCTAssertTrue(result.image.detail.contains("panicked the iOS 27 kernel"), result.image.detail)
+        // An agent on iOS 17 took "the iOS 27 kernel" for a rule about
+        // another system.
+        XCTAssertTrue(result.image.detail.contains("on any iOS version"), result.image.detail)
+        XCTAssertNil(result.image.detail.range(of: #"iOS \d"#, options: .regularExpression), result.image.detail)
     }
 
     func testEachEvidenceFailsOnItsOwn() {

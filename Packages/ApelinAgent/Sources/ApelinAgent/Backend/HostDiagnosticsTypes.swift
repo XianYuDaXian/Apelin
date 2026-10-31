@@ -19,45 +19,36 @@ public struct ConfirmLoadedRequest: Sendable, Hashable, Codable {
     }
 }
 
-public struct LoadedImage: Sendable, Hashable, Codable {
-    public var path: String
-    public var uuid: String?
-    public init(path: String, uuid: String? = nil) {
-        self.path = path
-        self.uuid = uuid
-    }
-}
-
+/// The tool's answer, encoded as its result: the host's verdict and what it
+/// rests on. The target's image list is never read, on any iOS version, so
+/// nothing here says whether the image is mapped.
 public struct ConfirmLoadedResponse: Sendable, Hashable, Codable {
+    public static let markerBasis =
+        "Judged by the marker line alone: the target's image list is never read, on any iOS version."
+
+    /// The host's verdict, from the marker line.
+    public var loaded: Bool
+    /// What `loaded` rests on, said where the model reads it.
+    public var basis: String
     /// The build's marker line appeared in the target's log.
     public var markerLogged: Bool
-    /// The built image is in the target's loaded images. The host does not
-    /// read the image list for the agent (it panicked the iOS 27 kernel), so
-    /// this is false and `notes` says the image was not read.
-    public var imageLoaded: Bool
     /// The tweak's filter selects the target; nil when not determined.
     public var filterMatches: Bool?
     public var logEvidence: [String]
-    public var imageEvidence: [LoadedImage]
     public var notes: String
 
-    public var loaded: Bool {
-        markerLogged || imageLoaded
-    }
-
     public init(
+        loaded: Bool,
         markerLogged: Bool,
-        imageLoaded: Bool,
         filterMatches: Bool? = nil,
         logEvidence: [String] = [],
-        imageEvidence: [LoadedImage] = [],
         notes: String = "",
     ) {
+        self.loaded = loaded
+        basis = Self.markerBasis
         self.markerLogged = markerLogged
-        self.imageLoaded = imageLoaded
         self.filterMatches = filterMatches
         self.logEvidence = logEvidence
-        self.imageEvidence = imageEvidence
         self.notes = notes
     }
 }
@@ -296,8 +287,11 @@ public enum UIAction: Sendable, Hashable, Codable {
     case tap(x: Double, y: Double)
     case tapElement(id: String)
     case typeText(String)
-    case swipe(fromX: Double, fromY: Double, toX: Double, toY: Double)
+    case swipe(fromX: Double, fromY: Double, toX: Double, toY: Double, durationMilliseconds: Int)
     case pressButton(String)
+
+    /// A swipe's duration when the call names none.
+    public static let defaultSwipeMilliseconds = 300
 }
 
 public struct UIActionRequest: Sendable, Hashable, Codable {
@@ -314,8 +308,21 @@ public struct UIActionRequest: Sendable, Hashable, Codable {
 public struct UIActionResponse: Sendable, Hashable, Codable {
     public var performed: Bool
     public var message: String
-    public init(performed: Bool, message: String = "") {
+    /// A type_text's read-back: whether a value that changed while the text
+    /// went in holds it, and those values. Absent for other actions, and
+    /// when the UI tree could not be read.
+    public var typedTextMatches: Bool?
+    public var fieldValues: [String]?
+
+    public init(
+        performed: Bool,
+        message: String = "",
+        typedTextMatches: Bool? = nil,
+        fieldValues: [String]? = nil,
+    ) {
         self.performed = performed
         self.message = message
+        self.typedTextMatches = typedTextMatches
+        self.fieldValues = fieldValues
     }
 }

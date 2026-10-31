@@ -47,6 +47,7 @@ final class ProviderLoginController: UIViewController {
     private var submitting = false
     /// The page opened by itself: once per sign-in.
     private var openedPage: URL?
+    private var isWaitingForContinue = false
     /// The in-app browser on the provider's page.
     private lazy var browser = SignInBrowser(anchor: view).then {
         $0.onClosedByUser = { [weak self] in self?.webClosedByUser() }
@@ -224,6 +225,7 @@ final class ProviderLoginController: UIViewController {
         handle = nil
         submitting = false
         openedPage = nil
+        isWaitingForContinue = false
         shownStep = nil
         render()
         let method = method == methods.first ? nil : method
@@ -289,7 +291,7 @@ final class ProviderLoginController: UIViewController {
     static func unavailableText(_ error: Error) -> String {
         if let error = error as? ApelinError, error.code == .backendUnavailable {
             return String(localized: """
-            Apelin's background service is unavailable. Reinstall Apelin with your preferred package \
+            Apelin’s background service is unavailable. Reinstall Apelin with your preferred package \
             manager to sign in.
             """)
         }
@@ -345,7 +347,8 @@ final class ProviderLoginController: UIViewController {
     private func render() {
         let step = progress.step
         let waiting: Bool = switch step {
-        case .starting, .deviceCode, .browser: true
+        case .starting: true
+        case .deviceCode, .browser: !isWaitingForContinue
         case .keys: submitting
         case .ended: false
         }
@@ -497,6 +500,9 @@ final class ProviderLoginController: UIViewController {
     /// is closed from here when the task ends. Closing it by hand leaves the
     /// sign-in waiting; Continue opens it again.
     private func open(_ page: URL, copying code: String?) {
+        isWaitingForContinue = false
+        primaryButton.isHidden = true
+        render()
         if let code {
             UIPasteboard.general.string = code
             SPIndicator.present(title: String(localized: "Code Copied"), preset: .done, haptic: .success)
@@ -509,6 +515,8 @@ final class ProviderLoginController: UIViewController {
     /// made, still finishes it — and Continue opens the page again.
     private func webClosedByUser() {
         guard !progress.isFinished, let page = openedPage else { return }
+        isWaitingForContinue = true
+        render()
         let code: String? = if case let .deviceCode(code, _, false) = progress.step {
             code
         } else {

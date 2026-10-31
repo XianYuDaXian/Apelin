@@ -1,14 +1,19 @@
 #!/bin/bash
-# Compile the app's event-to-transcript reducer, how it adopts the
-# conversations agents open, how far it follows a turn and how the trace
-# sheet lists a summary's steps, against the harness modules.
+# Compile the app's event-to-transcript reducer, how it reads past a reopened
+# session's replay, how it adopts the conversations agents open, how far it
+# follows a turn, how the trace sheet lists a summary's steps, how dropped
+# messages go back to the composer, which conversations a deleted project
+# takes with it, which tool results are builds the star prompt counts and
+# how often it asks, the order the sidebar lists conversations in, and
+# which of them offer Delete and when it asks first, against the harness
+# modules.
 # Usage: test-chat-transcript.sh <ApelinKit modules directory>
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 modules="$1"
 work="$(mktemp -d -t apelin-chat-transcript)"
-trap 'rm -rf "$work"' EXIT
+trap 'rm -rf -- "${work:?}"' EXIT
 
 sources=(
     "$root/Apelin/Interface/Chats/ChatSummary.swift"
@@ -22,10 +27,24 @@ sources=(
     "$root/Apelin/Interface/Chats/ChatTranscriptCache.swift"
     "$root/Apelin/Interface/Chats/ChatStore.swift"
     "$root/Apelin/Interface/Chats/ChatAdoption.swift"
+    "$root/Apelin/Interface/Chats/DroppedMessages.swift"
+    "$root/Apelin/Interface/Chats/DeletedProjects.swift"
+    "$root/Apelin/Interface/Chats/ChatDeletion.swift"
     "$root/Apelin/Interface/Chats/TurnFollowing.swift"
+    "$root/Apelin/Interface/Root/SidebarOrder.swift"
+    "$root/Apelin/Interface/Root/ChatRowAction.swift"
+    "$root/Apelin/Interface/Feedback/CompletedBuilds.swift"
+    "$root/Apelin/Interface/Feedback/StarPromptState.swift"
     "$root/Tests/ChatTranscript/TranscriptFold.swift"
     "$root/Tests/ChatTranscript/ToolCallDetailCheck.swift"
     "$root/Tests/ChatTranscript/TraceStepCheck.swift"
+    "$root/Tests/ChatTranscript/ReplayEndCheck.swift"
+    "$root/Tests/ChatTranscript/DroppedMessagesCheck.swift"
+    "$root/Tests/ChatTranscript/DeletedProjectsCheck.swift"
+    "$root/Tests/ChatTranscript/CompletedBuildsCheck.swift"
+    "$root/Tests/ChatTranscript/StarPromptStateCheck.swift"
+    "$root/Tests/ChatTranscript/SidebarOrderCheck.swift"
+    "$root/Tests/ChatTranscript/ChatDeletionCheck.swift"
     "$root/Tests/ChatTranscript/main.swift"
 )
 

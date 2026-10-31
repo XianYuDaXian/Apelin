@@ -5,7 +5,8 @@ import Foundation
 /// Reads `Package`, `Version` and `Architecture` out of a staged `.deb`, so
 /// the host knows what it is about to hand irisind before it does — the
 /// managed-package rules are checked against the package itself, not what a
-/// build or a request says it is.
+/// build or a request says it is — and its `Conflicts`, `Breaks` and
+/// `Replaces`, which explain an install irisind refused.
 ///
 /// System code only: the ar container, the control member uncompressed, as
 /// gzip (raw deflate through libcompression) or as xz (libcompression's LZMA
@@ -17,6 +18,16 @@ enum DebControlPeek {
         var packageID: String
         var version: String
         var architecture: String?
+        var conflicts: [Relation] = []
+        var breaks: [Relation] = []
+        var replaces: [Relation] = []
+    }
+
+    /// One package a relation field names, each alternative of `a | b` on
+    /// its own: `foo (<< 2.0)` is `foo` with constraint `<< 2.0`.
+    struct Relation: Equatable {
+        var package: String
+        var constraint: String?
     }
 
     enum Failure: Error, Equatable {
@@ -63,17 +74,56 @@ enum DebControlPeek {
 
     static func parse(_ text: String) throws -> Control {
         var fields: [String: String] = [:]
-        for line in text.split(separator: "\n") where line.first != " " && line.first != "\t" {
-            guard let colon = line.firstIndex(of: ":") else { continue }
-            fields[line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()] =
-                line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        var last: String?
+        for line in text.split(separator: "\n") {
+            if line.first == " " || line.first == "\t" {
+                // A relation field may be folded; nothing else read here is.
+                if let last, Self.relationFields.contains(last) {
+                    fields[last, default: ""] += " " + line.trimmingCharacters(in: .whitespaces)
+                }
+                continue
+            }
+            guard let colon = line.firstIndex(of: ":") else {
+                last = nil
+                continue
+            }
+            let key = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+            fields[key] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+            last = key
         }
         guard let package = fields["package"], !package.isEmpty,
               let version = fields["version"], !version.isEmpty
         else {
             throw Failure.unreadable
         }
-        return Control(packageID: package, version: version, architecture: fields["architecture"])
+        return Control(
+            packageID: package,
+            version: version,
+            architecture: fields["architecture"],
+            conflicts: relations(fields["conflicts"]),
+            breaks: relations(fields["breaks"]),
+            replaces: relations(fields["replaces"]),
+        )
+    }
+
+    static let relationFields: Set<String> = ["conflicts", "breaks", "replaces"]
+
+    /// `a (>= 1), b | c:any` as dpkg spells a relation field.
+    static func relations(_ field: String?) -> [Relation] {
+        guard let field else { return [] }
+        return field.split(whereSeparator: { $0 == "," || $0 == "|" }).compactMap { alternative in
+            var text = alternative.trimmingCharacters(in: .whitespaces)
+            var constraint: String?
+            if let open = text.firstIndex(of: "(") {
+                constraint = text[text.index(after: open)...].trimmingCharacters(in: CharacterSet(charactersIn: " )"))
+                text = text[..<open].trimmingCharacters(in: .whitespaces)
+            }
+            if let colon = text.firstIndex(of: ":") {
+                text = String(text[..<colon])
+            }
+            guard !text.isEmpty else { return nil }
+            return Relation(package: text.lowercased(), constraint: constraint?.isEmpty == false ? constraint : nil)
+        }
     }
 
     /// The `./control` member of a ustar archive.

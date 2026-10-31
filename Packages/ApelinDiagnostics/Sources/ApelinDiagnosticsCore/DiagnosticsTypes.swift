@@ -180,6 +180,23 @@ public struct UIElementSelector: Codable, Hashable, Sendable {
     }
 }
 
+/// What a press can name: two buttons and icli's wake.
+public enum HardwareButton: String, Codable, Hashable, Sendable, CaseIterable {
+    /// Lights a dark screen and takes a device without a passcode past its
+    /// lock screen; on a device already awake it presses nothing. The one
+    /// action that runs while the device is locked or its screen is off.
+    case wake
+    /// The home button: the front app goes to the home screen.
+    case home
+    /// The side button: the screen goes off and the device locks.
+    case lock
+
+    /// icli's name for it.
+    public var icliName: String {
+        self == .lock ? "power" : rawValue
+    }
+}
+
 /// The closed list of UI actions. Each case carries typed parameters; there
 /// is no case that takes a command.
 public enum UIAction: Codable, Hashable, Sendable {
@@ -188,10 +205,14 @@ public enum UIAction: Codable, Hashable, Sendable {
     case swipe(from: UIPoint, to: UIPoint, seconds: Double)
     /// Typed one grapheme at a time into the focused field.
     case type(text: String, delayMilliseconds: Double)
+    case press(HardwareButton)
 
     public static let maximumTextBytes = 4 * 1024
     public static let swipeSecondsRange: ClosedRange<Double> = 0.05 ... 5
     public static let typeDelayRange: ClosedRange<Double> = 0 ... 500
+    /// icli's own pause between characters. Sent with none, a field dropped
+    /// some of them ("Hello world" arrived as "Hello wrd").
+    public static let defaultTypeDelayMilliseconds: Double = 30
     /// Points; larger than any screen, smaller than anything absurd.
     public static let coordinateRange: ClosedRange<Double> = 0 ... 10000
 
@@ -244,7 +265,82 @@ public enum UIAction: Codable, Hashable, Sendable {
                     String(format: "delay must be %g–%g ms", range.lowerBound, range.upperBound),
                 )
             }
+        case .press:
+            break
         }
+    }
+}
+
+/// Whether the device is locked and whether its screen is off, as icli's
+/// `lockState()` and its wake read them.
+public struct LockState: Codable, Hashable, Sendable {
+    public var locked: Bool
+    public var screenOff: Bool
+
+    public init(locked: Bool, screenOff: Bool) {
+        self.locked = locked
+        self.screenOff = screenOff
+    }
+
+    /// A lit screen past the lock screen: what the UI tree and every action
+    /// but a wake need.
+    public var allowsInput: Bool {
+        !locked && !screenOff
+    }
+}
+
+/// What an action left: a wake, the lock state (`lock`); a `type`, what it
+/// left in the fields (`typed`). Every other action leaves neither, and
+/// `Diagnostics.perform` answers nil for it.
+public struct UIActionOutcome: Codable, Hashable, Sendable {
+    public var lock: LockState?
+    public var typed: TypedText?
+
+    public init(lock: LockState? = nil, typed: TypedText? = nil) {
+        self.lock = lock
+        self.typed = typed
+    }
+}
+
+/// What a `type` left in the frontmost app, read back from its UI tree.
+/// icli names no role for a text field, so the field is found by what
+/// changed: the values the visible elements hold that they did not hold
+/// before the text went in.
+public struct TypedText: Codable, Hashable, Sendable {
+    /// Whether one of the values that changed holds the typed text.
+    public var matches: Bool
+    /// The values that changed, in tree order, at most `maximumValues`,
+    /// each cut to `maximumValueCharacters`.
+    public var fieldValues: [String]
+
+    public static let maximumValues = 8
+    public static let maximumValueCharacters = 2000
+
+    public init(matches: Bool, fieldValues: [String]) {
+        self.matches = matches
+        self.fieldValues = fieldValues
+    }
+
+    /// Compares two reads of every visible element's value. A value counts
+    /// as changed when the earlier read held it fewer times, so a field
+    /// that moved in the tree is not taken for one that changed.
+    public init(typed text: String, before: [String], after: [String]) {
+        var held = [String: Int]()
+        for value in before where !value.isEmpty {
+            held[value, default: 0] += 1
+        }
+        var changed = [String]()
+        for value in after where !value.isEmpty {
+            if let count = held[value], count > 0 {
+                held[value] = count - 1
+            } else {
+                changed.append(value)
+            }
+        }
+        self.init(
+            matches: changed.contains { $0.contains(text) },
+            fieldValues: changed.prefix(Self.maximumValues).map { String($0.prefix(Self.maximumValueCharacters)) },
+        )
     }
 }
 

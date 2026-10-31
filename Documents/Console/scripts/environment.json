@@ -1,5 +1,5 @@
 {
-  "name": "environment: needs the network and a registered SDK for the setup it starts; starts a toolchain setup, reads it back, cancels it, and refuses removing a toolchain and an SDK that do not exist",
+  "name": "environment: needs the network and a registered SDK for the setup it starts; starts a toolchain setup, reads it back, cancels it, and refuses removing, self-testing or making the default a toolchain, and removing an SDK, that do not exist",
   "steps": [
     {"op": "hello"},
     {"op": "toolchainStatus", "label": "status"},
@@ -25,6 +25,8 @@
     {"op": "expect", "request": {"step": "no-toolchain", "ok": false}},
     {"op": "toolchainSelfTest", "label": "no-toolchain-test", "allowError": true, "request": {"id": "no-such-toolchain"}},
     {"op": "expect", "request": {"step": "no-toolchain-test", "ok": false}},
+    {"op": "toolchainSetDefault", "label": "no-toolchain-default", "allowError": true, "request": {"id": "no-such-toolchain"}},
+    {"op": "expect", "request": {"step": "no-toolchain-default", "ok": false}},
 
     {"op": "sdkList", "label": "sdks", "request": {"includeSources": true, "readSources": false}},
     {"op": "sdkRemove", "label": "no-sdk", "allowError": true, "request": {"id": "no-such-sdk"}},

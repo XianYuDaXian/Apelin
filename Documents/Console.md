@@ -4,6 +4,8 @@ Apelin runs headless from a script: the permitted operations on the wire, in ord
 through `ApelinService` — the same typed surface the UI and the agent's tools
 call. `agentAPIConfiguration` is restricted to the provider editing form: the
 console refuses it before sending so a saved API key never enters its output or logs.
+It refuses `feedbackStar` too: a star on the reader's GitHub account comes only
+from their tap in the app.
 The console is the app itself, not a second peer of apelind, so "No
 CLI" holds. It never draws anything and never quits the app.
 
@@ -371,7 +373,9 @@ error, or on `ok: false` where the exact refusal is the worker's to choose.
   (build and packaging match the template, a made-up digest is `changed`),
   a `buildStart` cancelled with `buildCancel` and read back with
   `buildAttach`, a followed build, `installPackage`, the install task
-  replayed with `buildAttach`, `removePackage`. Delete the project after.
+  replayed with `buildAttach`, `installationList` naming that installation,
+  `removePackage`, and `installationList` again without it. Delete the
+  project after.
 - `files.json` — makes the `Hello` tweak project if it is missing, which
   takes the tweak extension and a registered toolchain and SDK.
   `fileRead` of `apelin-project.json` by descriptor; a path out of the
@@ -384,7 +388,9 @@ error, or on `ok: false` where the exact refusal is the worker's to choose.
   `succeeded`, `crashList`, and
   `crashOpen` and `crashSymbolicate` of the newest report (allowed to fail
   on a device with none); an unknown report is refused.
-- `diagnostics.json` — `captureScreen`, `readUITree`, one `uiAction` tap in
+- `diagnostics.json` — a `uiAction` wake, which presses nothing on a
+  device already awake and leaves `screenOff` false, `captureScreen`,
+  `readUITree`, one `uiAction` tap in
   the status bar at (200, 4) — not its corner, where iPadOS 26 puts a
   window's close control —, and a `confirmLoaded` for a build that does not
   exist (allowed to fail).
@@ -424,9 +430,12 @@ error, or on `ok: false` where the exact refusal is the worker's to choose.
 - `transfer-toolchain.json` — by name only: exports the first toolchain as
   an `.apetc` (a GB or more, minutes; RootHide's runtime brand undone),
   inspects it (already set up here) and is refused an import of it.
-- `distribution.json` — no network: `distributionRepositoryList` without
-  GitHub, a bad repository name, a bad `owner/name` and a package outside
-  `Builds/` each refused `badRequest` before a task starts,
+- `distribution.json` — nothing written to GitHub: `distributionRepositoryList`
+  without GitHub, a bad repository name, a bad `owner/name` and a package
+  outside `Builds/` each refused `badRequest` before a task starts, an
+  empty feedback title, a `feedbackRead` of issue 0 and a `feedbackEdit`
+  to an empty title each refused before anything reaches GitHub,
+  `feedbackStarState` (a read: `denied` without a GitHub sign-in),
   `distributionRepositoryUnlink`, then the list with no link. The harness
   keeps `Settings/distribution.json` and puts it back.
 - `tool-host.json` — needs the disassembler agent tool extension.
@@ -456,7 +465,8 @@ error, or on `ok: false` where the exact refusal is the worker's to choose.
   written into `Projects/I2GitCheck/` (the console writes no files): status,
   stage, staged diff, commit, clean tree.
 - `i3-chain.json` — the milestone 1 chain: create the `I3 Chain Tweak`
-  project, check, build, install through irisind, then `confirmLoaded` in
+  project, check, build, install through irisind (`installationList` of
+  the project names the installation), then `confirmLoaded` in
   SpringBoard with `trigger: respring` (marker evidence; the image list is
   not read): expects the marker (`evidence.0`) confirmed and the image
   (`evidence.1`) `notRead`; then removes the package it installed.

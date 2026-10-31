@@ -574,6 +574,12 @@
           "maxItems": 32,
           "items": { "type": "string", "maxLength": 200, "pattern": "^[^\\u0000-\\u001f\\u007f]*$" }
         },
+        "icon": {
+          "description": "The control's Icon: the image a package manager shows beside the package, not the app's own icon. An https URL in printable ASCII, so no space or control character and at most 2048 bytes. Templates write their extension's icon on Apelin's Pages.",
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https://[A-Za-z0-9][!-~]*$"
+        },
         "author": { "$ref": "#/$defs/singleLine" },
         "maintainer": { "$ref": "#/$defs/singleLine" },
         "section": {

@@ -1,3 +1,4 @@
+import enum ApelinProtocol.GitRepositoryVisibility
 import Foundation
 
 /// The approval modes (§7).
@@ -31,8 +32,10 @@ public struct ApprovalRequest: Sendable, Hashable, Codable {
     public var reason: String
     public var detail: ApprovalDetail
     /// Whether "for this session" may be offered. Never for package removal,
-    /// a push, or a request bound to a description digest (the host's
-    /// ledger keeps those).
+    /// a push, a repository made on GitHub or an issue opened on one, an
+    /// issue filed or edited as feedback, a project's deletion, packages
+    /// published to the package repository, or a request bound to a
+    /// description digest (the host's ledger keeps those).
     public var allowsSessionScope: Bool
 
     public init(
@@ -98,6 +101,181 @@ public enum ApprovalDetail: Sendable, Hashable, Codable {
     /// A rename of another project than the session's. The host lets
     /// through only the rename it names, once.
     case projectRename(ProjectRenameApproval)
+    /// A public issue on Apelin's own repository: the whole title and body.
+    /// The host lets through only the issue it names, once.
+    case feedback(FeedbackApproval)
+    /// An edit of an issue the user's GitHub account opened on Apelin's own
+    /// repository: the issue and the whole new title or body. The host lets
+    /// through only the edit it names, against the text it was made
+    /// against, once.
+    case feedbackEdit(FeedbackEditApproval)
+    /// A repository made on GitHub under the user's account: its owner,
+    /// name and visibility. The host lets through only the repository it
+    /// names, once.
+    case repositoryCreate(RepositoryCreateApproval)
+    /// An issue opened under the user's account on a GitHub repository the
+    /// user chose: the repository and the whole title and body. The host
+    /// lets through only the issue it names, once.
+    case issueCreate(IssueCreateApproval)
+    /// Another project deleted for good. The host lets through only the
+    /// deletion of the project it names, once.
+    case projectDelete(ProjectDeleteApproval)
+    /// Builds' packages put in the user's package repository: the
+    /// repository and each package with its digest. The host lets through
+    /// only the publication it names, once.
+    case packagePublish(PackagePublishApproval)
+    /// A use of the screen while Ask Before Using the Screen is on: the UI
+    /// tree read, the action, or the command that runs icli. Asked in every
+    /// mode, never granted for the session; the host lets through only the
+    /// call it names, once.
+    case screenControl(ScreenControlApproval)
+}
+
+/// What a card asks while Ask Before Using the Screen is on (owner,
+/// 2026-10-30), and the host matches the call to (AgentScreenRules): the
+/// UI tree read or the action with its target, as the host is asked for
+/// it, or the command that runs one of `ScreenConsent.programs`, which the
+/// card shows as any command's.
+public enum ScreenControlApproval: Sendable, Hashable, Codable {
+    case readTree(targetID: String?)
+    case interact(targetID: String?, action: UIAction)
+    case command(RunCodeInvocation, asRoot: Bool)
+}
+
+/// What an apelin_package_publish card names, and the host matches its
+/// request to (AgentPublishRules): the linked repository, then each
+/// package — its build, what it is, the file the build wrote and the
+/// digest it recorded —, in the order they are sent.
+public struct PackagePublishApproval: Sendable, Hashable, Codable {
+    public struct Package: Sendable, Hashable, Codable {
+        public var buildID: String
+        public var packageID: String
+        public var version: String
+        public var architecture: String
+        /// `roothide` or `rootless`.
+        public var bootstrap: String
+        public var file: String
+        /// `sha256:<hex>`, as the build recorded it.
+        public var digest: String
+        public init(
+            buildID: String,
+            packageID: String,
+            version: String,
+            architecture: String,
+            bootstrap: String,
+            file: String,
+            digest: String,
+        ) {
+            self.buildID = buildID
+            self.packageID = packageID
+            self.version = version
+            self.architecture = architecture
+            self.bootstrap = bootstrap
+            self.file = file
+            self.digest = digest
+        }
+    }
+
+    /// `owner/name`.
+    public var repository: String
+    /// The address a package manager adds.
+    public var sourceURL: String?
+    public var packages: [Package]
+    public init(repository: String, sourceURL: String?, packages: [Package]) {
+        self.repository = repository
+        self.sourceURL = sourceURL
+        self.packages = packages
+    }
+}
+
+/// What an apelin_git_create_repository card names, and the host matches
+/// its request to (AgentRepositoryCreateRules): the request as the tool
+/// sends it. A nil owner is the signed-in account.
+public struct RepositoryCreateApproval: Sendable, Hashable, Codable {
+    public var owner: String?
+    public var name: String
+    public var visibility: GitRepositoryVisibility
+    public var description: String?
+    public init(owner: String?, name: String, visibility: GitRepositoryVisibility, description: String?) {
+        self.owner = owner
+        self.name = name
+        self.visibility = visibility
+        self.description = description
+    }
+}
+
+/// What an apelin_git_create_issue card names, and the host matches its
+/// issue to (AgentIssueCreateRules): the repository, the title and the
+/// body, as the tool sends them.
+public struct IssueCreateApproval: Sendable, Hashable, Codable {
+    /// `owner/name`.
+    public var repository: String
+    public var title: String
+    public var body: String
+    public init(repository: String, title: String, body: String) {
+        self.repository = repository
+        self.title = title
+        self.body = body
+    }
+}
+
+/// What an apelin_project_delete card names, and the host matches its
+/// deletion to (AgentProjectDeleteRules): the project, its folder and the
+/// name the sidebar shows.
+public struct ProjectDeleteApproval: Sendable, Hashable, Codable {
+    public var projectID: String
+    public var folder: String
+    public var displayName: String
+    public init(projectID: String, folder: String, displayName: String) {
+        self.projectID = projectID
+        self.folder = folder
+        self.displayName = displayName
+    }
+}
+
+/// What an apelin_feedback_send card names, and the host matches its issue
+/// to (AgentFeedbackRules): the repository, the title and the body, as the
+/// tool sends them.
+public struct FeedbackApproval: Sendable, Hashable, Codable {
+    public var repository: String
+    public var title: String
+    public var body: String
+    public init(repository: String, title: String, body: String) {
+        self.repository = repository
+        self.title = title
+        self.body = body
+    }
+}
+
+/// What an apelin_feedback_edit card names, and the host matches its edit to
+/// (AgentFeedbackRules): the issue, the title and body it puts in — nil for
+/// one that stays — and the title and body it was made against, as the
+/// tool read them just before asking.
+public struct FeedbackEditApproval: Sendable, Hashable, Codable {
+    public var repository: String
+    public var number: Int
+    public var url: String
+    public var title: String?
+    public var body: String?
+    public var currentTitle: String
+    public var currentBody: String
+    public init(
+        repository: String,
+        number: Int,
+        url: String,
+        title: String?,
+        body: String?,
+        currentTitle: String,
+        currentBody: String,
+    ) {
+        self.repository = repository
+        self.number = number
+        self.url = url
+        self.title = title
+        self.body = body
+        self.currentTitle = currentTitle
+        self.currentBody = currentBody
+    }
 }
 
 /// What an apelin_project_rename card names for another project, and the

@@ -5,10 +5,10 @@
 ///
 /// A tool that acts on what Apelin keeps — its projects and templates, the
 /// packages it installs, the device, toolchains and SDKs, conversations,
-/// memory, skills, its settings — is `apelin_<scope>_<verb>`; a generic
-/// verb on the session's own project is `<domain>_<verb>`: `file_*`,
-/// `shell_run` and the repository's `git_*`. MCP tools keep kwwk's
-/// `mcp__<server>__<tool>`.
+/// memory, skills, its settings — or reaches past the device, as the web
+/// fetch does, is `apelin_<scope>_<verb>`; a generic verb on the session's
+/// own project is `<domain>_<verb>`: `file_*`, `shell_run` and the
+/// repository's `git_*`. MCP tools keep kwwk's `mcp__<server>__<tool>`.
 public enum AgentToolName: String, Sendable, Hashable, Codable, CaseIterable {
     case fileWrite = "file_write"
     case fileEdit = "file_edit"
@@ -17,12 +17,15 @@ public enum AgentToolName: String, Sendable, Hashable, Codable, CaseIterable {
     case fileList = "file_list"
     case fileGrep = "file_grep"
     case fileFind = "file_find"
+    case fileShow = "file_show"
     case shellRun = "shell_run"
     case sdkAnalyzeFramework = "apelin_sdk_analyze_framework"
     case sdkReadHeader = "apelin_sdk_read_header"
     case projectBuild = "apelin_project_build"
     case packageInstall = "apelin_package_install"
     case packageRemove = "apelin_package_remove"
+    case packageList = "apelin_package_list"
+    case packagePublish = "apelin_package_publish"
     case deviceRespring = "apelin_device_respring"
     case packageConfirmLoaded = "apelin_package_confirm_loaded"
     case logRead = "apelin_log_read"
@@ -40,11 +43,16 @@ public enum AgentToolName: String, Sendable, Hashable, Codable, CaseIterable {
     case skillSave = "apelin_skill_save"
     case skillRemove = "apelin_skill_remove"
     case notificationSend = "apelin_notification_send"
+    case webFetch = "apelin_web_fetch"
+    case feedbackSend = "apelin_feedback_send"
+    case feedbackRead = "apelin_feedback_read"
+    case feedbackEdit = "apelin_feedback_edit"
     case projectCheckDistribution = "apelin_project_check_distribution"
     case templateList = "apelin_template_list"
     case projectList = "apelin_project_list"
     case projectCreate = "apelin_project_create"
     case projectRename = "apelin_project_rename"
+    case projectDelete = "apelin_project_delete"
     case gitStatus = "git_status"
     case gitDiff = "git_diff"
     case gitStage = "git_stage"
@@ -59,6 +67,8 @@ public enum AgentToolName: String, Sendable, Hashable, Codable, CaseIterable {
     case gitSetAuthor = "apelin_git_set_author"
     case gitSaveCredential = "apelin_git_save_credential"
     case gitRemoveCredential = "apelin_git_remove_credential"
+    case gitCreateRepository = "apelin_git_create_repository"
+    case gitCreateIssue = "apelin_git_create_issue"
     case conversationCreate = "apelin_conversation_create"
     case conversationSend = "apelin_conversation_send"
     case conversationList = "apelin_conversation_list"

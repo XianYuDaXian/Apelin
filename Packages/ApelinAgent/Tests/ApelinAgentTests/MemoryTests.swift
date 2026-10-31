@@ -1,11 +1,54 @@
 @testable import ApelinAgent
 import ApelinCore
+import enum ApelinProtocol.AgentToolName
 import Foundation
 import KWWKAI
 import Testing
 
 @Suite("Long-term memory")
 struct MemoryTests {
+    private static let weather = try! ProjectIdentity(id: "6f1c5b0e-0000-4000-8000-00000000beef", name: ProjectName("Weather"))
+
+    /// apelin_memory_list's answer with all_projects, as the model reads it.
+    private struct Listing: Decodable {
+        struct Record: Decodable, Equatable {
+            var title: String
+            var projectID: String?
+            var folder: String?
+            var displayName: String?
+            var missing: Bool?
+        }
+
+        var revision: String
+        var records: [Record]
+    }
+
+    private static func runner(
+        _ home: TemporaryHome,
+        _ store: MemoryStore,
+        _ backend: MockBackend,
+        project: ProjectIdentity? = nil,
+    ) throws -> ToolRunner {
+        try ToolRunner(sessionID: UUID().uuidString, project: project ?? home.project, root: ScopedRoot(home.projectURL),
+                       policy: ApprovalPolicy(mode: .confirm), backend: backend, digests: MockDigestLedger(),
+                       gate: ApprovalGate { _ in }, memory: store)
+    }
+
+    /// The tool's answer, as the model reads it.
+    private static func run(_ runner: ToolRunner, _ tool: AgentToolName, _ arguments: KWWKAI.JSONValue) async throws -> String {
+        let result = try await runner.run(.local(tool), toolCallID: UUID().uuidString, arguments: arguments, cancellation: nil, mcp: nil)
+        return result.content.compactMap { block -> String? in
+            if case let .text(text) = block {
+                return text.text
+            }
+            return nil
+        }.joined()
+    }
+
+    private static func snapshot(_ text: String) throws -> MemorySnapshot {
+        try JSONDecoder().decode(MemorySnapshot.self, from: Data(text.utf8))
+    }
+
     @Test
     func `tools persist scoped records, retain scope and refuse stale or hidden records`() throws {
         let home = try TemporaryHome()
@@ -130,5 +173,116 @@ struct MemoryTests {
         try await next.prompt("Continue in a new chat.")
         await next.waitForIdle()
         await next.close()
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func `a call that names another project lists, saves and deletes its records without asking, and this chat's own stay apart`() async throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        let store = MemoryStore(root: home.dataRoot.url)
+        var snapshot = try store.save(MemoryRecord(title: "Language", body: "Use Chinese."), revision: store.read().revision)
+        snapshot = try store.save(MemoryRecord(title: "Target", body: "Hooks SpringBoard.", projectID: home.project.id), revision: snapshot.revision)
+        let theirs = MemoryRecord(title: "Units", body: "Celsius.", projectID: Self.weather.id)
+        snapshot = try store.save(theirs, revision: snapshot.revision)
+        let backend = MockBackend()
+        await backend.addProject(Self.weather)
+        let events = EventCollector()
+        let runner = try ToolRunner(sessionID: UUID().uuidString, project: home.project, root: ScopedRoot(home.projectURL),
+                                    policy: ApprovalPolicy(mode: .confirm), backend: backend, digests: MockDigestLedger(),
+                                    gate: ApprovalGate { await events.add($0) }, memory: store)
+
+        // by folder or by projectID, every chat's records and that project's
+        for reference in ["Weather", Self.weather.id] {
+            let listed = try await Self.snapshot(Self.run(runner, .memoryList, ["project": .string(reference)]))
+            #expect(listed.records.map(\.title) == ["Language", "Units"], "\(reference)")
+        }
+        _ = try await Self.run(runner, .memorySave, ["revision": .string(snapshot.revision), "title": "Radar", "body": "Uses the hourly feed.", "project": "Weather"])
+        let radar = try #require(store.read().records.first { $0.title == "Radar" })
+        #expect(radar.projectID == Self.weather.id)
+
+        // Without the project, its record's id is named as that project's.
+        let unnamed = await #expect(throws: ToolArgumentError.self) {
+            try await Self.run(runner, .memoryDelete, ["revision": .string(store.read().revision), "id": .string(theirs.id)])
+        }
+        #expect(unnamed?.message.contains("pass project: \(Self.weather.id)") == true)
+        _ = try await Self.run(runner, .memoryDelete, ["revision": .string(store.read().revision), "id": .string(theirs.id), "project": "Weather"])
+        #expect(try store.read().records.map(\.title) == ["Language", "Target", "Radar"])
+
+        let own = try await Self.snapshot(Self.run(runner, .memoryList, [:]))
+        #expect(own.records.map(\.title) == ["Language", "Target"])
+        let unknown = await #expect(throws: ToolDeniedError.self) {
+            try await Self.run(runner, .memorySave, ["revision": .string(store.read().revision), "title": "Lost", "body": "Nowhere.", "project": "Nowhere"])
+        }
+        #expect(unknown?.message == "no project Nowhere")
+        #expect(try store.read().records.count == 3)
+        #expect(await events.events.isEmpty, "memory asks in no mode, wherever it is kept")
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func `all_projects lists every record with its project, and one whose project is gone is marked and can be cleaned up`() async throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        let store = MemoryStore(root: home.dataRoot.url)
+        var snapshot = try store.save(MemoryRecord(title: "Language", body: "Use Chinese."), revision: store.read().revision)
+        snapshot = try store.save(MemoryRecord(title: "Target", body: "Hooks SpringBoard.", projectID: home.project.id), revision: snapshot.revision)
+        snapshot = try store.save(MemoryRecord(title: "Units", body: "Celsius.", projectID: Self.weather.id), revision: snapshot.revision)
+        let old = MemoryRecord(title: "Old", body: "A project since deleted.", projectID: "gone-project")
+        snapshot = try store.save(old, revision: snapshot.revision)
+        let backend = MockBackend()
+        await backend.setListedProjects(ProjectListToolResponse(projects: [
+            ListedProject(folder: "Hello", projectID: home.project.id, displayName: "Clock", buildSystem: "apelin", isThisProject: true),
+            ListedProject(folder: "Weather", projectID: Self.weather.id, displayName: "Rain Radar", buildSystem: "external", isThisProject: false),
+        ], truncated: false))
+        let runner = try Self.runner(home, store, backend)
+
+        let listing = try await JSONDecoder().decode(Listing.self, from: Data(Self.run(runner, .memoryList, ["all_projects": true]).utf8))
+        #expect(listing.revision == snapshot.revision)
+        #expect(listing.records == [
+            .init(title: "Language"),
+            .init(title: "Target", projectID: home.project.id, folder: "Hello", displayName: "Clock"),
+            .init(title: "Units", projectID: Self.weather.id, folder: "Weather", displayName: "Rain Radar"),
+            .init(title: "Old", projectID: "gone-project", missing: true),
+        ])
+        await #expect(throws: ToolArgumentError.self, "one project or every project, not both") {
+            try await Self.run(runner, .memoryList, ["all_projects": true, "project": "Weather"])
+        }
+
+        // A list cut short is no proof that a project is gone.
+        await backend.setListedProjects(ProjectListToolResponse(projects: [], truncated: true))
+        await backend.addProject(home.project)
+        await backend.addProject(Self.weather)
+        let cut = try await JSONDecoder().decode(Listing.self, from: Data(Self.run(runner, .memoryList, ["all_projects": true]).utf8))
+        #expect(cut.records.map(\.missing) == [nil, nil, nil, true])
+        #expect(cut.records.map(\.folder) == [nil, "Hello", "Weather", nil])
+
+        // The gone project's records are reached by its projectID, to
+        // change or delete, but it takes no new one.
+        let refused = await #expect(throws: ToolArgumentError.self) {
+            try await Self.run(runner, .memorySave, ["revision": .string(snapshot.revision), "title": "More", "body": "Nothing.", "project": "gone-project"])
+        }
+        #expect(refused?.message.contains("not added to") == true)
+        _ = try await Self.run(runner, .memoryDelete, ["revision": .string(snapshot.revision), "id": .string(old.id), "project": "gone-project"])
+        #expect(try store.read().records.map(\.title) == ["Language", "Target", "Units"])
+    }
+
+    @Test(.timeLimit(.minutes(1)))
+    func `General Chat keeps a project record only for the project it names, never for its own temporary id`() async throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        let store = MemoryStore(root: home.dataRoot.url)
+        let backend = MockBackend()
+        await backend.addProject(Self.weather)
+        let id = UUID().uuidString
+        let runner = try Self.runner(home, store, backend, project: ProjectIdentity(id: "temporary:" + id, name: ProjectName(id)))
+        for scope: KWWKAI.JSONValue in [.null, "project"] {
+            let error = await #expect(throws: ToolArgumentError.self) {
+                try await Self.run(runner, .memorySave, ["revision": .string(store.read().revision), "title": "Units", "body": "Celsius.", "scope": scope])
+            }
+            #expect(error?.message.contains("General Chat has no project of its own") == true)
+        }
+        #expect(try store.read().records.isEmpty)
+        _ = try await Self.run(runner, .memorySave, ["revision": .string(store.read().revision), "title": "Language", "body": "Use Chinese.", "scope": "global"])
+        _ = try await Self.run(runner, .memorySave, ["revision": .string(store.read().revision), "title": "Units", "body": "Celsius.", "project": "Weather"])
+        #expect(try store.read().records.map(\.projectID) == [nil, Self.weather.id])
     }
 }

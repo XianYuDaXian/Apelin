@@ -6,8 +6,16 @@ struct ChatSummary: Hashable, Codable, Sendable {
     /// The name the reader, the agent or the first message gave it; empty
     /// while it has none. What is shown is `displayTitle`.
     var title: String
-    /// When it was last active: the day it is listed under.
-    var updated: Date
+    /// When the reader last started it or sent it a message, a queued one
+    /// included; for one an agent opened, until then, when the app took it
+    /// in (`ChatAdoption`). The sidebar lists it by this, newest first, under
+    /// its day (`SidebarOrder`). Nothing an agent or another conversation
+    /// does moves it — output, a title, an approval asked, a message sent
+    /// from another conversation, a compaction, a reopened session's
+    /// replay —, nor does picking, pinning, renaming, Approve, Deny or Stop,
+    /// so the list holds still while conversations work. Saved as `updated`,
+    /// its name when every event moved it; a file from then keeps its time.
+    var lastInteraction: Date
     /// The project it belongs to; nil for a temporary conversation.
     var projectName: String?
     /// Listed above the days, until it is unpinned.
@@ -21,8 +29,8 @@ struct ChatSummary: Hashable, Codable, Sendable {
 
 extension ChatSummary {
     /// A new conversation, with no name yet.
-    static func untitled(updated: Date, projectName: String?) -> ChatSummary {
-        ChatSummary(title: "", updated: updated, projectName: projectName)
+    static func untitled(lastInteraction: Date, projectName: String?) -> ChatSummary {
+        ChatSummary(title: "", lastInteraction: lastInteraction, projectName: projectName)
     }
 
     /// Nothing has named it yet: shown as New Chat, in the language the
@@ -67,7 +75,8 @@ extension ChatSummary {
 
 extension ChatSummary {
     private enum CodingKeys: String, CodingKey {
-        case id, title, updated, projectName, isPinned, isWorking, isNamedByReader
+        case id, title, projectName, isPinned, isWorking, isNamedByReader
+        case lastInteraction = "updated"
     }
 
     /// Reads a saved conversation. Before untitled was kept as no title,
@@ -79,7 +88,7 @@ extension ChatSummary {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         id = try container.decode(UUID.self, forKey: .id)
         title = try container.decode(String.self, forKey: .title)
-        updated = try container.decode(Date.self, forKey: .updated)
+        lastInteraction = try container.decode(Date.self, forKey: .lastInteraction)
         projectName = try container.decodeIfPresent(String.self, forKey: .projectName)
         isPinned = try container.decode(Bool.self, forKey: .isPinned)
         isWorking = try container.decode(Bool.self, forKey: .isWorking)

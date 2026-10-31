@@ -11,20 +11,29 @@ final class MessageImageGrid: UIView {
         }
     }
 
+    /// The screen's, as the row was measured with (`size(for:…)`).
+    var displayScale: CGFloat = 0 {
+        didSet {
+            if displayScale != oldValue {
+                setNeedsLayout()
+            }
+        }
+    }
+
     private var attachments: [ComposerAttachment] = []
     private var tiles: [UIButton] = []
     private var aspectRatios: [CGFloat] = []
+    private var pixelSizes: [CGSize?] = []
     private let background = MessageAccentGradientView()
     private let content = UIView()
     private static let contentInset: CGFloat = 1
+    private static let cornerRadius: CGFloat = 12
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        layer.cornerRadius = 12
         layer.cornerCurve = .continuous
         clipsToBounds = true
         addSubview(background)
-        content.layer.cornerRadius = layer.cornerRadius - Self.contentInset
         content.layer.cornerCurve = .continuous
         content.clipsToBounds = true
         addSubview(content)
@@ -41,9 +50,11 @@ final class MessageImageGrid: UIView {
         tiles.forEach { $0.removeFromSuperview() }
         tiles = []
         aspectRatios = []
+        pixelSizes = []
         for attachment in images {
             let image = MessageAttachmentPreviews.shared.image(for: attachment)
             aspectRatios.append(image.map { $0.size.width / max($0.size.height, 1) } ?? 1)
+            pixelSizes.append(MessageAttachmentPreviews.shared.pixelSize(for: attachment))
             let tile = UIButton(type: .custom)
             let imageView = UIImageView(image: image)
             imageView.contentMode = .scaleAspectFill
@@ -63,6 +74,10 @@ final class MessageImageGrid: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // an album as small as an icon is rounded as one
+        let radius = min(Self.cornerRadius, min(bounds.width, bounds.height) / 4)
+        layer.cornerRadius = radius
+        content.layer.cornerRadius = max(0, radius - Self.contentInset)
         background.frame = bounds
         content.frame = CGRect(
             x: Self.contentInset,
@@ -72,6 +87,8 @@ final class MessageImageGrid: UIView {
         )
         let frames = Self.contentFrames(
             aspectRatios: aspectRatios,
+            pixelSizes: pixelSizes,
+            displayScale: displayScale,
             width: maximumSize.width,
             maximumHeight: maximumSize.height,
         )
@@ -82,12 +99,26 @@ final class MessageImageGrid: UIView {
         }
     }
 
-    static func size(for images: [ComposerAttachment], width: CGFloat, maximumHeight: CGFloat) -> CGSize {
+    /// `displayScale` is the screen's, which makes an image's pixels its own
+    /// size in points: one of its pixels to each of the screen's.
+    static func size(
+        for images: [ComposerAttachment],
+        width: CGFloat,
+        maximumHeight: CGFloat,
+        displayScale: CGFloat,
+    ) -> CGSize {
+        let previews = MessageAttachmentPreviews.shared
         let ratios = images.map { attachment -> CGFloat in
-            guard let image = MessageAttachmentPreviews.shared.image(for: attachment) else { return 1 }
+            guard let image = previews.image(for: attachment) else { return 1 }
             return image.size.width / max(image.size.height, 1)
         }
-        let frames = contentFrames(aspectRatios: ratios, width: width, maximumHeight: maximumHeight)
+        let frames = contentFrames(
+            aspectRatios: ratios,
+            pixelSizes: images.map { previews.pixelSize(for: $0) },
+            displayScale: displayScale,
+            width: width,
+            maximumHeight: maximumHeight,
+        )
         guard !frames.isEmpty else { return .zero }
         return CGSize(
             width: (frames.map(\.maxX).max() ?? 0) + contentInset * 2,
@@ -95,9 +126,20 @@ final class MessageImageGrid: UIView {
         )
     }
 
-    private static func contentFrames(aspectRatios: [CGFloat], width: CGFloat, maximumHeight: CGFloat) -> [CGRect] {
+    private static func contentFrames(
+        aspectRatios: [CGFloat],
+        pixelSizes: [CGSize?],
+        displayScale: CGFloat,
+        width: CGFloat,
+        maximumHeight: CGFloat,
+    ) -> [CGRect] {
         MessageImageLayout.frames(
             aspectRatios: aspectRatios,
+            // with no scale yet, the album is as large as the limits
+            naturalSizes: pixelSizes.map { pixels in
+                guard let pixels, displayScale > 0 else { return nil }
+                return CGSize(width: pixels.width / displayScale, height: pixels.height / displayScale)
+            },
             width: max(0, min(540, width) - contentInset * 2),
             maximumHeight: max(0, maximumHeight - contentInset * 2),
         )

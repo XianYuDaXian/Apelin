@@ -76,7 +76,7 @@ enum XPCEnvelope {
                     requestID,
                     ApelinError(
                         .unavailable,
-                        String(localized: "The connection to Apelin's background service closed. Try again."),
+                        String(localized: "The connection to Apelin’s background service closed. Try again."),
                     ),
                 ),
                 [],
@@ -91,7 +91,7 @@ enum XPCEnvelope {
                     requestID,
                     ApelinError(
                         .internal,
-                        String(localized: "Apelin's background service returned an incomplete response. Try again."),
+                        String(localized: "Apelin’s background service returned an incomplete response. Try again."),
                     ),
                 ),
                 [],

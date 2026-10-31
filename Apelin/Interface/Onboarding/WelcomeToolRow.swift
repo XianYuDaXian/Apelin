@@ -24,7 +24,7 @@ final class WelcomeToolRow: UITableViewCell {
         words.addArrangedSubview(detailLabel)
         titleLabel.font = .preferredFont(forTextStyle: .body)
         titleLabel.numberOfLines = 1
-        detailLabel.font = WelcomeStyle.detailFont
+        detailLabel.font = .preferredFont(forTextStyle: .body)
         detailLabel.textColor = .secondaryLabel
         detailLabel.numberOfLines = 1
         titleLabel.adjustsFontForContentSizeCategory = true

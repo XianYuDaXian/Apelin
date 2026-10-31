@@ -21,6 +21,12 @@ public enum AgentSessionEvent: Sendable, Hashable, Codable {
     case steered(text: String)
     /// A model turn started streaming.
     case messageStarted
+    /// The message streaming since the last `messageStarted` was given up
+    /// and is asked for again: its text and thinking are not the reply.
+    case messageDiscarded
+    /// A model request failed and is being made again: kwwk's retry, or a
+    /// wait for the network to come back (`NetworkRecovery`).
+    case reconnecting
     /// Streamed assistant text.
     case textDelta(String)
     /// Streamed reasoning text.

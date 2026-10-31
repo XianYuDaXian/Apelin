@@ -44,6 +44,7 @@
     "name": "{{displayName}}",
     "version": "0.0.1",
     "description": "{{summary}}",
+    "icon": "https://owngoal-dev.github.io/Apelin/icons/wiki.qaq.apelin.dev.cli.png",
     "author": "{{author}}",
     "section": "Utilities",
     "layout": [

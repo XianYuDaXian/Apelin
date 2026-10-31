@@ -119,13 +119,15 @@ struct ConversationReader {
         }
     }
 
+    /// An ended conversation waits on nothing: an approval it asked for
+    /// before its task ended can no longer be given.
     func response(sessionID: String, title: String?, timedOut: Bool) -> ConversationReadToolResponse {
         ConversationReadToolResponse(
             sessionID: sessionID,
             title: title,
             state: state,
             messages: messages,
-            pendingApprovals: pending,
+            pendingApprovals: state == .ended ? [] : pending,
             lastSeq: resumeSeq ?? max(lastSeq.rawValue, afterSeq),
             truncated: truncated,
             timedOut: timedOut,

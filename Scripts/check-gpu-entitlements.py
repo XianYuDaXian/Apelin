@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
-"""Refuse an app entitlements file that does not name the GPU.
+"""Refuse an entitlements file that does not name the GPU.
 
 A bootstrap withholds the GPU's IOKit user clients from an ad-hoc signed
 binary until `com.apple.security.iokit-user-client-class` names them, and
 system frameworks reach for them in an app that never draws with Metal:
 IconServices composites an app icon through Core Image (a launch crash in
 `CI::GLContext::GLContext` without the list), and Bold Text and the share
-sheet do the same through UIKit. Nothing in the build notices the miss; the
-app dies on the user's device.
+sheet do the same through UIKit. A command-line tool is refused its
+IOSurfaces the same way: a VideoToolbox converter's `CVPixelBufferCreate`
+answered -6662 on a device until the tool named them. Nothing in the build
+notices the miss; the program fails on the user's device.
+
+`make check` passes Apelin's own entitlements and those of the app and
+command-line tool templates.
 
 Both spellings of the key must carry every class below: the kernel's denial
 names the plain one, and the Bold Text fix was the `exception.` one.
-Extra classes are allowed. Copied verbatim from platformize-app-ios
-`scripts/`; a class found in a new crash report is added there first.
+Extra classes are allowed. The list is copied verbatim from
+platformize-app-ios `scripts/`; a class found in a new crash report is
+added there first.
 
-usage: check-gpu-entitlements.py <app.entitlements>...
+usage: check-gpu-entitlements.py <file.entitlements>...
 """
 import plistlib
 import sys
@@ -72,9 +78,10 @@ def main(paths):
     failed = False
     for path in paths:
         for problem in problems(path):
-            print(f'error: {path}: {problem} — the app crashes wherever a '
-                  'system framework reaches for the GPU (app icons, Bold '
-                  'Text, the share sheet)', file=sys.stderr)
+            print(f'error: {path}: {problem} — what is signed with it fails '
+                  'wherever a system framework reaches for the GPU or an '
+                  'IOSurface (app icons, Bold Text, the share sheet, '
+                  'VideoToolbox)', file=sys.stderr)
             failed = True
     if failed:
         return 65

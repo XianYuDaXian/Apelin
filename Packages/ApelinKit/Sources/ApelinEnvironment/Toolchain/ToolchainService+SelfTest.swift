@@ -75,9 +75,8 @@ public extension ToolchainService {
         registry.toolchains[index].selfTestSDK = sdk.version
         try registry.save(layout)
         let failed = results.filter { !$0.passed }
-        if !failed.isEmpty {
-            reporter.warning("\(failed.count) of \(results.count) self-test cases failed: "
-                + failed.map { "\($0.language) · \($0.architecture)" }.joined(separator: ", "))
+        for test in failed {
+            reporter.warning("The \(test.language) self-test failed on \(test.architecture).")
         }
         return registry.toolchains[index]
     }

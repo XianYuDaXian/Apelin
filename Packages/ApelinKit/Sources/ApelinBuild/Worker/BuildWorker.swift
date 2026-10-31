@@ -4,7 +4,8 @@ import ApelinProtocol
 import Foundation
 
 /// What apelin-build serves (Workers/Build/main.swift is one call to this):
-/// `extensionList`, `projectCreate` and `projectCheck` answered directly;
+/// `extensionList`, `projectCreate`, `projectCheck`, `projectRename` and
+/// `projectDelete` answered directly;
 /// `buildStart` accepted, then run on its own thread as the task the host
 /// registered, every stage, log line, diagnostic and the artifact an event,
 /// ending in a `state` event that also carries the artifact's ID and digest
@@ -66,6 +67,10 @@ public final class BuildWorker: @unchecked Sendable {
         case .projectRename:
             return await WorkerMain.serve(ProjectRenameRequest.self, request) {
                 try ProjectMetadata.rename($0, in: dataFolder)
+            }
+        case .projectDelete:
+            return await WorkerMain.serve(ProjectDeleteRequest.self, request) {
+                try ProjectDeletion.delete($0, in: dataFolder)
             }
         case .buildStart:
             guard let taskID = request.taskID else {
@@ -213,15 +218,15 @@ public final class BuildWorker: @unchecked Sendable {
 
     /// With `environment`, the check a switch to those registered
     /// components would get, nothing written; a component that is not
-    /// registered is `notFound`.
+    /// registered is `notFound`. A project file that does not read has no
+    /// binding to switch: its check answers, field by field, with none.
     public func projectCheck(_ request: ProjectCheckRequest) throws -> ProjectCheckResponse {
         if let (_, root) = try? store.root(of: request.projectID), let manifest = Workspace.manifest(at: root) {
             return Self.workspaceCheck(manifest, root: root)
         }
         let check = ProjectCheck(store: store, catalog: catalog, registry: registry)
         var candidate: ProjectDocument.EnvironmentBinding?
-        if let choice = request.environment {
-            let current = try store.locate(request.projectID).project.environment
+        if let choice = request.environment, let current = try? store.locate(request.projectID).project.environment {
             candidate = try check.binding(choice, replacing: current)
         }
         let result = check.run(projectID: request.projectID, environment: candidate)

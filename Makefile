@@ -12,6 +12,7 @@ DERIVED_DATA        ?= /private/tmp/apelin-deriveddata
 
 DEVICE_DESTINATION  := generic/platform=iOS
 PRODUCTS_DIR        := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)-iphoneos
+TARGET_INTERMEDIATES := $(DERIVED_DATA)/Build/Intermediates.noindex/Apelin.build/$(CONFIGURATION)-iphoneos
 APP_BUNDLE          := $(PRODUCTS_DIR)/Apelin.app
 DAEMON_BINARY       := $(PRODUCTS_DIR)/apelind
 # The workers apelind's session host spawns; each one's entitlements are
@@ -62,6 +63,8 @@ ACCESSIBILITY_CHECK := $(ROOT_DIR)/Scripts/check-accessibility.py
 STALE_STRINGS_CHECK := $(ROOT_DIR)/Scripts/check-stale-strings.py
 FORMAT_STRINGS_CHECK := $(ROOT_DIR)/Scripts/check-format-strings.py
 TRANSLATIONS_CHECK := $(ROOT_DIR)/Scripts/check-translations.py
+CATALOG_KEYS_CHECK := $(ROOT_DIR)/Scripts/check-catalog-keys.py
+SHELL_DELETES_CHECK := $(ROOT_DIR)/Scripts/check-shell-deletes.py
 SYMBOL_CHECK        := $(ROOT_DIR)/Scripts/check-symbol-availability.py
 RPATH_CHECK         := $(ROOT_DIR)/Scripts/check-rpath-dependencies.py
 # The device harness: console scripts and suites on a vphone or a device,
@@ -72,6 +75,12 @@ ENTITLEMENTS        := $(ROOT_DIR)/Packaging/Apelin.entitlements
 DAEMON_ENTITLEMENTS := $(ROOT_DIR)/Packaging/Apelind.entitlements
 # The widget extension's (Widgets/Extension): sandboxed, the App Group alone.
 WIDGET_ENTITLEMENTS := $(ROOT_DIR)/Packaging/ApelinWidgets.entitlements
+# The development templates whose product is an executable signed with its
+# own entitlements, an app or a command-line tool: both carry the app's GPU
+# list. A tweak or a preference bundle is a library and runs with the
+# entitlements of the process that loads it.
+TEMPLATE_ENTITLEMENTS := $(wildcard $(ROOT_DIR)/Extensions/Development/wiki.qaq.apelin.dev.app/templates/*/Packaging/*.entitlements) \
+	$(wildcard $(ROOT_DIR)/Extensions/Development/wiki.qaq.apelin.dev.cli/templates/*/Packaging/*.entitlements)
 # The one App Group the app and the widget extension share; the snapshot's
 # store names it too (Widgets/Shared/ChatWidgetSnapshot.swift).
 APP_GROUP           := group.wiki.qaq.apelin
@@ -119,6 +128,15 @@ DIAGNOSTICS_SCRATCH := $(call package_scratch,ApelinDiagnostics)
 AGENT_SCRATCH       := $(call package_scratch,ApelinAgent)
 # The oldest iOS the package claims. `check` refuses one in project.pbxproj.
 IOS_DEPLOYMENT_FLOOR := $(shell sed -n 's/^[[:space:]]*IPHONEOS_DEPLOYMENT_TARGET[[:space:]]*=[[:space:]]*\([0-9.]*\).*/\1/p' "$(CONFIG_DIR)/Base.xcconfig")
+# The oldest iPhoneOS SDK the app is linked against. The SDK, not the floor,
+# picks how an iPhone Duo treats the app: linked against iOS 27.1 or later
+# it runs edge to edge, its bars laid out vertically beside the content;
+# against 27.0 it stays clear of the status bar's edge; against 26 or older
+# it sits centred with empty space around it. `build` and `install-app`
+# refuse an older SDK, and `_package` reads the SDK back from the app it
+# ships. Pick the Xcode with xcode-select or DEVELOPER_DIR (AGENTS.md ▸
+# Decisions ▸ The SDK tier).
+IOS_SDK_TIER        := 27.1
 
 # A device on the network or behind `iproxy $(DEVICE_PORT) 22`. Set
 # DEVICE_PASSWORD empty to use an ssh key instead.
@@ -163,7 +181,7 @@ endif
 
 shell_word = '$(subst ','\'',$(1))'
 
-.PHONY: checklist all help print-version print-build-number print-deb-path set-version check format harness build _package deb deb-roothide deb-rootless deb-all deb-extensions deb-agent-tools template-archive install vphone install-app vphone-app device-status device-install device-test device-run clean
+.PHONY: checklist sdk-tier all help print-version print-build-number print-deb-path set-version check format harness build _package deb deb-roothide deb-rootless deb-all deb-extensions deb-agent-tools template-archive install vphone install-app vphone-app device-status device-install device-test device-run clean
 
 all: deb
 
@@ -171,7 +189,7 @@ help:
 	@echo "Apelin:"
 	@echo "  harness       Host tests on the Mac: RoothideRoot, ExecutableWatch, every package under Packages/, apelind and the workers typechecked"
 	@echo "  check         Validate the project and packaging inputs (the checklist first)"
-	@echo "  build         Build the unsigned Apelin.app and apelind for iPhoneOS"
+	@echo "  build         Build the unsigned Apelin.app and apelind for iPhoneOS (iOS $(IOS_SDK_TIER) SDK or later)"
 	@echo "  deb           Build, ad-hoc sign and package the .deb (FLAVOR=$(FLAVOR))"
 	@echo "  deb-roothide  Package for roothide (unprefixed, iphoneos-arm64e)"
 	@echo "  deb-rootless  Package for a rootless bootstrap (/var/jb, iphoneos-arm64)"
@@ -206,6 +224,15 @@ set-version:
 checklist:
 	@Scripts/check-checklist.sh CHECKLIST.md
 
+# The selected Xcode's iPhoneOS SDK, against IOS_SDK_TIER.
+sdk-tier:
+	@sdk="$$(xcrun --sdk iphoneos --show-sdk-version 2>/dev/null || true)"; \
+	if [[ -z "$$sdk" || "$$(printf '%s\n%s\n' "$(IOS_SDK_TIER)" "$$sdk" | sort -V | head -n1)" != "$(IOS_SDK_TIER)" ]]; then \
+		echo "error: the iPhoneOS SDK is $${sdk:-missing}; Apelin is linked against iOS $(IOS_SDK_TIER) or later: select Xcode $(IOS_SDK_TIER) or later with xcode-select or DEVELOPER_DIR" >&2; \
+		exit 69; \
+	fi; \
+	echo "ok: iPhoneOS SDK $$sdk"
+
 check harness vphone deb-extensions deb-agent-tools template-archive: checklist
 
 # Swift sources as SwiftFormat writes them for Swift 6.2 (`.swiftformat`:
@@ -221,6 +248,7 @@ check:
 	@test -d "$(PROJECT)" || { echo "error: Apelin.xcodeproj is missing" >&2; exit 66; }
 	@for script in "$(DEB_PACKAGER)" "$(DEVICE_INSTALLER)" "$(VERSION_APPLIER)" "$(XCODEBUILD_WRAPPER)" \
 		"$(LICENSE_COLLECTOR)" "$(ACCESSIBILITY_CHECK)" "$(STALE_STRINGS_CHECK)" "$(FORMAT_STRINGS_CHECK)" "$(TRANSLATIONS_CHECK)" \
+		"$(CATALOG_KEYS_CHECK)" "$(SHELL_DELETES_CHECK)" \
 		"$(SYMBOL_CHECK)" "$(RPATH_CHECK)" "$(SCHEMA_FIXTURES_CHECK)" "$(TEMPLATES_CHECK)" \
 		"$(EXTENSIONS_PACKAGER)" "$(AGENT_TOOLS_BUILDER)" "$(DEVICE_TOOL)"; do \
 		test -x "$$script" || { echo "error: $${script#$(ROOT_DIR)/} is not executable" >&2; exit 66; }; \
@@ -293,7 +321,7 @@ check:
 		! /usr/libexec/PlistBuddy -c 'Print :wiki.qaq.apelin.client' "$$entitlements" >/dev/null 2>&1 \
 			|| { echo "error: $${entitlements#$(ROOT_DIR)/} carries the client entitlement; workers reach the session host by socketpair only" >&2; exit 65; }; \
 	done
-	@"$(ROOT_DIR)/Scripts/check-gpu-entitlements.py" "$(ENTITLEMENTS)"
+	@"$(ROOT_DIR)/Scripts/check-gpu-entitlements.py" "$(ENTITLEMENTS)" $(TEMPLATE_ENTITLEMENTS)
 	@"$(ROOT_DIR)/Scripts/check-launchd-paths.py" "$(LAUNCH_DAEMON)" --substituted-by "$(DEB_PACKAGER)"
 	@# On demand (owner, 2026-10-16): launchd starts apelind for a message to
 	@# its Mach service, and apelind exits itself once idle. RunAtLoad or
@@ -361,6 +389,9 @@ check:
 	@"$(FORMAT_STRINGS_CHECK)" "$(ROOT_DIR)/Apelin" "$(ROOT_DIR)/Widgets"
 	@"$(TRANSLATIONS_CHECK)" "$(ROOT_DIR)/Apelin" "$(ROOT_DIR)/Widgets"
 	@"$(SYMBOL_CHECK)" "$(IOS_DEPLOYMENT_FLOOR)" $(SOURCE_ROOTS)
+	@# An empty variable in a removed path removes from /, the bootstrap's
+	@# root on roothide: every recursive rm checks its variables with :?.
+	@"$(SHELL_DELETES_CHECK)" "$(ROOT_DIR)"
 
 # The Mac half of "where things get tested": what can run without a device.
 # RoothideRoot against libroothide's own name rule, ExecutableWatch against a
@@ -377,8 +408,8 @@ check:
 # against the package scratch it imports — so a change that only compiles on
 # iOS shows.
 # Generated module maps for C targets are under out/ with swift-build (Xcode
-# 27) and beside each C target's objects with the native build system (Xcode
-# 26, which CI runs); module_flags passes both.
+# 27, which CI runs) and beside each C target's objects with the native build
+# system (Xcode 26); module_flags passes both.
 # A binary framework (libarchive, libgit2) is passed by its macOS slice in
 # artifacts/, which both build systems unpack there. An editor's
 # SourceKit-LSP keeps a second build in <scratch>/index-build with the same
@@ -387,7 +418,7 @@ check:
 harness:
 	@python3 -I -B "$(ROOT_DIR)/Tests/ToolchainAudit/test_inventory.py"
 	@harness_dir="$$(mktemp -d /private/tmp/apelin-harness.XXXXXX)"; \
-	trap 'rm -rf "$$harness_dir"' EXIT; \
+	trap 'rm -rf -- "$${harness_dir:?}"' EXIT; \
 	xcrun --sdk macosx swiftc -swift-version 5 \
 		"$(ROOT_DIR)/Shared/RoothideRoot.swift" \
 		"$(ROOT_DIR)/Tests/RoothideRoot/main.swift" \
@@ -503,15 +534,25 @@ IOS_BUILD = XCBUILD_LABEL=build-ios $(XCODEBUILD) \
 	build
 
 ifeq ($(SKIP_HARNESS),1)
-build: check
+build: sdk-tier check
 else
-build: check harness
+build: sdk-tier check harness
 endif
 	$(IOS_BUILD)
+	@# xcodebuild never merges what the compiler extracted into a catalog, so a
+	@# new string is only there if someone put it there.
+	@"$(CATALOG_KEYS_CHECK)" \
+		"$(ROOT_DIR)/Apelin/Resources/Localizable.xcstrings" "$(TARGET_INTERMEDIATES)/Apelin.build" \
+		"$(ROOT_DIR)/Widgets/Extension/Resources/Localizable.xcstrings" "$(TARGET_INTERMEDIATES)/ApelinWidgets.build"
 
 # The packaging half of `deb`, without a build: CI and deb-all package one
 # build twice through it.
 _package:
+	@sdk="$$(xcrun vtool -show-build "$(APP_BUNDLE)/Apelin" | awk '$$1 == "sdk" { print $$2; exit }')"; \
+	if [[ -z "$$sdk" || "$$(printf '%s\n%s\n' "$(IOS_SDK_TIER)" "$$sdk" | sort -V | head -n1)" != "$(IOS_SDK_TIER)" ]]; then \
+		echo "error: Apelin.app is linked against the iOS $${sdk:-unknown} SDK, older than $(IOS_SDK_TIER); build it again with Xcode $(IOS_SDK_TIER) or later" >&2; \
+		exit 65; \
+	fi
 	CONFIGURATION="$(CONFIGURATION)" "$(DEB_PACKAGER)" \
 		"$(APP_BUNDLE)" \
 		"$(DAEMON_BINARY)" \
@@ -578,7 +619,7 @@ vphone:
 # installed one, signed as the packager signs it. The daemon, the workers
 # and dpkg's record stay as the last package left them: a change outside the
 # app, and anything that ships, goes through `make vphone`.
-install-app:
+install-app: sdk-tier
 	$(IOS_BUILD)
 	@DEVICE_HOST=$(call shell_word,$(DEVICE_HOST)) DEVICE_PORT=$(call shell_word,$(DEVICE_PORT)) \
 	DEVICE_USER=$(call shell_word,$(DEVICE_USER)) DEVICE_PASSWORD=$(call shell_word,$(DEVICE_PASSWORD)) \
@@ -605,5 +646,7 @@ device-run:
 	@$(DEVICE_TOOL_ENV) "$(DEVICE_TOOL)" run $(SCRIPT)
 
 clean:
-	rm -rf "$(DERIVED_DATA)"
-	rm -rf "$(ROOT_DIR)/build/Packages"
+	@test -n "$(DERIVED_DATA)" && test -n "$(ROOT_DIR)" \
+		|| { echo "error: DERIVED_DATA and ROOT_DIR must name folders; refusing to remove anything" >&2; exit 64; }
+	rm -rf -- "$(DERIVED_DATA)"
+	rm -rf -- "$(ROOT_DIR)/build/Packages"

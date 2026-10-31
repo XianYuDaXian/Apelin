@@ -4,14 +4,8 @@ import SnapKit
 import Then
 import UIKit
 
-/// One environment task followed to its end, laid out as Irisin's install
-/// page: a row per stage, the line under its name saying what it is doing
-/// and a ring at the trailing edge counting it, a checkmark once it is done.
-/// The bar carries a spinner while the task runs — Continue in Background
-/// instead at the root of a sheet of its own — and a checkmark once it has
-/// ended; the title says how it ended, and a failure's reason and any
-/// warnings close the list, the task's ID in small grey under it. The menu
-/// opens the full log and stops the task.
+/// An environment task with stable step names and status values. Transfer
+/// figures have their own rows; technical details remain in the full log.
 ///
 /// The session host owns the task, not this page: leaving it, or the app,
 /// stops nothing, and the page opened again replays the task from its first
@@ -22,17 +16,21 @@ final class EnvironmentTaskController: TableController {
     var onFinish: (() -> Void)?
 
     private enum Section: Hashable {
+        case summary
+        case transfer
         case stages
         case outcome
         case warnings
     }
 
     private enum Row: Equatable {
+        case value(id: String, title: String, value: String)
         case stage(String)
         case outcome(String?, String?, TaskState)
         case warning(String, occurrence: Int)
         var id: String {
             switch self {
+            case let .value(id, _, _): id
             case let .stage(stage): "stage:" + stage
             case .outcome: "outcome"
             case let .warning(text, occurrence): "warning:\(occurrence):" + text
@@ -50,13 +48,15 @@ final class EnvironmentTaskController: TableController {
     private let handle: TaskHandle
     private let runningTitle: String
     private let doneTitle: String
+    private let showsDownload: Bool
+    private let showsStatusSummary: Bool
     private var progress: EnvironmentTaskProgress
     private var follower: Task<Void, Never>?
     private var cancelRequested = false
 
     /// One cell per stage, kept rather than dequeued, so a ring goes on
     /// turning from one event to the next.
-    private var stageCells: [StageCell] = []
+    private var stageCells: [TaskStepCell] = []
 
     /// Every event as a line, for the full log; a download's progress is
     /// one line said again with new figures, not a line per sample.
@@ -74,6 +74,8 @@ final class EnvironmentTaskController: TableController {
         self.handle = handle
         runningTitle = title
         self.doneTitle = doneTitle
+        showsDownload = work.includesDownload
+        showsStatusSummary = work != .toolchainSetup && work != .transferImport(.toolchain)
         progress = EnvironmentTaskProgress(work: work)
         super.init(style: .insetGrouped)
         self.title = title
@@ -92,15 +94,17 @@ final class EnvironmentTaskController: TableController {
         super.viewDidLoad()
         navigationItem.backButtonDisplayMode = .minimal
         tableView.allowsSelection = false
-        tableView.tableFooterView = TableFootnoteView(lines: [handle.taskID.rawValue])
-        dataSource.headerTitle = { $0 == .warnings ? String(localized: "Warnings") : nil }
+        logLines = ["Task ID: \(handle.taskID.rawValue)"]
+        dataSource.headerTitle = { [weak self] in
+            switch $0 {
+            case .stages: String(localized: "Steps")
+            case .transfer: self?.showsStatusSummary == false ? nil : String(localized: "Download")
+            case .warnings: String(localized: "Warnings")
+            default: nil
+            }
+        }
         render()
         follow()
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        (tableView.tableFooterView as? TableFootnoteView)?.fit(in: tableView)
     }
 
     // MARK: - Following
@@ -184,90 +188,102 @@ final class EnvironmentTaskController: TableController {
     private func finished() {
         onFinish?()
         onFinish = nil
-        UIAccessibility.post(notification: .announcement, argument: title)
+        UIAccessibility.post(notification: .announcement, argument: progress.state == .succeeded ? doneTitle : statusTitle)
     }
 
     // MARK: - Drawing
 
     private func render() {
         let finished = progress.isFinished
-        switch progress.state {
-        case .succeeded: title = doneTitle
-        case .cancelled: title = String(localized: "Cancelled")
-        case .failed: title = String(localized: "Failed")
-        case .interrupted: title = String(localized: "Interrupted")
-        default: title = runningTitle
-        }
+        title = runningTitle
         // the items are made once and swapped only when the task ends: a
         // menu whose item is replaced under it closes, or never opens
         if navigationItem.rightBarButtonItems == nil || barShowsFinished != finished {
             barShowsFinished = finished
             let running = isSheetRoot ? backgroundBarItem : spinnerBarItem
-            navigationItem.rightBarButtonItems = finished ? [doneBarItem, menuBarItem] : [running, menuBarItem]
+            if finished {
+                navigationItem.rightBarButtonItems = progress.state == .succeeded
+                    ? [doneBarItem, menuBarItem] : [menuBarItem]
+            } else {
+                navigationItem.rightBarButtonItems = [running, menuBarItem]
+            }
         }
 
         let stages = progress.shownStages
         let structureChanged = stageCells.map(\.stage) != stages
         let existing = Dictionary(uniqueKeysWithValues: stageCells.map { ($0.stage, $0) })
-        stageCells = stages.map { existing[$0] ?? StageCell(stage: $0) }
+        stageCells = stages.map { existing[$0] ?? TaskStepCell(stage: $0) }
         for cell in stageCells {
             cell.show(
                 progress.state(of: cell.stage),
-                subtitle: subtitle(of: cell.stage),
+                status: status(of: cell.stage),
                 animated: !structureChanged && !UIAccessibility.isReduceMotionEnabled,
             )
         }
-        var sections: [(Section, [Row])] = [(.stages, stages.map(Row.stage))]
+        var sections: [(Section, [Row])] = []
+        if showsStatusSummary {
+            sections.append((.summary, [
+                .value(id: "status", title: String(localized: "Status"), value: statusTitle),
+            ]))
+        }
+        if showsDownload {
+            let amount: String
+            if let bytes = progress.downloadedBytes {
+                let completed = ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+                amount = progress.downloadTotalBytes.map {
+                    String(localized: "\(completed) of \(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file))")
+                } ?? completed
+            } else {
+                amount = "—"
+            }
+            let speed = !finished && progress.isDownloading ? progress.bytesPerSecond.map {
+                String(localized: "\(ByteCountFormatter.string(fromByteCount: Int64(max(0, $0)), countStyle: .file))/s")
+            } ?? "—" : "—"
+            sections.append((.transfer, [
+                .value(id: "downloaded", title: String(localized: "Downloaded"), value: amount),
+                .value(id: "speed", title: String(localized: "Speed"), value: speed),
+            ]))
+        }
+        sections.append((.stages, stages.map(Row.stage)))
         if finished, progress.state != .succeeded {
-            sections.append((.outcome, [.outcome(title, progress.message, progress.state)]))
+            sections.append((.outcome, [.outcome(statusTitle, EnvironmentTaskProgress.readableDetail(progress.outcomeMessage), progress.state)]))
         }
         if !progress.warnings.isEmpty {
             var occurrences: [String: Int] = [:]
             let rows = progress.warnings.map { warning in
-                let occurrence = occurrences[warning, default: 0]
-                occurrences[warning] = occurrence + 1
-                return Row.warning(warning, occurrence: occurrence)
+                let text = EnvironmentTaskProgress.readableDetail(warning)
+                let occurrence = occurrences[text, default: 0]
+                occurrences[text] = occurrence + 1
+                return Row.warning(text, occurrence: occurrence)
             }
             sections.append((.warnings, rows))
         }
-        dataSource.update(sections)
+        // Value rows create cells on demand; reconfiguration requires returning the same cell.
+        // Reload changed rows instead. Stage cells keep their existing progress rings.
+        dataSource.update(sections, animatingDifferences: false)
     }
 
-    /// What a stage is doing, or how it ended.
-    private func subtitle(of stage: String) -> String {
+    private var statusTitle: String {
+        switch progress.state {
+        case .queued: String(localized: "Waiting")
+        case .running: String(localized: "In Progress")
+        case .waitingForApproval: String(localized: "Waiting for Approval")
+        case .succeeded: String(localized: "Completed")
+        case .failed: String(localized: "Failed")
+        case .cancelled: String(localized: "Stopped")
+        case .interrupted: String(localized: "Interrupted")
+        }
+    }
+
+    /// A step value always describes its state, never its transfer figures.
+    private func status(of stage: String) -> String {
         switch progress.state(of: stage) {
-        case .pending:
-            return String(localized: "Waiting")
-        case .skipped:
-            return String(localized: "Skipped")
-        case .done:
-            return String(localized: "Done")
+        case .pending: progress.isFinished ? String(localized: "Not Started") : String(localized: "Waiting")
+        case .skipped: String(localized: "Skipped")
+        case .done: String(localized: "Completed")
         case .failed:
-            return progress.state == .cancelled ? String(localized: "Stopped") : String(localized: "Failed")
-        case .running:
-            var parts: [String] = []
-            if progress.countsBytes, progress.completed > 0 {
-                let done = ByteCountFormatter.string(fromByteCount: progress.completed, countStyle: .file)
-                if let total = progress.total {
-                    let all = ByteCountFormatter.string(fromByteCount: total, countStyle: .file)
-                    parts.append(String(localized: "\(done) of \(all)"))
-                } else {
-                    parts.append(done)
-                }
-            } else if progress.completed > 0 {
-                parts.append(progress.completed.formatted())
-            }
-            if let speed = progress.bytesPerSecond, speed > 0 {
-                let amount = ByteCountFormatter.string(fromByteCount: Int64(speed), countStyle: .file)
-                parts.append(String(localized: "\(amount)/s"))
-            }
-            if parts.isEmpty, let detail = progress.detail, !detail.isEmpty {
-                parts.append(detail)
-            }
-            if parts.isEmpty, let phase = progress.phase {
-                return EnvironmentTaskProgress.activeTitle(of: phase)
-            }
-            return parts.isEmpty ? String(localized: "In Progress…") : parts.joined(separator: " · ")
+            progress.state == .cancelled ? String(localized: "Stopped") : String(localized: "Failed")
+        case .running: String(localized: "In Progress")
         }
     }
 
@@ -337,17 +353,23 @@ final class EnvironmentTaskController: TableController {
 
     private func cell(for row: Row) -> UITableViewCell? {
         switch row {
+        case let .value(_, title, value):
+            let cell = UITableViewCell(style: .value1, reuseIdentifier: nil)
+            var content = UIListContentConfiguration.valueCell()
+            content.text = title
+            content.secondaryText = value
+            cell.contentConfiguration = content
+            return cell
         case let .stage(stage):
             return stageCells.first { $0.stage == stage }
         case let .outcome(title, message, state):
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            var content = UIListContentConfiguration.subtitleCell()
+            var content = UIListContentConfiguration.stackedValueCell()
             content.text = title
-            content.textProperties.font = .preferredFont(forTextStyle: .subheadline).withWeight(.semibold)
             content.secondaryText = message
-            content.secondaryTextProperties.font = .preferredFont(forTextStyle: .footnote)
+
             content.secondaryTextProperties.color = .secondaryLabel
-            content.textToSecondaryTextVerticalPadding = 4
+
             content.image = UIImage(
                 systemName: state == .cancelled ? "stop.circle.fill" : "exclamationmark.triangle.fill",
             )
@@ -358,7 +380,7 @@ final class EnvironmentTaskController: TableController {
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
             var content = UIListContentConfiguration.cell()
             content.text = text
-            content.textProperties.font = .preferredFont(forTextStyle: .footnote)
+            content.textProperties.font = .preferredFont(forTextStyle: .body)
             content.image = UIImage(systemName: "exclamationmark.triangle")
             content.imageProperties.tintColor = .systemOrange
             cell.contentConfiguration = content
@@ -404,9 +426,8 @@ final class EnvironmentTaskController: TableController {
     }
 }
 
-/// A stage's row, on one line: its name, what it is doing at the end of
-/// the line, and Irisin's ring at the trailing edge.
-private final class StageCell: UITableViewCell {
+/// A stage's name and status ring on one line.
+final class TaskStepCell: UITableViewCell {
     let stage: String
     private let ring = ProgressRing()
 
@@ -426,26 +447,11 @@ private final class StageCell: UITableViewCell {
         fatalError("Use init(stage:)")
     }
 
-    func show(_ state: EnvironmentTaskProgress.StageState, subtitle: String, animated: Bool) {
-        var content = UIListContentConfiguration.valueCell()
-        if case .running = state {
-            content.text = EnvironmentTaskProgress.activeTitle(of: stage)
-        } else {
-            content.text = EnvironmentTaskProgress.title(of: stage)
-        }
+    func show(_ state: EnvironmentTaskProgress.StageState, status: String, animated: Bool, title: String? = nil) {
+        var content = UIListContentConfiguration.cell()
+        content.text = title ?? EnvironmentTaskProgress.title(of: stage)
         content.textProperties.color = state == .pending || state == .skipped ? .secondaryLabel : .label
-        content.secondaryText = subtitle
-        content.secondaryTextProperties.font = .monospacedDigitSystemFont(
-            ofSize: UIFont.preferredFont(forTextStyle: .subheadline).pointSize,
-            weight: .regular,
-        )
-        content.secondaryTextProperties.color = state == .failed ? .systemRed : .secondaryLabel
-        // one line whatever it says: a row never changes height under the eye,
-        // and the name and its state stay side by side
-        content.prefersSideBySideTextAndSecondaryText = true
         content.textProperties.numberOfLines = 1
-        content.secondaryTextProperties.numberOfLines = 1
-        content.secondaryTextProperties.lineBreakMode = .byTruncatingMiddle
         contentConfiguration = content
 
         let appearance: ProgressRing.Appearance
@@ -466,7 +472,7 @@ private final class StageCell: UITableViewCell {
         }
         ring.set(appearance, animated: animated)
         accessibilityLabel = content.text
-        accessibilityValue = subtitle
+        accessibilityValue = status
     }
 }
 

@@ -21,9 +21,6 @@ final class ToolchainCatalogController: TableController {
     }
 
     private func updateRows(changedItems: Set<String> = []) {
-        dataSource.headerTitle = { [weak self] _ in
-            self?.metrics.isStacked == true ? String(localized: "Available") : nil
-        }
         dataSource.footerTitle = { [weak self] _ in self?.footer() }
         dataSource.update(products.isEmpty ? [] : [(0, products)], reconfigure: true, changedItems: changedItems)
     }
@@ -41,21 +38,19 @@ final class ToolchainCatalogController: TableController {
     private var loader: Task<Void, Never>?
 
     private let columns = [
+        TableColumn(title: String(localized: "Swift"), samples: ["5.7.2", "6.4", "—"]),
         // "SDK" is the English word, an acronym, not a key: spelled as a
         // LocalizationValue so the all-capitals check does not take it for one
         TableColumn(title: String(localized: String.LocalizationValue("SDK")), samples: ["88.8", "88.x", "—"]),
-        TableColumn(title: String(localized: "Size"), samples: ["888.8 MB", "8.88 GB"]),
+        TableColumn(title: String(localized: "Size"), samples: ["888.8M", "8.8G"]),
     ]
-    private var cachedMetrics: (UIContentSizeCategory, ColumnTableMetrics)?
-
     private var metrics: ColumnTableMetrics {
-        let category = traitCollection.preferredContentSizeCategory
-        if let cachedMetrics, cachedMetrics.0 == category {
-            return cachedMetrics.1
-        }
-        let metrics = ColumnTableMetrics(columns: columns, category: category, trailingSymbol: true)
-        cachedMetrics = (category, metrics)
-        return metrics
+        ColumnTableMetrics(
+            columns: columns,
+            category: traitCollection.preferredContentSizeCategory,
+            trailingSymbol: !installedToolchains.isEmpty,
+            availableWidth: tableView.bounds.width > 0 ? tableView.bounds.width - 72 : nil,
+        )
     }
 
     init(installedToolchains: [ToolchainRecord]) {
@@ -117,8 +112,8 @@ final class ToolchainCatalogController: TableController {
                 products = catalog.products
                 Self.save(products)
                 tableView.backgroundView = products.isEmpty
-                    ? EmptyStateView(symbolName: "tray", text: String(localized: """
-                    Apple's catalog lists no Command Line Tools. Check your internet connection, then \
+                    ? EmptyStateView(symbolName: "tray", title: String(localized: "No Toolchains Yet"), text: String(localized: """
+                    Apple’s catalog lists no Command Line Tools. Check your internet connection, then \
                     pull down to try again.
                     """))
                     : nil
@@ -130,6 +125,7 @@ final class ToolchainCatalogController: TableController {
                 guard products.isEmpty else { return }
                 tableView.backgroundView = EmptyStateView(
                     symbolName: "exclamationmark.triangle",
+                    title: String(localized: "Error"),
                     text: ToolchainController.unavailableText(error),
                 )
                 updateRows()
@@ -149,13 +145,25 @@ final class ToolchainCatalogController: TableController {
         product.version == "unknown" ? String(localized: "Unknown Version") : product.version
     }
 
+    private static func compactSize(_ bytes: Int64) -> String {
+        let units: [(Int64, String)] = [(1_000_000_000, "G"), (1_000_000, "M"), (1000, "K")]
+        for (divisor, suffix) in units {
+            if bytes >= divisor {
+                return (Double(bytes) / Double(divisor)).formatted(.number.precision(.fractionLength(0 ... 1))) + suffix
+            }
+        }
+        return bytes.formatted() + "B"
+    }
+
     // MARK: - Table
 
     private func footer() -> String? {
         String(localized: """
-        Downloaded from Apple's software update server and adapted to run on this device: C, C++ and \
-        Objective-C, and Swift where marked. Each release's tools read SDKs up to the one in its column. \
-        A compatible iOS SDK is downloaded automatically when needed. No Apple ID is needed.
+        Downloaded from Apple. No Apple ID needed.
+
+        Includes C, C++ and Objective-C. “—” in the Swift column means Swift is unavailable.
+
+        SDK shows the highest supported version. A compatible iOS SDK downloads automatically.
         """)
     }
 
@@ -170,7 +178,7 @@ final class ToolchainCatalogController: TableController {
     }
 
     override func tableView(_: UITableView, heightForHeaderInSection _: Int) -> CGFloat {
-        metrics.isStacked ? UITableView.automaticDimension : ceil(metrics.titleFont.lineHeight) + 24
+        metrics.isStacked ? .leastNormalMagnitude : ceil(metrics.titleFont.lineHeight) + 24
     }
 
     override func tableView(_: UITableView, heightForRowAt _: IndexPath) -> CGFloat {
@@ -196,13 +204,7 @@ final class ToolchainCatalogController: TableController {
         if !supported {
             attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         }
-        let text = NSMutableAttributedString(string: Self.shortName(of: product), attributes: attributes)
-        if product.supportsSwift == true {
-            text.append(NSAttributedString(string: "  " + swiftName, attributes: [
-                .font: UIFont.preferredFont(forTextStyle: .caption1),
-                .foregroundColor: UIColor.secondaryLabel,
-            ]))
-        }
+        let text = NSAttributedString(string: Self.shortName(of: product), attributes: attributes)
         // drawn only (strike, check, plus): the spoken name says it
         var spoken = [name]
         if product.supportsSwift == true {
@@ -215,14 +217,14 @@ final class ToolchainCatalogController: TableController {
             spoken.append(String(localized: "Not Supported"))
         }
         let spokenName = spoken.joined(separator: ", ")
-        let symbol: UIImage? = !supported ? nil
-            : UIImage(systemName: installed ? "checkmark.circle.fill" : "plus.circle")
+        let symbol = installed ? UIImage(systemName: "checkmark") : nil
         cell.configure(
             name: text,
             accessibilityName: spokenName,
             values: [
+                product.supportsSwift == true ? product.swiftRequirements?.version ?? "—" : "—",
                 product.newestSDK.map { $0.contains(".") ? $0 : $0 + ".x" } ?? "—",
-                ByteCountFormatter.string(fromByteCount: product.size, countStyle: .file),
+                Self.compactSize(product.size),
             ],
             columns: columns,
             metrics: metrics,
@@ -248,37 +250,15 @@ final class ToolchainCatalogController: TableController {
         confirmSetup(product, from: self)
     }
 
-    /// What a release needs and what it gives on this device: shown when
-    /// its row is picked, before anything is downloaded.
+    /// Only the capabilities that affect this installation decision.
     static func details(of product: ToolchainCatalogProduct) -> String {
-        if let reason = product.unsupportedReason {
-            return reason
-        }
-        var lines = [String(localized: "C, C++, Objective-C · iOS 16.0 or later · A12 or later")]
-        if let sdk = product.newestSDK {
-            let limit = sdk.contains(".") ? sdk : sdk + ".x"
-            lines.append(String(localized: "iPhoneOS SDK: up to \(limit)"))
-        }
-        if let swift = product.swiftRequirements {
-            let cpu = swift.cpuFeatures.contains("FEAT_SHA3")
-                ? String(localized: "A13 or later") : String(localized: "A12 or later")
-            lines.append(String(localized: "Swift \(swift.version): iOS \(swift.minimumHost) or later · \(cpu)"))
-            if let major = product.newestSDK?.split(separator: ".").first {
-                lines.append(String(localized: "Swift SDK: iPhoneOS \(String(major)).x"))
-            }
-            lines.append(product.supportsSwift == true
-                ? String(localized: "Swift is included on this device.")
-                : String(localized: "This device can install the C, C++ and Objective-C components only."))
-        } else if let reason = product.swiftUnavailableReason {
-            // the catalog's sentence, as the release refusal above is shown
-            lines.append(reason)
-        } else {
-            lines.append(String(localized: "Swift has not been verified for this release."))
-        }
+        var notes = [product.supportsSwift == true
+            ? String(localized: "Swift is included on this device.")
+            : String(localized: "Swift is not included on this device.")]
         if !(product.clangModuleCPUFeatures ?? ["FEAT_SHA3"]).allSatisfy(HostCPU.has) {
-            lines.append(String(localized: "Clang modules are unavailable with this release on this device."))
+            notes.append(String(localized: "Clang modules are unavailable with this release on this device."))
         }
-        return lines.joined(separator: "\n")
+        return notes.joined(separator: "\n")
     }
 
     private func confirmSetup(_ product: ToolchainCatalogProduct, from presenter: UIViewController) {
@@ -288,9 +268,9 @@ final class ToolchainCatalogController: TableController {
         }
         let size = ByteCountFormatter.string(fromByteCount: product.size, countStyle: .file)
         presenter.presentConfirmation(
-            title: "Set Up This Toolchain?",
-            message: String.LocalizationValue("\(Self.details(of: product))\n\nDownload: \(size). A compatible iOS SDK is downloaded automatically when needed."),
-            confirmTitle: "Set Up",
+            title: "Install Command Line Tools \(product.version)?",
+            message: String.LocalizationValue("\(Self.details(of: product))\n\nDownload: \(size)\nA compatible iOS SDK is downloaded automatically when needed."),
+            confirmTitle: "Install",
         ) { [weak self] in
             self?.setUp(product, from: presenter)
         }
@@ -305,6 +285,7 @@ final class ToolchainCatalogController: TableController {
                     components: product.supportsSwift == true ? [.c, .swift] : [.c],
                 ))
                 presenter.view.isUserInteractionEnabled = true
+                ToolchainController.remember(version: product.version, for: handle)
                 self?.onStart?(handle)
             } catch {
                 presenter.view.isUserInteractionEnabled = true

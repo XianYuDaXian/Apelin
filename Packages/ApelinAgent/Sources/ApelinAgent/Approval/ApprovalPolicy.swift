@@ -22,8 +22,9 @@ public struct ApprovalPresets: Sendable, Hashable, Codable {
         self.commands = commands
     }
 
-    /// Every read tool except the screen and the UI tree; respring; a few
-    /// read-only commands that stay inside the project.
+    /// Every read tool except the screen, the UI tree and the web fetch
+    /// (`isSensitiveRead`); respring; a few read-only commands that stay
+    /// inside the project.
     public static let `default` = ApprovalPresets(
         readTools: Set(AgentToolName.allCases.filter { $0.risk == .readOnly && !$0.isSensitiveRead }),
         systemTools: [.deviceRespring],
@@ -54,6 +55,9 @@ public struct InvocationFacts: Sendable, Hashable {
         case local(AgentToolName)
         /// A tool from an MCP server; always treated as a system tool.
         case mcp(String)
+        /// A tool of an installed agent tool extension; treated as an MCP
+        /// tool is, whatever risk its manifest declares.
+        case toolExtension(ExtensionTool)
     }
 
     public var tool: Tool
@@ -63,6 +67,9 @@ public struct InvocationFacts: Sendable, Hashable {
     public var description: DescriptionState?
     /// For apelin_package_remove: the installation record it removes.
     public var installationID: String?
+    /// That installation as apelin_package_list lists it, when the backend
+    /// found it: what the card names.
+    public var removedPackage: ListedInstallation?
     /// For git_push: where it pushes, and what.
     public var push: GitPushTarget?
     /// For the git settings tools: what they change, in words, without a
@@ -94,6 +101,28 @@ public struct InvocationFacts: Sendable, Hashable {
     public var projectRename: ProjectRenameApproval?
     /// The project apelin_project_rename renames, as the backend resolved it.
     public var renamedProject: ProjectIdentity?
+    /// For apelin_feedback_send: the issue, checked before asking, as it is
+    /// sent.
+    public var feedback: FeedbackApproval?
+    /// For apelin_feedback_edit: the issue, read and checked before asking,
+    /// and the edit as it is sent.
+    public var feedbackEdit: FeedbackEditApproval?
+    /// For apelin_git_create_repository: the repository, checked before
+    /// asking, as it is requested.
+    public var repositoryCreate: RepositoryCreateApproval?
+    /// For apelin_git_create_issue: the repository and the issue, checked
+    /// before asking, as they are sent.
+    public var issueCreate: IssueCreateApproval?
+    /// For apelin_project_delete: the project, resolved before asking,
+    /// which is the one deleted.
+    public var projectDeletion: ProjectDeleteApproval?
+    /// For apelin_package_publish: the repository and the packages,
+    /// checked before asking, as they are sent.
+    public var packagePublish: PackagePublishApproval?
+    /// For apelin_screen_read_tree, apelin_screen_interact and a shell_run
+    /// that runs icli (or another of `ScreenConsent.programs`): what it does
+    /// on the screen, as the host is asked for it.
+    public var screenControl: ScreenControlApproval?
 
     public init(
         tool: Tool,
@@ -129,10 +158,14 @@ public struct GitPushTarget: Sendable, Hashable {
     public var remote: String
     /// nil when no branch is checked out; the host then refuses the push.
     public var branch: String?
+    /// The address the remote is added at when the project does not have
+    /// it yet; the host refuses one that differs from the remote's own.
+    public var url: String?
 
-    public init(remote: String, branch: String?) {
+    public init(remote: String, branch: String?, url: String? = nil) {
         self.remote = remote
         self.branch = branch
+        self.url = url
     }
 }
 
@@ -148,10 +181,15 @@ public enum GateVerdict: Sendable, Hashable {
 public struct ApprovalPolicy: Sendable, Hashable {
     public var mode: ApprovalMode
     public var presets: ApprovalPresets
+    /// Ask Before Using the Screen, the app's setting (owner, 2026-10-30):
+    /// on, the UI tree, every UI action and every command that runs icli
+    /// ask each time, in every mode (`evaluateScreen`).
+    public var asksBeforeScreen: Bool
 
-    public init(mode: ApprovalMode, presets: ApprovalPresets = .default) {
+    public init(mode: ApprovalMode, presets: ApprovalPresets = .default, asksBeforeScreen: Bool = true) {
         self.mode = mode
         self.presets = presets
+        self.asksBeforeScreen = asksBeforeScreen
     }
 
     public func evaluate(_ facts: InvocationFacts, root: ScopedRoot) -> GateVerdict {
@@ -159,6 +197,9 @@ public struct ApprovalPolicy: Sendable, Hashable {
         // tool's capability, not a matter of asking.
         if case let .outside(path)? = facts.pathCheck {
             return .deny("\(path) is outside the project")
+        }
+        if let screen = evaluateScreen(facts) {
+            return screen
         }
         if case .local(.shellRun) = facts.tool, facts.runsAsRoot {
             return evaluateRoot(facts)
@@ -170,6 +211,13 @@ public struct ApprovalPolicy: Sendable, Hashable {
         switch facts.tool {
         case let .mcp(name):
             return .ask(reason: "\(name) is a tool from an MCP server. Review it before running.", detail: .none)
+        case let .toolExtension(tool):
+            // The extension runs as mobile, as this worker does: the host
+            // starts it and passes the call on, deciding nothing again.
+            return .ask(
+                reason: "\(tool.name) is a tool of \(tool.extensionName) \(tool.extensionVersion), an agent tool extension that runs in its own process. Review it before running.",
+                detail: .none,
+            )
         case let .local(tool):
             return evaluateConfirm(tool, facts: facts, root: root)
         }
@@ -189,6 +237,101 @@ public struct ApprovalPolicy: Sendable, Hashable {
             reason: "Runs as root, with full control of this device. Each command that runs as root needs your approval.",
             detail: .rootCommand(command),
         )
+    }
+
+    /// While Ask Before Using the Screen is on, the UI tree, every UI
+    /// action and every command that runs icli (or another of
+    /// `ScreenConsent.programs`) ask each time, in every mode and whatever
+    /// the presets say, the card saying what the call opens, reads or does
+    /// there; the host spends that one approval. Nil leaves the call to the
+    /// mode.
+    private func evaluateScreen(_ facts: InvocationFacts) -> GateVerdict? {
+        guard asksBeforeScreen else { return nil }
+        switch facts.tool {
+        case .local(.screenReadTree), .local(.screenInteract):
+            break
+        case .local(.shellRun):
+            guard facts.command?.screenProgram != nil else { return nil }
+        default:
+            return nil
+        }
+        guard let use = facts.screenControl else {
+            return .ask(reason: "What this call does on the screen could not be read. \(Self.screenNote)", detail: .none)
+        }
+        return .ask(reason: "\(Self.screenPhrase(use)) \(Self.screenNote)", detail: .screenControl(use))
+    }
+
+    static let screenNote = "Ask Before Using the Screen is on, so each use of the screen needs your approval, in every mode."
+
+    /// What a use of the screen opens, reads or does, in a sentence.
+    static func screenPhrase(_ use: ScreenControlApproval) -> String {
+        switch use {
+        case let .readTree(targetID):
+            let app = targetID.map { "the app \($0)" } ?? "the app in front, whichever it is"
+            return "Reads what is on the screen: the text and controls of \(app)."
+        case let .interact(targetID, action):
+            if case .pressButton = action {
+                return actionPhrase(action) + "."
+            }
+            let app = targetID.map { "the app \($0)" } ?? "the app in front, whichever it is"
+            return "\(actionPhrase(action)) in \(app)."
+        case let .command(invocation, _):
+            return commandPhrase(invocation)
+        }
+    }
+
+    private static func actionPhrase(_ action: UIAction) -> String {
+        switch action {
+        case let .tap(x, y):
+            "Taps the screen at \(point(x, y))"
+        case let .tapElement(id):
+            id.hasPrefix("text:") ? "Taps “\(id.dropFirst(5))”" : "Taps the element \(id)"
+        case let .typeText(text):
+            "Types “\(text.count > 200 ? String(text.prefix(200)) + "…" : text)”"
+        case let .swipe(fromX, fromY, toX, toY, _):
+            "Swipes from \(point(fromX, fromY)) to \(point(toX, toY))"
+        case let .pressButton(button):
+            switch button {
+            case "wake": "Presses wake, which turns the screen on"
+            case "home": "Presses Home, which sends the app in front to the home screen"
+            case "lock": "Presses the side button, which turns the screen off and locks the device"
+            default: "Presses \(button)"
+            }
+        }
+    }
+
+    private static func point(_ x: Double, _ y: Double) -> String {
+        func number(_ value: Double) -> String {
+            value.rounded() == value && abs(value) < 1e9 ? String(Int(value)) : String(value)
+        }
+        return "(\(number(x)), \(number(y)))"
+    }
+
+    /// A command that runs one of `ScreenConsent.programs`: icli's
+    /// `url open` and `app launch` by what they open, anything else by the
+    /// program it runs.
+    private static func commandPhrase(_ invocation: RunCodeInvocation) -> String {
+        if case let .argv(argv) = invocation, let program = argv.first,
+           (program as NSString).lastPathComponent.lowercased() == "icli", argv.count >= 4,
+           !argv[3].hasPrefix("-")
+        {
+            switch (argv[1], argv[2]) {
+            case ("url", "open"):
+                return "Opens \(argv[3]) on this device, in the app that handles it, which comes to the front."
+            case ("app", "launch"):
+                return "Opens the app \(argv[3]) on this device, which comes to the front."
+            default:
+                break
+            }
+        }
+        switch invocation.screenProgram {
+        case "uiopen":
+            return "Runs uiopen, which opens an app or a link on this device and brings it to the front."
+        case "uishoot":
+            return "Runs uishoot, which takes a screenshot of whatever is on the screen."
+        default:
+            return "Runs icli, which can open apps and links, read what is on the screen and act on it, whatever app is in front."
+        }
     }
 
     private func evaluateConfirm(_ tool: AgentToolName, facts: InvocationFacts, root: ScopedRoot) -> GateVerdict {
@@ -265,6 +408,15 @@ public struct ApprovalPolicy: Sendable, Hashable {
                 detail: .projectRename(rename),
             )
 
+        // Another project, gone for good with its files and conversations:
+        // every deletion asks, naming the project, and none is granted for
+        // the session.
+        case .projectDelete:
+            guard let deletion = facts.projectDeletion else {
+                return .ask(reason: "The project to delete could not be identified.", detail: .none)
+            }
+            return .ask(reason: Self.deletionReason(deletion), detail: .projectDelete(deletion))
+
         // The project's own repository, changed in the project: like an
         // edit, and nothing leaves the device. A fetch, pull or clone
         // only brings commits in; pull never merges, clone never
@@ -285,10 +437,54 @@ public struct ApprovalPolicy: Sendable, Hashable {
                 return .ask(reason: "Where this push goes could not be read.", detail: .none)
             }
             let branch = target.branch ?? "the checked-out branch"
+            let place = target.url.map { "\(target.remote) at \($0)" } ?? target.remote
             return .ask(
-                reason: "Pushing \(branch) to \(target.remote) publishes its commits. Each push needs your approval.",
+                reason: "Pushing \(branch) to \(place) publishes its commits. Each push needs your approval.",
                 detail: .gitPush(remote: target.remote, branch: target.branch),
             )
+
+        // A public issue under the user's GitHub account, as a push
+        // publishes: every one asks, the card showing the whole text.
+        case .feedbackSend:
+            guard let feedback = facts.feedback else {
+                return .ask(reason: "The feedback to send could not be read.", detail: .none)
+            }
+            return .ask(reason: Self.feedbackReason(feedback), detail: .feedback(feedback))
+
+        // The same issue, changed in public: every edit asks, the card
+        // showing the whole new text.
+        case .feedbackEdit:
+            guard let edit = facts.feedbackEdit else {
+                return .ask(reason: "The edit to make could not be read.", detail: .none)
+            }
+            return .ask(reason: Self.feedbackEditReason(edit), detail: .feedbackEdit(edit))
+
+        // A repository on GitHub under the user's account, which outlives
+        // the conversation: every one asks, the card naming its owner, name
+        // and visibility.
+        case .gitCreateRepository:
+            guard let repository = facts.repositoryCreate else {
+                return .ask(reason: "The repository to create could not be read.", detail: .none)
+            }
+            return .ask(reason: Self.repositoryReason(repository), detail: .repositoryCreate(repository))
+
+        // An issue under the user's GitHub account on a repository they
+        // chose, as feedback is filed: every one asks, the card showing the
+        // repository and the whole text.
+        case .gitCreateIssue:
+            guard let issue = facts.issueCreate else {
+                return .ask(reason: "The issue to open could not be read.", detail: .none)
+            }
+            return .ask(reason: Self.issueReason(issue), detail: .issueCreate(issue))
+
+        // Packages in the user's package repository, where anyone who adds
+        // its source installs them, as a push publishes: every publication
+        // asks, the card naming the repository and each package's digest.
+        case .packagePublish:
+            guard let publication = facts.packagePublish else {
+                return .ask(reason: "The packages to publish could not be read.", detail: .none)
+            }
+            return .ask(reason: Self.publishReason(publication), detail: .packagePublish(publication))
 
         // The device's git settings, for every project: each change asks,
         // and a saved token is never on the card.
@@ -299,11 +495,11 @@ public struct ApprovalPolicy: Sendable, Hashable {
                 detail: .gitSettings(summary: summary),
             )
 
-        case .fileRead, .fileList, .fileGrep, .fileFind, .sdkAnalyzeFramework, .sdkReadHeader,
-             .packageConfirmLoaded, .logRead, .crashList, .crashRead, .crashSymbolicate,
+        case .fileRead, .fileList, .fileGrep, .fileFind, .fileShow, .sdkAnalyzeFramework, .sdkReadHeader,
+             .packageList, .packageConfirmLoaded, .logRead, .crashList, .crashRead, .crashSymbolicate,
              .screenCapture, .screenReadTree, .memoryList, .skillList, .skillRead, .projectCheckDistribution,
              .templateList, .projectList, .gitStatus, .gitDiff, .gitReadSettings,
-             .conversationList, .conversationRead, .toolchainList, .sdkList:
+             .conversationList, .conversationRead, .toolchainList, .sdkList, .webFetch, .feedbackRead:
             if presets.readTools.contains(tool) {
                 return .allow(.preset(tool.rawValue))
             }
@@ -371,10 +567,19 @@ public struct ApprovalPolicy: Sendable, Hashable {
                 return .ask(reason: "The package to remove could not be identified.", detail: .none)
             }
             return .ask(
-                reason: "Removing a package requires your approval.",
+                reason: Self.removalReason(facts.removedPackage),
                 detail: .packageRemoval(installationID: installationID),
             )
         }
+    }
+
+    /// Names what goes and whose build it was, which may be another
+    /// project's: the host removes any installation it made.
+    static func removalReason(_ removed: ListedInstallation?) -> String {
+        guard let removed else { return "Removing a package requires your approval." }
+        let project = removed.project ?? removed.projectID
+        let installedBy = project.map { ", installed by the project \($0)," } ?? ""
+        return "Removing \(removed.packageID) \(removed.version)\(installedBy) requires your approval."
     }
 
     static func setupReason(_ setup: ToolchainSetupApproval) -> String {
@@ -383,6 +588,40 @@ public struct ApprovalPolicy: Sendable, Hashable {
             " (\(ByteCountFormatter.string(fromByteCount: $0, countStyle: .file)))"
         } ?? ""
         return "Sets up Command Line Tools \(setup.version) (\(components)) on this device: Apple's package\(size) is downloaded from Apple, adapted, installed as a package through Irisin for every project and self-tested; if no registered SDK fits it, one is imported from an enabled SDK source first. Each install needs your approval."
+    }
+
+    static func deletionReason(_ deletion: ProjectDeleteApproval) -> String {
+        "Deletes the project \(deletion.folder) (shown as “\(deletion.displayName)”) from this device: its folder with every file in it, and its conversations, which are closed first. This cannot be undone. Each deletion needs your approval."
+    }
+
+    static func feedbackReason(_ feedback: FeedbackApproval) -> String {
+        "Posts this title and body as a public issue on \(feedback.repository) under your GitHub account, where anyone can read it; Apelin adds its version, the iOS version and the bootstrap below it. Each one needs your approval."
+    }
+
+    static func issueReason(_ issue: IssueCreateApproval) -> String {
+        "Opens this issue on \(issue.repository) under your GitHub account, where everyone who can see that repository can read it; Apelin adds its version, the iOS version and the bootstrap below it. Each one needs your approval."
+    }
+
+    static func feedbackEditReason(_ edit: FeedbackEditApproval) -> String {
+        let fields: [String] = [edit.title.map { _ in "title" }, edit.body.map { _ in "body" }].compactMap(\.self)
+        return "Replaces the \(fields.joined(separator: " and ")) of issue #\(edit.number) on \(edit.repository), which your GitHub account opened and anyone can read, with the text below; the line Apelin added below the body stays as it is. Each edit needs your approval."
+    }
+
+    static func publishReason(_ publication: PackagePublishApproval) -> String {
+        let packages = publication.packages.map { package in
+            "\(package.packageID) \(package.version) for \(package.bootstrap) (\(package.architecture))"
+        }
+        let one = packages.count == 1
+        let what = one ? "this package" : "these \(packages.count) packages"
+        let source = publication.sourceURL.map { " (\($0))" } ?? ""
+        return "Publishes \(what) to your package repository \(publication.repository) on GitHub, as \(one ? "its build" : "their builds") made \(one ? "it" : "them"): \(packages.joined(separator: "; ")). Anyone who adds its source\(source) can install \(one ? "it" : "them"), and a version published there cannot be published again with other contents. Each publication needs your approval."
+    }
+
+    static func repositoryReason(_ repository: RepositoryCreateApproval) -> String {
+        let place = repository.owner.map { "\($0)/\(repository.name) on GitHub" }
+            ?? "\(repository.name) on your GitHub account"
+        let who = repository.visibility == .public ? "anyone can see it" : "only people given access can see it"
+        return "Creates the empty \(repository.visibility.rawValue) repository \(place), where \(who). Each repository needs your approval."
     }
 
     static func skillReason(_ change: SkillChangeApproval) -> String {
@@ -407,7 +646,8 @@ public struct ApprovalPolicy: Sendable, Hashable {
 }
 
 /// Binds an approval to tool, arguments, working directory, project, and
-/// the description digest when there is one.
+/// the description digest when there is one (an agent tool extension's id
+/// and version for its tools).
 public enum ApprovalFingerprint {
     public static func make(
         tool: String,

@@ -43,8 +43,8 @@ extension BuiltInSkills {
            that no new report appears.
 
         If SpringBoard keeps crashing, the safest step is `apelin_package_remove` with
-        this build's installation id; say so to the user rather than retrying
-        blindly.
+        this build's installation id, or its package id; say so to the user
+        rather than retrying blindly.
         """,
     )
 }

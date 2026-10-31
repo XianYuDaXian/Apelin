@@ -5,8 +5,8 @@
   "template": {
     "extensionID": "wiki.qaq.apelin.dev.cli",
     "templateID": "c",
-    "version": "0.1.0",
-    "digest": "sha256:23825ef79a216000b34fce4e6cffdfdad64fe625f91c2237a3853e2551cadcbe"
+    "version": "0.1.2",
+    "digest": "sha256:ba1812f5d18b75f193dde0277db553e147c1f01e2f0e7f14fe1eb43907dc59ff"
   },
   "environment": {
     "toolchain": {
@@ -91,6 +91,7 @@
     "name": "Apelin Hello",
     "version": "0.0.1",
     "description": "Built on this device with Apelin.",
+    "icon": "https://owngoal-dev.github.io/Apelin/icons/wiki.qaq.apelin.dev.cli.png",
     "author": "Apelin User",
     "section": "Utilities",
     "layout": [

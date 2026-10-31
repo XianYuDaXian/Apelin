@@ -14,8 +14,14 @@ private final class FakeIcli: IcliSurface, @unchecked Sendable {
     var batches: [[[String: Any]]] = []
     var crashes: [String] = []
     var front: [String: Any] = ["bundle_id": "com.apple.springboard", "verified": true, "source": "runningboard"]
+    /// Answers for `frontmostApp` before `front`, one per call.
+    var fronts: [[String: Any]] = []
     var taps: [(Double, Double)] = []
     var elementTaps: [(String?, String?)] = []
+    var lockAnswer: [String: Any] = ["locked": false, "screen_off": false]
+    /// What a wake answers; every press, by icli's name.
+    var wakeAnswer: [String: Any] = ["button": "wake", "locked": false, "screen_off": false]
+    var presses: [String] = []
     /// The dispatch queue each `frontmostApp` call ran on.
     var frontQueues: [String] = []
 
@@ -72,6 +78,19 @@ private final class FakeIcli: IcliSurface, @unchecked Sendable {
         elementTaps.append((text, identifier)); return [:]
     }
 
+    func waitForElement(
+        text _: String?,
+        identifier _: String?,
+        role _: String?,
+        match _: String,
+        index _: Int,
+        appear: Bool,
+        timeout _: Double,
+        interval _: Double,
+    ) throws -> [String: Any] {
+        ["found": appear]
+    }
+
     func swipe(x1 _: Double, y1 _: Double, x2 _: Double, y2 _: Double, seconds _: Double) throws -> [String: Any] {
         [:]
     }
@@ -80,16 +99,21 @@ private final class FakeIcli: IcliSurface, @unchecked Sendable {
         [:]
     }
 
+    func pressButton(_ name: String) throws -> [String: Any] {
+        presses.append(name)
+        return name == "wake" ? wakeAnswer : ["button": name]
+    }
+
     func frontmostApp() -> [String: Any] {
         let queue = String(cString: __dispatch_queue_get_label(nil))
         return lock.withLock {
             frontQueues.append(queue)
-            return front
+            return fronts.isEmpty ? front : fronts.removeFirst()
         }
     }
 
     func lockState() -> [String: Any] {
-        ["locked": false, "screen_off": false]
+        lockAnswer
     }
 
     func runningApps() throws -> [String: Any] {
@@ -258,7 +282,8 @@ final class DiagnosticsWorkerTests: XCTestCase {
             XCTFail("an image check was accepted")
         } catch let error as ApelinError {
             XCTAssertEqual(error.code, .badRequest)
-            XCTAssertTrue(error.message.contains("panicked the iOS 27 kernel"), error.message)
+            XCTAssertTrue(error.message.contains("on every iOS version"), error.message)
+            XCTAssertNil(error.message.range(of: #"iOS \d"#, options: .regularExpression), error.message)
         }
         XCTAssertTrue(events.all.isEmpty, "a refused request starts nothing")
     }
@@ -279,6 +304,7 @@ final class DiagnosticsWorkerTests: XCTestCase {
         XCTAssertEqual(response.evidence.map(\.passed), [false, false, true])
         XCTAssertTrue(response.evidence[0].detail.hasPrefix("absent"))
         XCTAssertTrue(response.evidence[1].detail.hasPrefix("notRead:"), response.evidence[1].detail)
+        XCTAssertNil(response.evidence[1].detail.range(of: #"iOS \d"#, options: .regularExpression), response.evidence[1].detail)
     }
 
     /// The task: accepted at once, then `stage` events, the host's respring,
@@ -332,12 +358,58 @@ final class DiagnosticsWorkerTests: XCTestCase {
 
     func testUIActionsAreTheClosedListAndBoundToTheForegroundApp() throws {
         let icli = FakeIcli()
-        let service = DiagnosticsService(diagnostics: Diagnostics(icli: icli), host: ApelinService(transport: NoHost()), home: "/nonexistent", installRoot: "/")
+        var diagnostics = Diagnostics(icli: icli)
+        diagnostics.settleTimeout = 0.05
+        diagnostics.settleInterval = 0.01
+        let service = DiagnosticsService(diagnostics: diagnostics, host: ApelinService(transport: NoHost()), home: "/nonexistent", installRoot: "/")
         XCTAssertEqual(try DiagnosticsService.action(.tap(x: 1, y: 2)), .tap(UIPoint(x: 1, y: 2)))
         XCTAssertEqual(try DiagnosticsService.action(.tapElement(text: "OK", identifier: nil)), .tapElement(UIElementSelector(text: "OK", match: .exact)))
-        XCTAssertThrowsError(try DiagnosticsService.action(.press(button: "home")))
+        XCTAssertEqual(try DiagnosticsService.action(.press(button: "wake")), .press(.wake))
+        XCTAssertEqual(try DiagnosticsService.action(.press(button: "home")), .press(.home))
+        XCTAssertEqual(try DiagnosticsService.action(.press(button: "lock")), .press(.lock))
+        for unknown in ["power", "volume_up", "Home", ""] {
+            XCTAssertThrowsError(try DiagnosticsService.action(.press(button: unknown)), unknown) { error in
+                XCTAssertEqual((error as? ApelinError)?.code, .badRequest)
+            }
+        }
         XCTAssertNoThrow(try service.requireTarget("com.apple.springboard"))
-        XCTAssertThrowsError(try service.requireTarget("com.apple.Preferences"))
+        XCTAssertThrowsError(try service.requireTarget("com.apple.Preferences")) { error in
+            XCTAssertEqual(
+                error as? ApelinError,
+                ApelinError(.conflict, "com.apple.Preferences is not the verified foreground app after 0 s (com.apple.springboard)"),
+            )
+        }
+    }
+
+    /// Characters sent with no gap were dropped: "Hello world" arrived as
+    /// "Hello wrd". A `type` goes at icli's own pace.
+    func testTextIsTypedAtIclisPace() throws {
+        XCTAssertEqual(try DiagnosticsService.action(.type(text: "hi")), .type(text: "hi", delayMilliseconds: 30))
+    }
+
+    /// Two reads of the app a switch is leaving do not refuse an action
+    /// bound to the app it is switching to: the target is waited for.
+    func testATargetIsWaitedForWhileTheAppItLeavesIsStillInFront() throws {
+        let icli = FakeIcli()
+        let apelin: [String: Any] = ["bundle_id": "wiki.qaq.apelin", "verified": true, "source": "runningboard"]
+        icli.fronts = [apelin, apelin]
+        icli.front = ["bundle_id": "wiki.qaq.fila", "verified": true, "source": "runningboard"]
+        var diagnostics = Diagnostics(icli: icli)
+        diagnostics.settleInterval = 0.01
+        let service = DiagnosticsService(diagnostics: diagnostics, host: ApelinService(transport: NoHost()), home: "/nonexistent", installRoot: "/")
+        XCTAssertEqual(try service.requireTarget("wiki.qaq.fila")?.bundleIdentifier, "wiki.qaq.fila")
+    }
+
+    /// A `type` answers what the tree holds once the text has gone in; the
+    /// fake's tree never changes, so no field holds it.
+    func testATypeAnswersWhatTheFieldsHold() async throws {
+        var diagnostics = Diagnostics(icli: FakeIcli())
+        diagnostics.settleInterval = 0.01
+        let service = DiagnosticsService(diagnostics: diagnostics, host: ApelinService(transport: NoHost()), home: "/nonexistent", installRoot: "/")
+        let typed = try await service.uiAction(.init(action: .type(text: "Hello world")))
+        XCTAssertEqual(typed, ApelinProtocol.UIActionResponse(typedTextMatches: false, fieldValues: []))
+        let tapped = try await service.uiAction(.init(action: .tap(x: 1, y: 2)))
+        XCTAssertEqual(tapped, ApelinProtocol.UIActionResponse())
     }
 
     /// A targeted UI read or element tap settles the foreground once, and
@@ -368,6 +440,85 @@ final class DiagnosticsWorkerTests: XCTestCase {
             XCTAssertEqual(queues.count, 2, "\(name): one settle is two matching reads")
             XCTAssertFalse(queues.contains { $0.contains("cooperative") }, "\(name): \(queues)")
         }
+    }
+
+    /// On a dark screen only a wake goes through, and its answer says what
+    /// it left; the refusal of anything else says it is the screen.
+    func testAWakeAnswersTheLockStateAndIsAllADarkScreenTakes() async throws {
+        let icli = FakeIcli()
+        icli.lockAnswer = ["locked": true, "screen_off": true]
+        icli.wakeAnswer = ["button": "wake", "locked": true, "screen_off": false]
+        let service = DiagnosticsService(diagnostics: Diagnostics(icli: icli), host: ApelinService(transport: NoHost()), home: "/nonexistent", installRoot: "/")
+        let woken = try await service.uiAction(.init(action: .press(button: "wake")))
+        XCTAssertEqual(woken, ApelinProtocol.UIActionResponse(locked: true, screenOff: false))
+        for action in [ApelinProtocol.UIAction.press(button: "home"), .tap(x: 1, y: 2)] {
+            do {
+                _ = try await service.uiAction(.init(action: action))
+                XCTFail("\(action) ran on a dark screen")
+            } catch let error as ApelinError {
+                XCTAssertEqual(error.code, .conflict)
+                XCTAssertTrue(error.message.hasPrefix("The screen is off."), error.message)
+            }
+        }
+        XCTAssertEqual(icli.presses, ["wake"])
+        XCTAssertTrue(icli.taps.isEmpty)
+
+        icli.lockAnswer = ["locked": false, "screen_off": false]
+        let tapped = try await service.uiAction(.init(action: .tap(x: 1, y: 2)))
+        XCTAssertEqual(tapped, ApelinProtocol.UIActionResponse(), "only a wake answers the lock state")
+    }
+
+    /// An agent's actions name Apelin as refused (the host sets the list):
+    /// named as the target it is refused before anything is read, and in
+    /// front, verified or not, on the settled read the action would have
+    /// gone by, with no target too. Without the list (the app, the console)
+    /// the same tap goes through.
+    func testARefusedAppIsNeverReachedByAUIAction() async throws {
+        let icli = FakeIcli()
+        let apelin: [String: Any] = ["bundle_id": "wiki.qaq.apelin", "verified": true, "source": "runningboard"]
+        icli.front = apelin
+        var diagnostics = Diagnostics(icli: icli)
+        diagnostics.settleInterval = 0.01
+        diagnostics.settleTimeout = 0.05
+        let service = DiagnosticsService(
+            diagnostics: diagnostics,
+            host: ApelinService(transport: NoHost()),
+            home: "/nonexistent",
+            installRoot: "/",
+        )
+        let refused = ["wiki.qaq.apelin"]
+        func expectRefused(_ request: ApelinProtocol.UIActionRequest, _ what: String) async {
+            do {
+                _ = try await service.uiAction(request)
+                XCTFail("\(what): performed")
+            } catch let error as ApelinError {
+                XCTAssertEqual(error.code, .denied, what)
+            } catch {
+                XCTFail("\(what): \(error)")
+            }
+        }
+
+        let actions: [ApelinProtocol.UIAction] = [
+            .tap(x: 200, y: 4),
+            .tapElement(text: "Delete", identifier: nil),
+            .type(text: "yes"),
+            .swipe(fromX: 300, fromY: 100, toX: 20, toY: 100, durationMilliseconds: 200),
+        ]
+        for action in actions {
+            await expectRefused(.init(action: action, refusedBundleIDs: refused), "Apelin in front, \(action)")
+        }
+        icli.lock.withLock { icli.frontQueues = [] }
+        await expectRefused(.init(targetID: "wiki.qaq.apelin", action: .tap(x: 200, y: 4), refusedBundleIDs: refused), "Apelin as the target")
+        XCTAssertTrue(icli.lock.withLock { icli.frontQueues.isEmpty }, "a refused target is refused before the foreground is read")
+        icli.front = ["bundle_id": "wiki.qaq.apelin", "verified": false, "source": "springboard_query"]
+        await expectRefused(.init(action: .tap(x: 200, y: 4), refusedBundleIDs: refused), "Apelin in front, unverified")
+        XCTAssertTrue(icli.taps.isEmpty && icli.elementTaps.isEmpty, "nothing reached the screen")
+
+        icli.front = ["bundle_id": "com.apple.Preferences", "verified": true, "source": "runningboard"]
+        _ = try await service.uiAction(.init(action: .tap(x: 1, y: 2), refusedBundleIDs: refused))
+        icli.front = apelin
+        _ = try await service.uiAction(.init(action: .tap(x: 200, y: 4)))
+        XCTAssertEqual(icli.taps.map(\.0), [1, 200], "another app in front, and any app without the list")
     }
 
     func testCrashListUsesFileNamesAsIDs() throws {

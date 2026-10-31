@@ -115,7 +115,7 @@ final class RepositoryCardController: UIViewController, PHPickerViewControllerDe
     private func editTitle() {
         present(AlertInputViewController(
             title: "Edit Title",
-            message: "Leave it empty to use the repository's name.",
+            message: "Leave it empty to use the repository’s name.",
             placeholder: "Title",
             text: style.title ?? "",
             doneButtonText: "Save",

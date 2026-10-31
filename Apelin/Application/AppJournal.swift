@@ -3,7 +3,7 @@ import Dog
 import UIKit
 
 /// Dog's journal, `~/Documents/wiki.qaq.apelin/Journal/Dog_<date>_<id>.log`:
-/// one file a launch, the 128 newest kept, every line mirrored to the
+/// one file a launch, the 100 newest kept, every line mirrored to the
 /// unified log under `com.lakr233.dog`. The app's alone — apelind and the
 /// workers keep their own logging — and read back by Settings ▸ Logs.
 enum AppJournal {
@@ -22,6 +22,8 @@ enum AppJournal {
         do {
             try folder.makeLevels(to: directory)
             try Dog.shared.initialization(writableDir: folder.root)
+            // Include this launch: Dog's initialization prunes before creating it.
+            Dog.shared.maximumLogCount = 100
         } catch {
             NSLog("Apelin: the journal could not be opened: %@", String(describing: error))
             return

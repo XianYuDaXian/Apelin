@@ -17,6 +17,12 @@ final class ChatRuntime {
     var onSaveRecovered: (() -> Void)?
     /// A conversation's draft was put back from outside the composer.
     var onDraftRestored: ((UUID) -> Void)?
+    /// Queued messages a stopped run never took went back to a
+    /// conversation's composer, which the reader has yet to be told.
+    var onUnsentReturned: ((UUID, DroppedMessages.Returned) -> Void)?
+    /// Builds an agent ran completed, counted once each from the events a
+    /// conversation had not read before (`CompletedBuilds`).
+    var onBuildsCompleted: ((Int) -> Void)?
     private(set) var isLoaded = false
     /// The saved conversations have been checked against the host's live
     /// sessions once: what says working is working.
@@ -36,6 +42,19 @@ final class ChatRuntime {
     /// queues no save, nor a copy of its whole history, per batch.
     private var saving: Set<UUID> = []
     private var savesPending: Set<UUID> = []
+    /// Pending saves that go as soon as the write under way ends: a turn
+    /// began or ended, or the reader changed something.
+    private var savesUrgent: Set<UUID> = []
+    /// When each conversation's last write ended. A streamed or typed
+    /// change waits until `saveInterval` after it, so a long history is
+    /// written at most once in that time, and a write that took longer
+    /// pushes the next one back as far.
+    private var savedAt: [UUID: ContinuousClock.Instant] = [:]
+    /// Saves waiting for their interval, by conversation.
+    private var savesDeferred: [UUID: Task<Void, Never>] = [:]
+    /// Called once no conversation is being written (`saveNow`).
+    private var savesDrained: [() -> Void] = []
+    private static let saveInterval: Duration = .seconds(3)
     /// Who waits for a conversation's compaction to end, by conversation.
     private var compactions: [UUID: CheckedContinuation<AgentCompactionResult, Error>] = [:]
 
@@ -52,7 +71,7 @@ final class ChatRuntime {
                 record.reclaimUnsent()
                 records[record.summary.id] = record
                 if unsent {
-                    persist(record.summary.id)
+                    persist(record.summary.id, urgent: true)
                 }
             }
             for record in records.values where isUntouched(record) && record.summary.id != selected {
@@ -63,6 +82,8 @@ final class ChatRuntime {
                     rmdir(DataFolder.app.root.appendingPathComponent("Temporary/" + record.summary.id.uuidString).path)
                 }
             }
+            // a project deleted while the app was away
+            await forget(DeletedProjects.gone(from: summaries, listed: DeletedProjects.listing(in: .app)))
             isLoaded = true
             onChange?()
             // A host that does not answer yet is not an error, and runs
@@ -109,12 +130,12 @@ final class ChatRuntime {
     func newChat(project: String?, preferring current: UUID?) -> ChatSummary {
         let untouched = records.values.filter { $0.summary.projectName == project && isUntouched($0) }
         let reused = untouched.first { $0.summary.id == current }
-            ?? untouched.max { $0.summary.updated < $1.summary.updated }
-        let summary = reused?.summary ?? ChatSummary.untitled(updated: Date(), projectName: project)
+            ?? untouched.max { $0.summary.lastInteraction < $1.summary.lastInteraction }
+        let summary = reused?.summary ?? ChatSummary.untitled(lastInteraction: Date(), projectName: project)
         if reused == nil {
             records[summary.id] = ChatRecord(summary: summary)
         }
-        records[summary.id]?.summary.updated = Date()
+        records[summary.id]?.summary.lastInteraction = Date()
         changed(summary.id)
         return records[summary.id]?.summary ?? summary
     }
@@ -175,6 +196,34 @@ final class ChatRuntime {
         }
     }
 
+    /// Takes away the conversations of every project whose folder has gone
+    /// from `Projects/` (`DeletedProjects`), as `deleteProject` takes them
+    /// once it has removed the folder itself. Answers the projects gone.
+    @discardableResult
+    func forgetDeletedProjects() async -> Set<String> {
+        guard isLoaded else { return [] }
+        let gone = DeletedProjects.gone(from: summaries, listed: DeletedProjects.listing(in: .app))
+        guard !gone.conversations.isEmpty else { return [] }
+        await forget(gone)
+        onChange?()
+        return gone.projects
+    }
+
+    /// Their banners withdrawn, any session the host left open closed —
+    /// an agent's deletion closed its own, so nothing waits on the host
+    /// here —, and their histories removed; a history that cannot be
+    /// removed is tried again with the next change.
+    private func forget(_ gone: DeletedProjects.Gone) async {
+        for id in gone.conversations {
+            let session = records[id]?.sessionID
+            ConversationNotices.shared.withdraw(session: session)
+            if let session {
+                Task { try? await ApelinService.app.agentClose(sessionID: session) }
+            }
+            try? await removeRecord(id)
+        }
+    }
+
     private func closeSession(_ id: UUID) async throws {
         // A send may still be opening the session when Delete is tapped.
         var sessionID = records[id]?.sessionID
@@ -192,6 +241,8 @@ final class ChatRuntime {
         // Keep the in-memory row on disk failure, so Delete can be retried.
         try await store.remove(id)
         readers.removeValue(forKey: id)?.cancel()
+        savesDeferred.removeValue(forKey: id)?.cancel()
+        savedAt[id] = nil
         records.removeValue(forKey: id)
         transcripts.remove(id)
     }
@@ -262,12 +313,8 @@ final class ChatRuntime {
     /// message is taken out again and the draft put back in an empty
     /// composer before the task throws.
     func submit(_ draft: ComposerDraft, to id: UUID) -> Task<Void, Error> {
-        guard var record = records[id] else { return Task {} }
-        record.sending = (record.sending ?? []) + [draft]
-        if record.draft.id == draft.id {
-            record.draft = ComposerDraft()
-        }
-        records[id] = record
+        guard records[id] != nil else { return Task {} }
+        records[id]?.submit(draft)
         changed(id)
         return Task {
             do {
@@ -332,11 +379,11 @@ final class ChatRuntime {
                 serviceTier: selection?.tier,
                 contextWindow: selection?.contextWindow,
                 approvalMode: AgentPermissions.mode,
+                asksBeforeScreen: AgentPermissions.asksBeforeScreen,
             ),
             descriptors: descriptors,
         )
         records[id]?.summary.nameAfterFirstMessage(text: draft.text, attachmentName: draft.attachments.first?.name)
-        records[id]?.summary.updated = Date()
         changed(id)
     }
 
@@ -452,6 +499,7 @@ final class ChatRuntime {
             provider: selected?.provider,
             model: selected?.model,
             approvalMode: mode,
+            asksBeforeScreen: AgentPermissions.asksBeforeScreen,
             reasoningEffort: selected?.effort,
             serviceTier: selected?.tier,
             contextWindow: selected?.contextWindow,
@@ -493,6 +541,10 @@ final class ChatRuntime {
                     guard !Task.isCancelled, records[id]?.task == task else { return }
                     let fresh = records[id]?.take(batch.events) ?? []
                     settleSending(in: id, against: fresh)
+                    let builds = CompletedBuilds.count(in: fresh)
+                    if builds > 0 {
+                        onBuildsCompleted?(builds)
+                    }
                     for event in fresh where event.kind == AgentConversations.openedEventKind {
                         if let parent = records[id] {
                             adopt(ChatAdoption.record(
@@ -528,16 +580,23 @@ final class ChatRuntime {
                     }
                     let wasWorking = records[id]?.summary.isWorking
                     let current = transcript(id)
-                    records[id]?.summary.isWorking = current.isWorking || current.isCompacting
-                    if let last = batch.events.last {
-                        records[id]?.summary.updated = last.time
-                    }
+                    let isWorking = current.isWorking || current.isCompacting
+                    // The row's state, never its place in the sidebar: only
+                    // the reader's New Chat and messages move that
+                    // (`lastInteraction`), however much the agent writes.
+                    records[id]?.summary.isWorking = isWorking
                     // A wait that ran out with nothing, as an idle session's
-                    // does every 20 s, has nothing to write or show.
-                    if !batch.events.isEmpty || records[id]?.summary.isWorking != wasWorking {
-                        changed(id)
+                    // does every 20 s, has nothing to write or show. A turn's
+                    // start and end are written at once, what streams between
+                    // them at most every `saveInterval`.
+                    let turnMoved = isWorking != wasWorking
+                    if !batch.events.isEmpty || turnMoved {
+                        changed(id, urgent: turnMoved || batch.finished)
                     }
                     if batch.finished {
+                        if let end = records[id]?.missedEnd(of: batch, isWorking: isWorking) {
+                            await takeMissedEnd(at: end, of: task, from: batch, in: id)
+                        }
                         return
                     }
                 } catch let error as ApelinError where error.code == .notFound {
@@ -551,6 +610,19 @@ final class ChatRuntime {
                 }
             }
         }
+    }
+
+    /// The end of `task` the conversation read past (`ChatRecord.missedEnd`),
+    /// read again from just before it unless `batch` carries it, and taken.
+    private func takeMissedEnd(at end: EventSeq, of task: TaskHandle, from batch: TaskEventBatch, in id: UUID) async {
+        var event = batch.events.last { $0.seq == end }
+        if event == nil {
+            event = try? await ApelinService.app.attach(task, afterSeq: EventSeq(end.rawValue - 1), waitMilliseconds: 0)
+                .events.first
+        }
+        guard records[id]?.task == task else { return }
+        records[id]?.takeMissedEnd(event, at: end)
+        changed(id)
     }
 
     /// Sent messages whose echo arrived leave `sending`, in the same
@@ -574,35 +646,78 @@ final class ChatRuntime {
         }
     }
 
-    /// What a stopped run never took goes back to the composer, when
-    /// nothing else is typed there.
+    /// What a stopped run never took goes back to the composer, ahead of
+    /// what was typed since (`DroppedMessages`).
     private func restoreDropped(_ messages: Set<UUID>, in id: UUID) {
-        let texts = (records[id]?.events ?? []).filter { $0.kind == "queued" }.compactMap { event -> String? in
-            guard let message = event.payload?["id"]?.stringValue.flatMap(UUID.init(uuidString:)),
-                  messages.contains(message)
-            else { return nil }
-            return event.payload?["text"]?.stringValue
-        }
-        guard !texts.isEmpty, let draft = records[id]?.draft,
-              draft.text.isEmpty, draft.attachments.isEmpty
+        guard let events = records[id]?.events, let draft = records[id]?.draft,
+              let returned = DroppedMessages.returning(messages, from: events, to: draft, attachment: {
+                  attachment($0, in: id)
+              })
         else { return }
-        records[id]?.draft = ComposerDraft(text: texts.joined(separator: "\n\n"))
+        records[id]?.draft = returned.draft
         onDraftRestored?(id)
+        onUnsentReturned?(id, returned)
     }
 
-    private func changed(_ id: UUID) {
-        persist(id); onChange?()
+    /// `urgent`: written at once rather than after the interval; see `persist`.
+    private func changed(_ id: UUID, urgent: Bool = true) {
+        persist(id, urgent: urgent); onChange?()
     }
 
-    private func persist(_ id: UUID) {
+    /// Writes `id`, atomically and off the main thread (`ChatStore`). An
+    /// `urgent` save goes now, or as soon as the write under way ends; any
+    /// other waits until `saveInterval` after the last write ended.
+    private func persist(_ id: UUID, urgent: Bool = false) {
+        guard records[id] != nil else {
+            unsaved.remove(id)
+            savesDeferred.removeValue(forKey: id)?.cancel()
+            return
+        }
+        if saving.contains(id) {
+            savesPending.insert(id)
+            if urgent {
+                savesUrgent.insert(id)
+            }
+            return
+        }
+        let due = savedAt[id].map { $0 + Self.saveInterval } ?? .now
+        if urgent || due <= .now {
+            savesDeferred.removeValue(forKey: id)?.cancel()
+            write(id)
+        } else if savesDeferred[id] == nil {
+            savesDeferred[id] = Task { [weak self] in
+                try? await Task.sleep(until: due)
+                guard !Task.isCancelled, let self else { return }
+                savesDeferred[id] = nil
+                write(id)
+            }
+        }
+    }
+
+    /// Writes every conversation whose save is waiting for its interval,
+    /// before the app is suspended; `drained` is called once none is being
+    /// written.
+    func saveNow(drained: @escaping () -> Void) {
+        for id in Set(savesDeferred.keys).union(savesPending) {
+            persist(id, urgent: true)
+        }
+        savesDrained.append(drained)
+        drainSaves()
+    }
+
+    private func drainSaves() {
+        guard saving.isEmpty else { return }
+        let drained = savesDrained
+        savesDrained = []
+        drained.forEach { $0() }
+    }
+
+    private func write(_ id: UUID) {
         guard let record = records[id] else {
             unsaved.remove(id)
             return
         }
-        guard saving.insert(id).inserted else {
-            savesPending.insert(id)
-            return
-        }
+        saving.insert(id)
         revision += 1
         let revision = revision
         Task { [store, weak self] in
@@ -620,15 +735,17 @@ final class ChatRuntime {
     /// Writes what changed while `id` was being written.
     private func saveEnded(_ id: UUID) {
         saving.remove(id)
+        savedAt[id] = .now
         if savesPending.remove(id) != nil {
-            persist(id)
+            persist(id, urgent: savesUrgent.remove(id) != nil)
         }
+        drainSaves()
     }
 
     /// Writes again every conversation a failed save left in memory only.
     func retryUnsaved() {
         for id in unsaved {
-            persist(id)
+            persist(id, urgent: true)
         }
     }
 

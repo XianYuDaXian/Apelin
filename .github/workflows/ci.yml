@@ -28,12 +28,16 @@ env:
   HOMEBREW_NO_INSTALL_CLEANUP: "1"
   HOMEBREW_NO_ANALYTICS: "1"
 
+# Both jobs run on the Xcode 27 image, the one with the iOS 27.1 SDK the
+# packages are linked against (`IOS_SDK_TIER` in the Makefile: the tier an
+# iPhone Duo runs edge to edge, with vertical bars). Its default Xcode may be
+# newer than 27.1, so 27.1 is named rather than the newest found.
 jobs:
   # Seconds, where the build takes minutes, so a broken host test says so
   # long before the packages would.
   test:
     name: Host tests
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 60
 
     steps:
@@ -42,18 +46,18 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select newest Xcode
+      - name: Select Xcode 27.1
         run: |
-          latest="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V | tail -n1)"
-          sudo xcode-select -s "$latest/Contents/Developer"
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
           xcodebuild -version
+          echo "iPhoneOS SDK $(xcrun --sdk iphoneos --show-sdk-version)"
 
       - name: Run host tests
         run: make harness SWIFTPM_SCRATCH="$RUNNER_TEMP/apelin-spm"
 
   build:
     name: Build and verify Debian packages
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
 
     steps:
@@ -68,11 +72,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Select newest Xcode
+      - name: Select Xcode 27.1
         run: |
-          latest="$(find /Applications -maxdepth 1 -type d -name 'Xcode*.app' -print | sort -V | tail -n1)"
-          sudo xcode-select -s "$latest/Contents/Developer"
+          sudo xcode-select -s /Applications/Xcode_27.1.app/Contents/Developer
           xcodebuild -version
+          echo "iPhoneOS SDK $(xcrun --sdk iphoneos --show-sdk-version)"
 
       - name: Install packaging dependencies
         shell: bash

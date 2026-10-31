@@ -3,14 +3,13 @@ import ApelinProtocol
 import Then
 import UIKit
 
-/// SDKs ▸ one SDK: what it was identified as, what the check warned about,
-/// and under the list, in small grey lines, where it came from and where
-/// it lies. Removing it is in the menu at the top.
+/// SDKs ▸ one SDK: its version, architectures and Swift interfaces.
+/// Removing it is in the menu at the top.
 final class SDKDetailController: TableController {
     /// Told once the SDK is removed, so the list reads itself again.
     var onRemove: (() -> Void)?
 
-    private enum Field: Hashable { case version, name, architectures, swiftInterfaces }
+    private enum Field: Hashable { case version, name, architecture(String), swiftInterfaces }
     private struct Row: Equatable {
         let id: Field
         let name: String
@@ -78,18 +77,6 @@ final class SDKDetailController: TableController {
         return String(words[index + 1])
     }
 
-    /// The architectures without their variants: `arm64e.x1` is `arm64e`.
-    static func baseArchitectures(of record: SDKRecord) -> [String] {
-        var seen: [String] = []
-        for architecture in architectures(of: record) {
-            let base = String(architecture.prefix { $0 != "." })
-            if !seen.contains(base) {
-                seen.append(base)
-            }
-        }
-        return seen
-    }
-
     override func viewDidLoad() {
         super.viewDidLoad()
         title = Self.displayName(of: record)
@@ -98,49 +85,34 @@ final class SDKDetailController: TableController {
 
         var about: [Row] = [
             Row(id: .version, name: String(localized: "Version"), value: record.version),
-            Row(id: .name, name: String(localized: "Name"), value: record.canonicalName),
         ]
-        let architectures = Self.architectures(of: record)
-        if !architectures.isEmpty {
-            about.append(Row(
-                id: .architectures,
-                name: String(localized: "Architectures"),
-                value: architectures.joined(separator: ", "),
-            ))
-        }
         if let swift = Self.swiftVersion(of: record) {
             about.append(Row(id: .swiftInterfaces, name: String(localized: "Swift Interfaces"), value: swift))
         }
         // the check's warnings stay in the record; none of them stops a build
-        dataSource.update([(0, about)])
-        let lines = [record.origin.map(Self.describe(origin:)), record.id, record.digest, record.path]
-        tableView.tableFooterView = TableFootnoteView(lines: lines.compactMap(\.self))
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        (tableView.tableFooterView as? TableFootnoteView)?.fit(in: tableView)
-    }
-
-    /// `repository <url>#<branch>@<commit>`, `url <url>`, `file`,
-    /// `inbox <path>`, in words.
-    private static func describe(origin: String) -> String {
-        let parts = origin.split(separator: " ", maxSplits: 1).map(String.init)
-        let rest = parts.count > 1 ? parts[1] : ""
-        switch parts.first {
-        case "inbox": return String(localized: "Imported from inbox: \(rest)")
-        case "url": return rest
-        case "repository": return rest
-        case "file": return String(localized: "Imported from a file")
-        default: return origin
+        dataSource.headerTitle = { section in
+            section == 1 ? String(localized: "Architectures") : nil
         }
+        var sections = [(0, about)]
+        let architectures = Self.architectures(of: record).reduce(into: [String]()) { result, architecture in
+            if !result.contains(architecture) {
+                result.append(architecture)
+            }
+        }
+        if !architectures.isEmpty {
+            sections.append((1, architectures.map {
+                Row(id: .architecture($0), name: $0, value: "")
+            }))
+        }
+        sections.append((2, [Row(id: .name, name: String(localized: "Name"), value: record.canonicalName)]))
+        dataSource.update(sections)
     }
 
     private func cell(for row: Row) -> UITableViewCell {
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-        var content = UIListContentConfiguration.valueCell()
+        var content = row.value.isEmpty ? UIListContentConfiguration.cell() : .valueCell()
         content.text = row.name
-        content.secondaryText = row.value
+        content.secondaryText = row.value.isEmpty ? nil : row.value
         cell.selectionStyle = .none
         cell.contentConfiguration = content
         return cell
@@ -166,7 +138,8 @@ final class SDKDetailController: TableController {
         contextMenuConfigurationForRowAt indexPath: IndexPath,
         point _: CGPoint,
     ) -> UIContextMenuConfiguration? {
-        guard let text = dataSource.value(at: indexPath)?.value else { return nil }
+        guard let row = dataSource.value(at: indexPath) else { return nil }
+        let text = row.value.isEmpty ? row.name : row.value
         return UIContextMenuConfiguration(actionProvider: { _ in
             UIMenu(children: [UIAction(
                 title: String(localized: "Copy"),

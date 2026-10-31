@@ -10,13 +10,41 @@ enum DiagnosticsHandler: DomainHandler {
             await host.startTask(request, kind: .confirmLoaded, role: .diagnostics)
         case .confirmLoadedAttach:
             await host.attach(request, ConfirmLoadedAttachRequest.self)
-        case .captureScreen, .readUITree, .uiAction:
+        case .captureScreen:
             await host.forward(request, to: .diagnostics)
+        case .readUITree:
+            await forwardTreeRead(request, host: host)
+        case .uiAction:
+            await forwardAction(request, host: host)
         default:
             request.fail(ApelinError(
                 .badRequest,
                 "\(request.operation.rawValue) is not a diagnostics operation",
             ))
         }
+    }
+
+    /// An agent reads the UI tree only as its session's Ask Before Using the
+    /// Screen lets it (AgentScreenRules).
+    private static func forwardTreeRead(_ request: HostRequest, host: SessionHost) async -> HostReply {
+        if let refusal = await AgentScreenRules.authorize(request.request, caller: request.caller, registry: host.registry) {
+            return request.fail(refusal)
+        }
+        return await host.forward(request, to: .diagnostics)
+    }
+
+    /// An agent acts only as its session's Ask Before Using the Screen lets
+    /// it (AgentScreenRules), and never on Apelin itself (AgentUIActionRules).
+    private static func forwardAction(_ request: HostRequest, host: SessionHost) async -> HostReply {
+        if let refusal = await AgentScreenRules.authorize(request.request, caller: request.caller, registry: host.registry) {
+            return request.fail(refusal)
+        }
+        var scoped = request
+        do {
+            scoped.request = try AgentUIActionRules.scoped(request.request, caller: request.caller)
+        } catch {
+            return request.fail(error)
+        }
+        return await host.forward(scoped, to: .diagnostics)
     }
 }

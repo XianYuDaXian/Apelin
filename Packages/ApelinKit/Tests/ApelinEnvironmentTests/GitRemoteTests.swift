@@ -166,6 +166,7 @@ final class GitRemoteServiceTests: XCTestCase {
         let git = service(home)
         XCTAssertThrowsError(try git.status(GitStatusRequest(projectID: id))) {
             XCTAssertEqual(($0 as? ApelinError)?.code, .notFound)
+            XCTAssertEqual(($0 as? ApelinError)?.reason, .notARepository, "the agent is told to run git_init")
         }
         XCTAssertEqual(try git.initialize(GitInitRequest(projectID: id)), GitInitResponse(branch: "main"))
         XCTAssertEqual(try git.status(GitStatusRequest(projectID: id)).branch, "main")
@@ -173,6 +174,73 @@ final class GitRemoteServiceTests: XCTestCase {
         XCTAssertThrowsError(try git.initialize(GitInitRequest(projectID: id))) {
             XCTAssertEqual(($0 as? ApelinError)?.code, .conflict)
         }
+    }
+
+    // MARK: Apelin's own files
+
+    /// The chat's attachments and the file tools' temporary files sit in the
+    /// project folder, but are no change of the project's.
+    func testANewProjectKeepsApelinsOwnFilesOutOfItsRepository() throws {
+        let home = try TemporaryHome(self)
+        let created = try ProjectStore(dataFolder: home.layout.data).createEmpty(name: "Fresh")
+        let root = URL(fileURLWithPath: created.path, isDirectory: true)
+        try writeApelinFiles(in: root)
+        let git = service(home)
+        XCTAssertEqual(try git.status(GitStatusRequest(projectID: created.projectID)).entries.map(\.path), ["apelin-project.json"])
+        XCTAssertFalse(try git.diff(GitDiffRequest(projectID: created.projectID)).diff.contains("Attachments"))
+
+        _ = try git.commit(GitCommitRequest(
+            projectID: created.projectID, message: "First", authorName: "A", authorEmail: "a@apelin.invalid", all: true,
+        ))
+        XCTAssertEqual(try git.status(GitStatusRequest(projectID: created.projectID)).entries, [])
+        // Had it been committed, its removal would be a change.
+        try FileManager.default.removeItem(at: root.appendingPathComponent("Attachments"))
+        XCTAssertEqual(try git.status(GitStatusRequest(projectID: created.projectID)).entries, [], "the attachment was never committed")
+    }
+
+    func testInitKeepsApelinsOwnFilesOut() throws {
+        let home = try TemporaryHome(self)
+        let id = "8a6f3c1e-0000-4000-8000-00000000010b"
+        let root = try project(home, name: "Plain", id: id, kind: "tweak")
+        let git = service(home)
+        _ = try git.initialize(GitInitRequest(projectID: id))
+        let exclude = try String(contentsOf: root.appendingPathComponent(".git/info/exclude"), encoding: .utf8)
+        for pattern in ProjectExcludes.apelinFiles {
+            XCTAssertTrue(exclude.contains(pattern + "\n"), pattern)
+        }
+        try writeApelinFiles(in: root)
+        XCTAssertEqual(try git.status(GitStatusRequest(projectID: id)).entries.map(\.path), ["apelin-project.json"])
+    }
+
+    /// A repository made before Apelin wrote its excludes takes them on its
+    /// next git call, once the project has an attachment, and not before.
+    func testAnOlderRepositoryKeepsApelinsOwnFilesOutOnceItHasAttachments() throws {
+        let home = try TemporaryHome(self)
+        let id = "8a6f3c1e-0000-4000-8000-00000000010c"
+        let root = try project(home, name: "Plain", id: id, kind: "tweak")
+        _ = try GitRepository.create(at: root)
+        let exclude = root.appendingPathComponent(".git/info/exclude")
+        let git = service(home)
+        XCTAssertEqual(try git.status(GitStatusRequest(projectID: id)).entries.map(\.path), ["apelin-project.json"])
+        XCTAssertFalse(((try? String(contentsOf: exclude, encoding: .utf8)) ?? "").contains("/Attachments/"), "nothing to keep out yet")
+
+        try writeApelinFiles(in: root)
+        XCTAssertEqual(try git.status(GitStatusRequest(projectID: id)).entries.map(\.path), ["apelin-project.json"])
+        let text = try String(contentsOf: exclude, encoding: .utf8)
+        for pattern in ProjectExcludes.apelinFiles {
+            XCTAssertEqual(text.components(separatedBy: "\n").count(where: { $0 == pattern }), 1, pattern)
+        }
+        _ = try git.status(GitStatusRequest(projectID: id))
+        XCTAssertEqual(try String(contentsOf: exclude, encoding: .utf8), text, "written once")
+    }
+
+    /// An attachment the agent saved, and a temporary file its file tools
+    /// left beside a file they replace.
+    private func writeApelinFiles(in root: URL) throws {
+        let attachments = root.appendingPathComponent("Attachments", isDirectory: true)
+        try FileManager.default.createDirectory(at: attachments, withIntermediateDirectories: true)
+        try Data("image".utf8).write(to: attachments.appendingPathComponent("4b0c0f5e-0000-4000-8000-000000000001"))
+        try Data("partial".utf8).write(to: root.appendingPathComponent(".Tweak.m.apelin-1F2E3D4C"))
     }
 
     func testCommitAllStagesNewChangedAndDeletedFilesButNotIgnoredOnes() throws {
@@ -325,6 +393,66 @@ final class GitRemoteServiceTests: XCTestCase {
         XCTAssertThrowsError(try local.preparePush(GitPushRequest(projectID: id))) {
             XCTAssertEqual(($0 as? ApelinError)?.code, .badRequest)
         }
+    }
+
+    /// A project made here has no remote: a push with a URL adds it, then
+    /// pushes as to any remote, and records it as the branch's upstream.
+    func testAPushWithAURLAddsTheRemoteTheProjectDoesNotHave() throws {
+        let home = try TemporaryHome(self)
+        let bare = home.home.appendingPathComponent("empty.git", isDirectory: true)
+        try GitRepository.createBare(at: bare)
+        let created = try ProjectStore(dataFolder: home.layout.data).createEmpty(name: "Fresh")
+        let id = created.projectID
+        let git = service(home)
+        let commit = try git.commit(GitCommitRequest(
+            projectID: id, message: "First", authorName: "A", authorEmail: "a@apelin.invalid", all: true,
+        )).commitID
+
+        XCTAssertThrowsError(try git.preparePush(GitPushRequest(projectID: id))) {
+            XCTAssertEqual(($0 as? ApelinError)?.code, .notFound)
+            XCTAssertEqual(($0 as? ApelinError)?.reason, .noSuchRemote, "the agent is told to ask for an address")
+        }
+        let pushed = try git.push(git.preparePush(GitPushRequest(projectID: id, url: bare.path)), reporter: .silent)
+        XCTAssertEqual(pushed, .object(["remote": .string("origin"), "branch": .string("main"), "commit": .string(commit)]))
+        let repository = try GitRepository(at: URL(fileURLWithPath: created.path, isDirectory: true))
+        XCTAssertEqual(repository.remoteURL(), bare.path)
+        XCTAssertEqual(repository.localConfigValue("branch.main.remote"), "origin")
+        let check = try GitRepository.create(at: home.home.appendingPathComponent("check", isDirectory: true))
+        try check.addRemote("origin", url: bare.path)
+        XCTAssertEqual(try check.fetch().updated.first { $0.ref == "refs/remotes/origin/main" }?.to, commit, "the remote has the commit")
+
+        // The same URL again is the same remote; fetch and pull read it too.
+        XCTAssertNoThrow(try git.preparePush(GitPushRequest(projectID: id, url: bare.path)))
+        XCTAssertNoThrow(try git.fetch(git.prepareFetch(GitFetchRequest(projectID: id)), reporter: .silent))
+        // Another URL never moves it.
+        XCTAssertThrowsError(try git.preparePush(GitPushRequest(projectID: id, url: "/elsewhere.git"))) {
+            XCTAssertEqual(($0 as? ApelinError)?.code, .conflict)
+            XCTAssertEqual(($0 as? ApelinError)?.reason, .remoteURLDiffers)
+        }
+        XCTAssertEqual(repository.remoteURL(), bare.path)
+    }
+
+    func testAPushURLIsHTTPSAndARefusedOneAddsNothing() throws {
+        let home = try TemporaryHome(self)
+        let created = try ProjectStore(dataFolder: home.layout.data).createEmpty(name: "Fresh")
+        let root = URL(fileURLWithPath: created.path, isDirectory: true)
+        let git = GitService(layout: home.layout)
+        for url in ["http://example.com/a.git", "ssh://example.com/a.git", "/tmp/a.git", "https://u:p@example.com/a.git"] {
+            XCTAssertThrowsError(try git.preparePush(GitPushRequest(projectID: created.projectID, url: url)), url) {
+                XCTAssertEqual(($0 as? ApelinError)?.code, .badRequest)
+            }
+        }
+        XCTAssertNil(try GitRepository(at: root).remoteURL())
+
+        // An HTTPS URL a rewrite sends elsewhere is refused as a remote that
+        // has it would be, and the remote it added is taken away again.
+        try GitRepository(at: root).setLocalConfigValue("https://example.com/a.git", for: "url.http://example.com/a.git.pushInsteadOf")
+        XCTAssertThrowsError(try git.preparePush(GitPushRequest(projectID: created.projectID, url: "https://example.com/a.git"))) {
+            XCTAssertEqual(($0 as? ApelinError)?.code, .badRequest)
+        }
+        XCTAssertNil(try GitRepository(at: root).remoteURL())
+        XCTAssertNoThrow(try git.preparePush(GitPushRequest(projectID: created.projectID, url: "https://example.com/b.git")))
+        XCTAssertEqual(try GitRepository(at: root).remoteURL(), "https://example.com/b.git")
     }
 
     /// A push goes where libgit2 sends it, through `pushInsteadOf` too.

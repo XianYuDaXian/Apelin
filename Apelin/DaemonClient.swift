@@ -49,7 +49,7 @@ final class DaemonClient: ApelinTransport, @unchecked Sendable {
 
     func call(_ request: WireRequest, descriptors: [OwnedDescriptor]) async throws -> (WireReply, [OwnedDescriptor]) {
         guard let connection = await connection() else {
-            throw ApelinError(.backendUnavailable, "Apelin's background service is not running")
+            throw ApelinError(.backendUnavailable, "Apelin’s background service is not running")
         }
         let wait = (try? JSONCoding.decode(WaitField.self, from: request.payload))?.waitMilliseconds ?? 0
         let bound = Self.callMargin + Double(wait) / 1000
@@ -63,7 +63,7 @@ final class DaemonClient: ApelinTransport, @unchecked Sendable {
                     continuation.resume(
                         throwing: ApelinError(
                             .unavailable,
-                            String(localized: "The connection to Apelin's background service closed. Try again."),
+                            String(localized: "The connection to Apelin’s background service closed. Try again."),
                         ),
                     )
                     return
@@ -76,7 +76,7 @@ final class DaemonClient: ApelinTransport, @unchecked Sendable {
                 continuation.resume(
                     throwing: ApelinError(
                         .timeout,
-                        String(localized: "Apelin's background service did not answer within \(waited). Try again."),
+                        String(localized: "Apelin’s background service did not answer within \(waited). Try again."),
                     ),
                 )
             }

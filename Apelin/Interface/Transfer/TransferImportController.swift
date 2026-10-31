@@ -12,22 +12,22 @@ import UIKit
 /// place.
 final class TransferImportController: TableController {
     private enum Field: Hashable {
-        case version, languages, swiftVersion, newestSDK, appleProduct, name, architectures, swiftInterfaces,
-             template, gitHistory, remote, toolchain, sdk, fileSize, contents, exportedBy, exportedOn, identifier,
-             minimumOS, cpuFeatures, exportedFrom, existing
+        case version, swiftVersion, newestSDK, appleProduct, name, swiftInterfaces,
+             template, gitHistory, remote, toolchain, sdk, fileSize, files, contents, exportedBy, exportedOn, identifier,
+             minimumOS
     }
 
     private enum Row: Equatable {
-        case header(TransferSummary)
         case value(Field, String, String)
         /// A long value, a path or an identifier, under its name.
         case identifier(Field, String, String)
         case problem(String)
         case note(String)
+        case item(String)
         case name
     }
 
-    private enum SectionID: Hashable { case summary, details, requirements, name, problems, notes }
+    private enum SectionID: Hashable { case details, languages, architectures, requirements, cpuFeatures, name, problems, notes, metadata }
     private struct Section {
         var id: SectionID
         var header: String?
@@ -64,8 +64,8 @@ final class TransferImportController: TableController {
                 let text: String?
                 switch row {
                 case let .value(id, _, _), let .identifier(id, _, _): field = id; text = nil
-                case let .problem(value), let .note(value): field = nil; text = value
-                case .header, .name: field = nil; text = nil
+                case let .problem(value), let .note(value), let .item(value): field = nil; text = value
+                case .name: field = nil; text = nil
                 }
                 let occurrence = text.map { occurrences[$0, default: 0] } ?? 0
                 if let text {
@@ -161,7 +161,7 @@ final class TransferImportController: TableController {
 
     private func show(_ failure: String) {
         sections = []
-        tableView.backgroundView = EmptyStateView(symbolName: "exclamationmark.triangle", text: failure)
+        tableView.backgroundView = EmptyStateView(symbolName: "exclamationmark.triangle", title: String(localized: "Unable to Import"), text: failure)
         updateRows()
         updateImportItem()
     }
@@ -174,11 +174,51 @@ final class TransferImportController: TableController {
             nameField.text = inspection.suggestedName ?? summary.project?.name ?? summary.name
         }
 
-        var sections = [Section(id: .summary, rows: [.header(summary)])]
-        sections.append(Section(id: .details, rows: details(of: summary, fileSize: inspection.fileSize)))
+        var sections: [Section] = []
+        if !inspection.problems.isEmpty {
+            sections.append(Section(
+                id: .problems,
+                header: String(localized: "Unable to Import"),
+                rows: inspection.problems.map(Row.problem),
+            ))
+        }
+        if !inspection.notes.isEmpty {
+            sections.append(Section(id: .notes, header: String(localized: "Notes"), rows: inspection.notes.map(Row.note)))
+        }
+        sections.append(Section(
+            id: .details,
+            header: summary.kind == .project ? Self.kindTitle(.project) : String(localized: "Version"),
+            rows: details(of: summary),
+        ))
+        if let record = summary.toolchain?.record {
+            var languages: [String] = []
+            if record.components.contains(where: { $0.kind == .c }) {
+                languages += ["C", "C++", "Objective-C"]
+            }
+            if record.components.contains(where: { $0.kind == .swift }) {
+                languages.append("Swift")
+            }
+            if !languages.isEmpty {
+                sections.append(Section(id: .languages, header: String(localized: "Languages"), rows: languages.map(Row.item)))
+            }
+        }
+        if let record = summary.sdk?.record {
+            let architectures = SDKDetailController.architectures(of: record)
+            if !architectures.isEmpty {
+                sections.append(Section(id: .architectures, header: String(localized: "Architectures"), rows: architectures.map(Row.item)))
+            }
+        }
         let requirements = requirements(of: summary)
         if !requirements.isEmpty {
             sections.append(Section(id: .requirements, header: String(localized: "Requirements"), rows: requirements))
+        }
+        if let record = summary.toolchain?.record {
+            let swiftFeatures = record.components.contains(where: { $0.kind == .swift })
+                ? record.swiftRequirements?.cpuFeatures ?? [] : []
+            let features = Array(Set(swiftFeatures + (record.clangModuleCPUFeatures ?? []))).sorted()
+            if !features.isEmpty {
+                sections.append(Section(id: .cpuFeatures, header: String(localized: "CPU Features"), rows: features.map(Row.item)))
+            }
         }
         if summary.kind == .project, inspection.importable {
             sections.append(Section(
@@ -190,70 +230,38 @@ final class TransferImportController: TableController {
                 rows: [.name],
             ))
         }
-        if !inspection.problems.isEmpty {
-            sections.append(Section(
-                id: .problems,
-                header: String(localized: "Unable to Import"),
-                rows: inspection.problems.map(Row.problem),
-            ))
-        }
-        var notes = inspection.notes.map(Row.note)
-        if let existing = inspection.existingID {
-            notes.insert(.identifier(.existing, String(localized: "Already on This Device"), existing), at: 0)
-        }
-        if !notes.isEmpty {
-            sections.append(Section(id: .notes, header: String(localized: "Notes"), rows: notes))
-        }
-        if summary.kind == .toolchain, inspection.importable {
-            sections[sections.count - 1].footer = String(localized: """
-            A toolchain holds programs that run on this device. Import only one you exported yourself. \
-            It is installed, then checked by compiling and running a program for each language, \
-            and set up only if that passes.
-            """)
-        }
+        sections.append(Section(id: .metadata, header: String(localized: "File"), rows: metadata(of: summary, fileSize: inspection.fileSize)))
         self.sections = sections
         tableView.backgroundView = nil
         updateRows()
         updateImportItem()
     }
 
-    private func details(of summary: TransferSummary, fileSize: Int64) -> [Row] {
+    private func details(of summary: TransferSummary) -> [Row] {
         var rows: [Row] = []
         switch summary.kind {
         case .toolchain:
             if let toolchain = summary.toolchain {
                 let record = toolchain.record
                 rows.append(.value(.version, String(localized: "Version"), record.version))
-                let languages = ToolchainDetailController.languages(of: record)
-                if !languages.isEmpty {
-                    rows.append(.value(.languages, String(localized: "Languages"), languages))
-                }
                 if let swift = record.swiftRequirements, record.components.contains(where: { $0.kind == .swift }) {
                     rows.append(.value(.swiftVersion, String(localized: "Swift Version"), swift.version))
                 }
                 if let newest = record.newestSDK {
                     rows.append(.value(.newestSDK, String(localized: "Newest Supported SDK"), newest))
                 }
-                rows.append(.value(.appleProduct, String(localized: "Apple Product ID"), toolchain.productID))
             }
         case .sdk:
             if let record = summary.sdk?.record {
                 rows.append(.value(.version, String(localized: "Version"), record.version))
                 rows.append(.value(.name, String(localized: "Name"), record.canonicalName))
-                let architectures = SDKDetailController.architectures(of: record)
-                if !architectures.isEmpty {
-                    rows.append(.value(
-                        .architectures,
-                        String(localized: "Architectures"),
-                        architectures.joined(separator: ", "),
-                    ))
-                }
                 if let swift = SDKDetailController.swiftVersion(of: record) {
                     rows.append(.value(.swiftInterfaces, String(localized: "Swift Interfaces"), swift))
                 }
             }
         case .project:
             if let project = summary.project {
+                rows.append(.value(.name, String(localized: "Name"), project.name))
                 if let template = project.templateID {
                     let version = project.templateVersion.map { " \($0)" } ?? ""
                     rows.append(.value(.template, String(localized: "Template"), template + version))
@@ -274,20 +282,26 @@ final class TransferImportController: TableController {
                 }
             }
         }
+        return rows
+    }
+
+    private func metadata(of summary: TransferSummary, fileSize: Int64) -> [Row] {
         let size = ByteCountFormatter.string(fromByteCount: fileSize, countStyle: .file)
-        rows.append(.value(.fileSize, String(localized: "File Size"), size))
         let unpacked = ByteCountFormatter.string(fromByteCount: summary.payloadBytes, countStyle: .file)
-        rows.append(.value(
-            .contents,
-            String(localized: "Contents"),
-            String(localized: "\(summary.fileCount.formatted()) files, \(unpacked)"),
-        ))
+        var rows: [Row] = [
+            .value(.fileSize, String(localized: "File Size"), size),
+            .value(.contents, String(localized: "Contents"), unpacked),
+            .value(.files, String(localized: "Files"), summary.fileCount.formatted()),
+        ]
         rows.append(.value(.exportedBy, String(localized: "Exported By"), summary.createdBy))
         rows.append(.value(
             .exportedOn,
             String(localized: "Exported On"),
-            summary.created.formatted(date: .abbreviated, time: .shortened),
+            summary.created.formatted(date: .numeric, time: .shortened),
         ))
+        if let toolchain = summary.toolchain {
+            rows.append(.value(.appleProduct, String(localized: "Apple Product ID"), toolchain.productID))
+        }
         rows.append(.identifier(.identifier, String(localized: "Identifier"), summary.id))
         return rows
     }
@@ -299,17 +313,9 @@ final class TransferImportController: TableController {
         if let swift = record.swiftRequirements, record.components.contains(where: { $0.kind == .swift }) {
             rows.append(.value(.minimumOS, String(localized: "Minimum iOS Version"), swift.minimumHost))
         }
-        let features = Array(
-            Set((record.swiftRequirements?.cpuFeatures ?? []) + (record.clangModuleCPUFeatures ?? [])),
-        ).sorted()
-        if !features.isEmpty {
-            rows.append(.value(.cpuFeatures, String(localized: "CPU Features"), features.joined(separator: ", ")))
+        if rows.isEmpty {
+            rows.append(.value(.minimumOS, String(localized: "Minimum iOS Version"), toolchain.minimumOS))
         }
-        rows.append(.value(
-            .exportedFrom,
-            String(localized: "Exported From"),
-            "\(toolchain.bootstrap) · \(toolchain.architecture)",
-        ))
         return rows
     }
 
@@ -430,44 +436,32 @@ final class TransferImportController: TableController {
         cell.selectionStyle = .none
         var content = UIListContentConfiguration.valueCell()
         switch row {
-        case let .header(summary):
-            content = .subtitleCell()
-            content.image = UIImage(systemName: Self.symbol(summary.kind))
-            content.imageProperties.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .title1)
-            content.imageProperties.tintColor = .tintColor
-            content.imageToTextPadding = 16
-            content.text = summary.name
-            content.textProperties.font = .preferredFont(forTextStyle: .headline)
-            content.secondaryText = Self.kindTitle(summary.kind)
-            content.secondaryTextProperties.color = .secondaryLabel
-            content.textToSecondaryTextVerticalPadding = 4
-            content.directionalLayoutMargins = NSDirectionalEdgeInsets(top: 12, leading: 0, bottom: 12, trailing: 0)
         case let .value(_, name, value):
             content.text = name
             content.secondaryText = value
         case let .identifier(_, name, value):
-            content = .subtitleCell()
+            content = .stackedValueCell()
             content.text = name
             content.secondaryText = value
-            content.secondaryTextProperties.font = .monospacedSystemFont(
-                ofSize: UIFont.preferredFont(forTextStyle: .caption1).pointSize,
-                weight: .regular,
-            )
+            content.secondaryTextProperties.font = .preferredFont(forTextStyle: .body)
+            content.secondaryTextProperties.numberOfLines = 0
             content.secondaryTextProperties.color = .secondaryLabel
-            content.textToSecondaryTextVerticalPadding = 4
         case let .problem(text):
             content = .cell()
             content.text = text
-            content.textProperties.font = .preferredFont(forTextStyle: .subheadline)
+            content.textProperties.font = .preferredFont(forTextStyle: .body)
             content.textProperties.color = .systemRed
             content.image = UIImage(systemName: "xmark.octagon.fill")
             content.imageProperties.tintColor = .systemRed
         case let .note(text):
             content = .cell()
             content.text = text
-            content.textProperties.font = .preferredFont(forTextStyle: .subheadline)
+            content.textProperties.font = .preferredFont(forTextStyle: .body)
             content.image = UIImage(systemName: "info.circle")
             content.imageProperties.tintColor = .secondaryLabel
+        case let .item(text):
+            content = .cell()
+            content.text = text
         case .name:
             cell.contentView.addSubview(nameField)
             nameField.snp.remakeConstraints {
@@ -476,6 +470,10 @@ final class TransferImportController: TableController {
             }
             return cell
         }
+        content.textProperties.font = .preferredFont(forTextStyle: .body)
+        content.textProperties.numberOfLines = 0
+        content.secondaryTextProperties.font = .preferredFont(forTextStyle: .body)
+        content.secondaryTextProperties.numberOfLines = 0
         cell.contentConfiguration = content
         return cell
     }
@@ -492,8 +490,8 @@ final class TransferImportController: TableController {
         let text: String
         guard let row = dataSource.value(at: indexPath)?.row else { return nil }
         switch row {
-        case let .value(_, _, value), let .identifier(_, _, value), let .problem(value), let .note(value): text = value
-        case .header, .name: return nil
+        case let .value(_, _, value), let .identifier(_, _, value), let .problem(value), let .note(value), let .item(value): text = value
+        case .name: return nil
         }
         return UIContextMenuConfiguration(actionProvider: { _ in
             UIMenu(children: [UIAction(

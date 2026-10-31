@@ -189,6 +189,25 @@ final class ToolchainServiceTests: XCTestCase {
         home.layout.installRoot + "/usr/lib/apelin/toolchains/" + FakeBackend.id
     }
 
+    func testSetDefaultPersistsWithoutChangingRecordsAndRejectsUnknownIDs() throws {
+        let home = try TemporaryHome(self)
+        let records = [
+            ToolchainRecord(id: "first", version: "16.4", components: [.init(kind: .c)]),
+            ToolchainRecord(id: "second", version: "27.0", components: [.init(kind: .c), .init(kind: .swift)]),
+        ]
+        try ToolchainRegistry(toolchains: records, defaultID: "first").save(home.layout)
+        let service = ToolchainService(layout: home.layout, backend: UnavailableToolchainBackend())
+        try service.setDefault(id: "second")
+        let saved = ToolchainRegistry.load(home.layout)
+        XCTAssertEqual(saved.defaultID, "second")
+        XCTAssertEqual(saved.toolchains, records)
+        try service.setDefault(id: "second")
+        XCTAssertThrowsError(try service.setDefault(id: "missing")) { error in
+            XCTAssertEqual((error as? ApelinError)?.code, .notFound)
+        }
+        XCTAssertEqual(ToolchainRegistry.load(home.layout), saved)
+    }
+
     func testUnavailableBackendRefusesSetupButStatusWorks() throws {
         let home = try TemporaryHome(self)
         let service = ToolchainService(layout: home.layout, backend: UnavailableToolchainBackend())

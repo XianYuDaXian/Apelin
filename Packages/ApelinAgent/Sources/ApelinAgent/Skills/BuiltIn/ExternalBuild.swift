@@ -47,6 +47,27 @@ extension BuiltInSkills {
         script runs in the bootstrap's shell, whose paths on roothide are not
         the compilers' (the apelin-bootstrap-paths skill): give clang relative paths.
 
+        ## Its first lines
+        Every path the script removes, moves or writes is built from these
+        variables, and an empty one turns it into `/`, which on roothide is
+        the bootstrap's root. So the script stops before anything else when
+        one is missing (a shell_run of it sets none of them):
+        ```sh
+        #!/bin/sh
+        set -eu
+        : "${APELIN_PACKAGE_DIR:?run this through apelin_project_build}"
+        : "${APELIN_PROJECT_ROOT:?}" "${APELIN_BOOTSTRAP:?}" "${APELIN_ARCHITECTURE:?}"
+        : "${APELIN_BUILD_ID:?}" "${TMPDIR:?}"
+        : "${APELIN_PREFIX?}" # set, and empty on roothide
+        stage="$(mktemp -d "${TMPDIR:?}stage.XXXXXX")"
+        trap 'rm -rf -- "${stage:?}"' EXIT
+        ```
+        Every later `rm`, `mv` or `cp` over a path with a variable in it
+        spells it `${name:?}` too. Remove only inside `$stage` or
+        `$APELIN_PACKAGE_DIR`, never under `$APELIN_PREFIX` alone (empty on
+        roothide) or a path you built from a command's output without
+        checking it.
+
         ## What the script does
         1. Compile with the toolchain: `arm64e` for roothide; `arm64` and
            `arm64e` for rootless, joined with `lipo`. Give clang paths
@@ -55,8 +76,10 @@ extension BuiltInSkills {
            from `APELIN_BOOTSTRAP`, `-DAPELIN_PACKAGE_ID=…`) when the code
            tests them, as the apelin-bootstrap-paths helper does.
         2. Sign every Mach-O with `ldid -S` (`-S<entitlements.plist>` when it
-           needs entitlements); unsigned code does not load, and the
-           installer signs nothing for you.
+           needs entitlements: a command-line tool takes the
+           apelin-device-executables skill's `Tool.entitlements`, whose IOKit
+           classes the GPU and media frameworks need); unsigned code does not
+           load, and the installer signs nothing for you.
         3. Lay the package out in a staging folder under the build's
            `TMPDIR`: a tweak's dylib at
            `$APELIN_PREFIX/Library/MobileSubstrate/DynamicLibraries/<Name>.dylib`

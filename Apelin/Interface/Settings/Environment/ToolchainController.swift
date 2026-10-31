@@ -31,6 +31,22 @@ final class ToolchainController: TableController {
         dataSource.update(sections.map { ($0.id, $0.rows) })
     }
 
+    /// Retain the selected release when the user leaves the task or relaunches the app.
+    private static let taskVersionsKey = "toolchainTaskVersions"
+
+    static func remember(version: String, for handle: TaskHandle) {
+        var versions = UserDefaults.standard.dictionary(forKey: taskVersionsKey) as? [String: String] ?? [:]
+        versions[handle.taskID.rawValue] = version
+        UserDefaults.standard.set(versions, forKey: taskVersionsKey)
+    }
+
+    private static func taskTitle(_ handle: TaskHandle) -> String {
+        if let version = UserDefaults.standard.dictionary(forKey: taskVersionsKey)?[handle.taskID.rawValue] as? String {
+            return String(localized: "Command Line Tools \(version)")
+        }
+        return String(localized: "Toolchain Task")
+    }
+
     private var sections: [Section] = []
     private var status = ToolchainStatusResponse()
     private var loader: Task<Void, Never>?
@@ -110,18 +126,23 @@ final class ToolchainController: TableController {
             ))
         }
         if !status.toolchains.isEmpty {
+            let toolchains = status.toolchains.sorted {
+                let order = $0.version.compare($1.version, options: .numeric)
+                return order == .orderedSame ? $0.id < $1.id : order == .orderedDescending
+            }
             sections.append(Section(
                 id: "installed",
                 header: String(localized: "Installed"),
-                rows: status.toolchains.map { .toolchain($0, isDefault: $0.id == status.defaultID) },
+                rows: toolchains.map { .toolchain($0, isDefault: $0.id == status.defaultID) },
             ))
         }
         self.sections = sections
         tableView.backgroundView = sections.isEmpty
-            ? EmptyStateView(symbolName: "hammer", text: String(localized: """
-            No toolchains yet. Tap + to download Apple's Command Line Tools or import a toolchain \
-            from a file.
-            """))
+            ? EmptyStateView(
+                symbolName: "hammer",
+                title: String(localized: "No Toolchains Yet"),
+                text: String(localized: "Tap “+” to download Apple’s Command Line Tools or import a toolchain from a file."),
+            )
             : nil
         updateRows()
     }
@@ -131,6 +152,7 @@ final class ToolchainController: TableController {
         sections = []
         tableView.backgroundView = EmptyStateView(
             symbolName: "exclamationmark.triangle",
+            title: String(localized: "Error"),
             text: Self.unavailableText(error),
         )
         updateRows()
@@ -139,7 +161,7 @@ final class ToolchainController: TableController {
     static func unavailableText(_ error: Error) -> String {
         if let error = error as? ApelinError, error.code == .backendUnavailable {
             return String(localized: """
-            Apelin's background service is unavailable. Reinstall Apelin with your preferred package \
+            Apelin’s background service is unavailable. Reinstall Apelin with your preferred package \
             manager to restore it.
             """)
         }
@@ -150,26 +172,20 @@ final class ToolchainController: TableController {
 
     private func cell(in _: UITableView, row: Row) -> UITableViewCell {
         switch row {
-        case .task:
+        case let .task(handle):
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            var content = UIListContentConfiguration.subtitleCell()
-            content.text = String(localized: "Toolchain Task")
-            content.secondaryText = String(localized: "In progress. Tap to view.")
-            content.secondaryTextProperties.color = .secondaryLabel
+            var content = UIListContentConfiguration.cell()
+            content.text = Self.taskTitle(handle)
             cell.contentConfiguration = content
             cell.accessoryType = .disclosureIndicator
             return cell
         case let .toolchain(record, isDefault):
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            var content = UIListContentConfiguration.subtitleCell()
+            var content = isDefault ? UIListContentConfiguration.stackedValueCell() : .cell()
             content.text = ToolchainDetailController.name(of: record)
-            var details = [ToolchainDetailController.languages(of: record)]
-            if isDefault {
-                details.append(String(localized: "Default"))
-            }
-            content.secondaryText = details.joined(separator: " · ")
+            content.secondaryText = isDefault ? String(localized: "Default") : nil
             content.secondaryTextProperties.color = .secondaryLabel
-            content.textToSecondaryTextVerticalPadding = 3
+
             cell.contentConfiguration = content
             cell.accessoryType = .disclosureIndicator
             return cell
@@ -184,7 +200,7 @@ final class ToolchainController: TableController {
             navigationController?.pushViewController(taskPage(handle), animated: true)
         case let .toolchain(record, isDefault):
             let page = ToolchainDetailController(record: record, isDefault: isDefault)
-            page.onRemove = { [weak self] in self?.reload() }
+            page.onChange = { [weak self] in self?.reload() }
             navigationController?.pushViewController(page, animated: true)
         }
     }
@@ -220,7 +236,7 @@ final class ToolchainController: TableController {
         let page = EnvironmentTaskController(
             handle: handle,
             work: .toolchainSetup,
-            title: String(localized: "Setting Up Toolchain"),
+            title: Self.taskTitle(handle),
             doneTitle: String(localized: "Toolchain Ready"),
         )
         page.onFinish = { [weak self] in self?.reload() }

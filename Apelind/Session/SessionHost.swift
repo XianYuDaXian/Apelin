@@ -67,6 +67,7 @@ final class SessionHost: @unchecked Sendable {
             artifacts: artifacts,
             installations: installations,
             packages: DpkgStatusDatabase(installRoot: installRoot),
+            fileLists: DpkgFileLists(installRoot: installRoot),
             approvals: approvals,
         )
         scopes = FileScopes(installRoot: installRoot, dataFolder: dataFolder)
@@ -184,7 +185,9 @@ final class SessionHost: @unchecked Sendable {
             // Resume what the previous host left running, before anything
             // new can start (the workers are configured first: a resumed
             // build's events need somewhere to go); a task nobody can resume
-            // ends `interrupted`.
+            // ends `interrupted`. The folders removed toolchains left go
+            // first, while nothing can install into them yet.
+            await install.pruneLeftoverToolchains()
             for record in await registry.load() {
                 if let resumer = resumers[record.kind], await resumer(record) {
                     continue
@@ -237,7 +240,8 @@ final class SessionHost: @unchecked Sendable {
     }
 
     private func shutdown() {
-        // Records are written as they change; nothing is left to flush.
+        // Every event is on disk as it comes, and every record change the
+        // events do not tell (TaskRegistry); nothing is left to flush.
         Task {
             await terminals.stopAll()
             await toolHosts.stopAll()

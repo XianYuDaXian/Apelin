@@ -20,6 +20,17 @@ public struct ToolchainService: Sendable {
         self.supplier = supplier ?? SourceSDKSupplier(layout: layout)
     }
 
+    /// Update only the registry default, never any project's environment.
+    public func setDefault(id: String) throws {
+        var registry = ToolchainRegistry.load(layout)
+        guard registry.toolchains.contains(where: { $0.id == id }) else {
+            throw ApelinError(.notFound, "The toolchain is no longer registered on this device.")
+        }
+        guard registry.defaultID != id else { return }
+        registry.defaultID = id
+        try registry.save(layout)
+    }
+
     // MARK: Status
 
     public func status(activeTasks: [TaskHandle]) -> ToolchainStatusResponse {

@@ -151,7 +151,7 @@ final class NewProjectController: TableController, UITextFieldDelegate {
         dataSource.footerTitle = { section in
             switch section {
             case .name:
-                String(localized: "Leave it empty to use the name shown for now. Your agent will name the project once it knows what you're making.")
+                String(localized: "Leave it empty to use the name shown for now. Your agent will name the project once it knows what you’re making.")
             case .repository:
                 String(localized: "Optional. Your agent imports the repository into the new project and works out how to build it.")
             case .kind: nil
@@ -203,7 +203,7 @@ final class NewProjectController: TableController, UITextFieldDelegate {
         $0.accessibilityLabel = String(localized: "Creating Project…")
     })
 
-    /// The repository field shows under the workspace section while the
+    /// The repository field shows above the workspace section while the
     /// empty workspace is ticked.
     private func updateRows() {
         var sections: [(Section, [Row])] = [(.name, [.name])]
@@ -211,10 +211,10 @@ final class NewProjectController: TableController, UITextFieldDelegate {
             let rows = choices.filter { $0.kind == kind }
                 .map { Row.template($0, selected: $0.template.id == selectedID) }
             guard !rows.isEmpty else { continue }
-            sections.append((.kind(kind), rows))
             if kind == .workspace, importsRepository {
                 sections.append((.repository, [.repository]))
             }
+            sections.append((.kind(kind), rows))
         }
         dataSource.update(sections, reconfigure: true)
     }
@@ -240,14 +240,14 @@ final class NewProjectController: TableController, UITextFieldDelegate {
     }
 
     private func configure(_ cell: UITableViewCell, choice: Choice, selected: Bool) {
-        var content = UIListContentConfiguration.subtitleCell()
+        var content = UIListContentConfiguration.explanatoryCell()
         content.image = ProjectIcon.image(for: choice.kind)
         content.imageProperties.maximumSize = CGSize(width: 36, height: 36)
         content.imageProperties.reservedLayoutSize = CGSize(width: 36, height: 36)
         content.text = Self.catalogText(choice.template.displayName)
         content.secondaryText = choice.template.summary.map(Self.catalogText)
         content.secondaryTextProperties.color = .secondaryLabel
-        content.textToSecondaryTextVerticalPadding = 3
+
         cell.contentConfiguration = content
         cell.accessoryType = selected ? .checkmark : .none
         // the tick is drawn; the trait says it

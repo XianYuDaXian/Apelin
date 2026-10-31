@@ -75,6 +75,64 @@ final class ToolDiagnosticsTests: XCTestCase {
     }
 }
 
+final class PackagerControlTests: XCTestCase {
+    /// `package.icon` is the control's `Icon`, after `Name` as the
+    /// toolchain's deb has it; a package without one has no `Icon`.
+    func testTheIconIsWrittenOnlyWhenTheProjectHasOne() throws {
+        let scratch = try scratchDirectory()
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let (home, store) = try makeHome(in: scratch)
+        let toolchain = RegisteredToolchain(
+            id: "clt-27.0-sample",
+            digest: "sha256:" + String(repeating: "1", count: 64),
+            version: "27.0",
+            path: "/nonexistent",
+            components: ["c-family"],
+        )
+        let sdk = RegisteredSDK(
+            id: "iPhoneOS27.0-00000000",
+            digest: "sha256:" + String(repeating: "2", count: 64),
+            version: "27.0",
+            path: "/nonexistent",
+        )
+        let catalog = ExtensionCatalog(directory: Repository.extensions)
+        let created = try store.create(
+            templateID: "wiki.qaq.apelin.dev.tweak/objc-hook",
+            name: "Icon Tweak",
+            values: [:],
+            catalog: catalog,
+            registry: StaticEnvironmentRegistry(toolchains: [toolchain], sdks: [sdk]),
+        )
+        var inputs = try BuildInputs(
+            buildID: "control",
+            projectRoot: created.root,
+            project: store.locate(created.projectID).project,
+            configuration: .release,
+            bootstrap: .rootless,
+            toolchain: toolchain,
+            sdk: sdk,
+            catalog: catalog,
+            workDirectory: scratch,
+            installRoot: "/var/jb",
+            home: home.path,
+        )
+        let products = try JSONDecoder().decode(BuildProducts.self, from: Data(#"{"products": [], "dsyms": [], "log": ""}"#.utf8))
+        let icon = "https://owngoal-dev.github.io/Apelin/icons/wiki.qaq.apelin.dev.tweak.png"
+
+        let control = try Packager(inputs: inputs, products: products, shell: "/bin/sh").control()
+        XCTAssertEqual(control["Icon"], icon, "the template's icon")
+        XCTAssertEqual(control.fields.map(\.name), [
+            "Package", "Version", "Architecture", "Description", "Name", "Icon", "Author", "Maintainer", "Section", "Depends",
+        ])
+        XCTAssertTrue(try control.rendered().contains("\nIcon: \(icon)\n"))
+
+        inputs.project.package.icon = nil
+        let without = try Packager(inputs: inputs, products: products, shell: "/bin/sh").control()
+        XCTAssertNil(without["Icon"])
+        XCTAssertFalse(try without.rendered().contains("Icon:"))
+    }
+}
+
 final class BootstrapResolutionTests: XCTestCase {
     func testFromTheAssignment() {
         XCTAssertEqual(BootstrapResolution.bootstrap(installRoot: "/var/jb", home: "/var/mobile"), .rootless)

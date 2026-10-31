@@ -1,5 +1,5 @@
 {
-  "name": "project-build-install: needs the tweak extension, a registered toolchain and SDK, Irisin 4.7.3 or later, and no Projects/Console Build Check yet; creates and checks a project, reads its approval digests, starts and cancels a build, builds it, installs the deb and removes it again",
+  "name": "project-build-install: needs the tweak extension, a registered toolchain and SDK, Irisin 4.7.3 or later, and no Projects/Console Build Check yet; creates and checks a project, reads its approval digests, starts and cancels a build, builds it, installs the deb, finds it in the installation list and removes it again",
   "steps": [
     {"op": "hello"},
     {"op": "extensionList", "label": "extensions"},
@@ -50,9 +50,18 @@
     {"op": "buildAttach", "label": "install-replay",
      "request": {"taskID": "${install.response.taskID}", "afterSeq": 0, "waitMilliseconds": 1000}},
     {"op": "expect", "request": {"step": "install-replay", "state": "succeeded"}},
+    {"op": "installationList", "label": "installed",
+     "request": {"packageID": "local.apelin.console-build-check"}},
+    {"op": "expect", "request": {"step": "installed", "path": "response.installations.0.installationID",
+     "equals": "${install.lastEvent.payload.result.installationID}"}},
+    {"op": "expect", "request": {"step": "installed", "path": "response.installations.0.removable", "equals": true}},
+    {"op": "expect", "request": {"step": "installed", "path": "response.installations.1", "exists": false}},
 
     {"op": "removePackage", "label": "remove", "timeoutSeconds": 300,
      "request": {"installationID": "${install.lastEvent.payload.result.installationID}"}},
-    {"op": "expect", "request": {"step": "remove", "state": "succeeded"}}
+    {"op": "expect", "request": {"step": "remove", "state": "succeeded"}},
+    {"op": "installationList", "label": "removed",
+     "request": {"packageID": "local.apelin.console-build-check"}},
+    {"op": "expect", "request": {"step": "removed", "path": "response.installations.0", "exists": false}}
   ]
 }

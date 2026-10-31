@@ -34,11 +34,14 @@ extension BuiltInSkills {
 
         ## Finding the API you hook
         - `apelin_sdk_analyze_framework` lists a framework's exported symbols and
-          Objective-C classes from the SDK's `.tbd`; pass `private: true` for
-          `PrivateFrameworks`, and `symbol_filter` to narrow.
-        - `apelin_sdk_read_header` reads a public header. Private frameworks usually
-          have no headers in the SDK: declare the interface you need in a local
-          header, only the selectors you call.
+          Objective-C classes from the SDK's `.tbd`; `symbol_filter` narrows
+          them. Both SDK tools look in `Frameworks`, then `PrivateFrameworks`,
+          so `private` can be left out.
+        - `apelin_sdk_read_header` reads a public header; with `symbol` in place
+          of `header` it finds the header that declares a class, protocol, type
+          or function. Private frameworks usually have no headers in the SDK:
+          declare the interface you need in a local header, only the selectors
+          you call.
         - Check availability: the build uses `-Werror=unguarded-availability-new`.
           Guard newer API with `@available(iOS 17.0, *)`.
 
@@ -119,6 +122,16 @@ extension BuiltInSkills {
         3. `apelin_project_build`. Fix every error diagnostic by file and line, rebuild.
            Treat warnings as work unless they are in the template.
         4. Install and confirm as the apelin-packaging-and-install skill describes.
+        5. Check the behaviour itself, not only that it loaded: bring up what
+           you changed, read it with `apelin_screen_read_tree`, drive it with
+           `apelin_screen_interact`, and read it again after each action;
+           while Ask Before Using the Screen is on, first tell the user what
+           you will open, read and do there and why, and go on only once
+           they consent explicitly (the prompt's rule, in every mode);
+           behaviour that does not show in the UI tree is checked in what it
+           logs (`apelin_log_read`), or in a screenshot only once the user
+           has agreed to that one (the prompt's rule, in every mode). Report
+           what you could not drive or see as Not tested.
         Keep each step its own call: build, install, respring and
         apelin_package_confirm_loaded are approved one by one.
         """,

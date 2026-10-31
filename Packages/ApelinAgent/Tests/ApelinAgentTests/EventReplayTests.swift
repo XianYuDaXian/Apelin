@@ -12,7 +12,7 @@ struct EventReplayTests {
         let id = UUID().uuidString
         let log = try SessionEventLog(sessionsRoot: home.dataRoot.sessions, sessionID: id)
         for index in 1 ... 5 {
-            try await log.append(.textDelta("\(index)"))
+            try await log.append(.steered(text: "\(index)"))
         }
         #expect(await log.lastSeq == 5)
 

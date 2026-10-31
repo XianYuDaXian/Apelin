@@ -96,6 +96,63 @@ struct ConversationBackendTests {
         #expect(list.map(\.state) == ["open", "waitingForApproval", "ended"])
         #expect(list.map(\.isThisConversation) == [true, false, false])
         #expect(list[1].openedBy == fixture.backend.sessionID && list[1].title == "Docs")
+        #expect(list.allSatisfy { $0.project == nil }, "this project's need no project")
+    }
+
+    @Test
+    func `a list across projects names each one's project and what the host left out`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.agentList, reply: AgentListResponse(
+            sessions: [
+                AgentSessionSummary(
+                    sessionID: Self.child,
+                    task: Self.childTask,
+                    projectID: "far-id",
+                    projectName: "Far",
+                    state: .interrupted,
+                    updatedAt: Date(),
+                ),
+                AgentSessionSummary(
+                    sessionID: fixture.backend.sessionID,
+                    task: TaskHandle(taskID: TaskID("t0"), kind: .agent),
+                    projectID: fixture.project.id,
+                    projectName: "Hello",
+                    state: .running,
+                    updatedAt: Date(),
+                ),
+            ],
+            unreachedProjects: 2,
+        ))
+        let listed = try await fixture.backend.conversationList(ConversationListToolRequest(context: fixture.context()))
+        #expect(listed.conversations.map(\.project) == ["Far", nil])
+        #expect(listed.conversations.first?.state == "ended", "one that has not run since the host started has ended")
+        #expect(listed.note?.contains("2 more projects") == true && listed.note?.contains("project") == true)
+        fixture.host.on(.agentList, reply: AgentListResponse(sessions: [], unreachedProjects: 1))
+        let one = try await fixture.backend.conversationList(ConversationListToolRequest(context: fixture.context()))
+        #expect(one.note?.hasPrefix("The conversations of 1 more project are not listed") == true)
+        fixture.host.on(.agentList, reply: AgentListResponse(sessions: []))
+        #expect(try await fixture.backend.conversationList(ConversationListToolRequest(context: fixture.context())).note == nil)
+    }
+
+    @Test
+    func `an ended conversation reads to its end and waits on no approval`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.agentList, reply: AgentListResponse(sessions: [summary(state: .interrupted)]))
+        let events = batch([
+            ("prompt", text("Remove the old tweak")),
+            ("message", text("Removing it")),
+            ("approvalRequested", .object(["approvalID": .string("a1"), "tool": .string("apelin_package_remove"), "reason": .string("Removing a package")])),
+            (TaskEvent.stateKind, .object(["state": .string("waitingForApproval")])),
+            (TaskEvent.stateKind, .object(["state": .string("interrupted")])),
+        ], state: .interrupted)
+        fixture.host.on(.agentAttach) { request in
+            let attach = try request.decode(AgentAttachRequest.self)
+            return (attach.afterSeq == .start ? events : batch([], from: 6, state: .interrupted), [])
+        }
+        let read = try await fixture.backend.conversationRead(ConversationReadToolRequest(context: fixture.context(), sessionID: Self.child, waitSeconds: 30))
+        #expect(read.state == .ended && !read.timedOut)
+        #expect(read.messages.map(\.text) == ["Removing it"])
+        #expect(read.pendingApprovals.isEmpty, "its task ended: nobody can give that approval now")
     }
 
     @Test

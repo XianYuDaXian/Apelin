@@ -155,11 +155,28 @@ private final class TimelineIcli: IcliSurface, @unchecked Sendable {
         throw unused()
     }
 
+    func waitForElement(
+        text _: String?,
+        identifier _: String?,
+        role _: String?,
+        match _: String,
+        index _: Int,
+        appear _: Bool,
+        timeout _: Double,
+        interval _: Double,
+    ) throws -> [String: Any] {
+        throw unused()
+    }
+
     func swipe(x1 _: Double, y1 _: Double, x2 _: Double, y2 _: Double, seconds _: Double) throws -> [String: Any] {
         throw unused()
     }
 
     func typeText(_: String, delayMS _: Double) throws -> [String: Any] {
+        throw unused()
+    }
+
+    func pressButton(_: String) throws -> [String: Any] {
         throw unused()
     }
 

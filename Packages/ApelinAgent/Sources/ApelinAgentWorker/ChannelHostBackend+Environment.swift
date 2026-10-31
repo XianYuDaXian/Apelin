@@ -117,8 +117,7 @@ public extension ChannelHostBackend {
             )
         }
         guard let binding = check.environment else {
-            let problems = check.diagnostics.filter { $0.severity == .error }.map(\.message).joined(separator: "; ")
-            throw EnvironmentToolFailure(message: "apelin_project_set_environment failed: the project file did not read (\(problems))")
+            throw EnvironmentToolFailure(message: Self.unreadProjectFailure(check.diagnostics))
         }
         return EnvironmentCheckToolResponse(
             toolchain: ComponentBinding(id: binding.toolchain.id, digest: binding.toolchain.digest),
@@ -130,6 +129,25 @@ public extension ChannelHostBackend {
     }
 
     // MARK: Helpers
+
+    /// Why a switch had no binding to replace: the project file did not
+    /// read. Each error with its field; then, for a manifest without the
+    /// members only apelin_project_create writes, why no switch can help,
+    /// else where the schema is.
+    private static func unreadProjectFailure(_ diagnostics: [ProjectDiagnostic]) -> String {
+        let errors = diagnostics.filter { $0.severity == .error }
+        let problems = errors.map(fieldAndMessage).joined(separator: "; ")
+        var message = "apelin_project_set_environment failed: the project file did not read (\(problems))."
+        if errors.contains(where: { $0.code == schemaErrorCode && $0.field == "/" && createdMembers.contains($0.message) }) {
+            message += " This apelin-project.json lacks the template and environment only apelin_project_create writes, so it is not an Apelin build description and no toolchain or SDK can be bound to it. An imported or empty workspace keeps \"kind\": \"workspace\" and builds with a script of its own (the apelin-external-build skill); shell_run already has the device's toolchain and SDK."
+        } else if errors.contains(where: { $0.code == schemaErrorCode }) {
+            message += " " + schemaPointer
+        }
+        return message
+    }
+
+    /// The schema errors of a description apelin_project_create did not write.
+    private static let createdMembers: Set = ["missing template", "missing environment"]
 
     /// A setup or a self-test, read to its end.
     private func toolchainTask(_ handle: TaskHandle, operation: String) async throws -> ToolchainTaskToolResponse {
@@ -143,7 +161,8 @@ public extension ChannelHostBackend {
             }
         }
         let failed = (record?.selfTests ?? []).filter { !$0.passed }.map {
-            "\($0.language) · \($0.architecture)\($0.detail.isEmpty ? "" : ": " + String($0.detail.prefix(400)))"
+            let failure = "The \($0.language) self-test failed on \($0.architecture)."
+            return $0.detail.isEmpty ? failure : failure + "\n" + String($0.detail.prefix(400))
         }
         return ToolchainTaskToolResponse(
             succeeded: end.state == .succeeded,

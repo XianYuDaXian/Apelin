@@ -33,8 +33,8 @@ final class GitSettingsController: TableController {
         /// Apelin's current template over the files it maintains.
         case updateRepository(DistributionRepository)
         /// Publishing needs the GitHub account first.
-        case createRepository(enabled: Bool)
-        case linkRepository(enabled: Bool)
+        case createRepository
+        case linkRepository
         case credential(GitCredentialSummary)
     }
 
@@ -116,9 +116,9 @@ final class GitSettingsController: TableController {
             case .author:
                 String(localized: "Commits in your projects carry this name and email.")
             case .gitHub:
-                String(localized: "Clones, pulls and pushes to github.com use this account. Its token is kept only in this device's keychain and never synced.")
+                String(localized: "Clones, pulls and pushes to github.com use this account. Its token is kept only in this device’s keychain and never synced.")
             case .publishing:
-                String(localized: "A package repository is an APT source on GitHub Pages: Distribute… publishes a project's release builds to it.")
+                String(localized: "A package repository is an APT source on GitHub Pages: “Distribute…” publishes a project’s release builds to it.")
             case .published:
                 String(localized: "Add this address in Irisin. Tap to copy it.")
             case .credentials:
@@ -170,7 +170,9 @@ final class GitSettingsController: TableController {
         }
     }
 
-    private func updateRows() {
+    private var isPreparingCreation = false
+
+    private func updateRows(changedItems: Set<Row> = []) {
         guard let settings else {
             let state: Row = failure.map { .unavailable($0.readableMessage) } ?? .loading
             dataSource.update([(.author, [.name, .email]), (.gitHub, [state])])
@@ -180,14 +182,17 @@ final class GitSettingsController: TableController {
         var sections: [(Section, [Row])] = [
             (.author, [.name, .email]),
             (.gitHub, [gitHubAccount.map { .gitHubAccount($0.username) } ?? .gitHubSignIn]),
-            linked.map { (.published, [.repository($0), .repositoryCard($0), .updateRepository($0)]) }
-                ?? (.publishing, [.createRepository(enabled: signedIn), .linkRepository(enabled: signedIn)]),
         ]
+        if let linked {
+            sections.append((.published, [.repository(linked), .repositoryCard(linked), .updateRepository(linked)]))
+        } else if signedIn {
+            sections.append((.publishing, [.createRepository, .linkRepository]))
+        }
         let others = settings.credentials.filter { $0.host != GitHubDeviceFlow.host }
         if !others.isEmpty {
             sections.append((.credentials, others.map(Row.credential)))
         }
-        dataSource.update(sections)
+        dataSource.update(sections, changedItems: changedItems)
     }
 
     // MARK: - The author
@@ -328,11 +333,11 @@ final class GitSettingsController: TableController {
             return WaitingCell().then { $0.show(String(localized: "Loading…")) }
         case let .unavailable(message):
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-            var content = UIListContentConfiguration.subtitleCell()
+            var content = UIListContentConfiguration.stackedValueCell()
             content.text = String(localized: "Git Settings Unavailable")
             content.secondaryText = message
             content.secondaryTextProperties.color = .secondaryLabel
-            content.textToSecondaryTextVerticalPadding = 4
+
             cell.contentConfiguration = content
             cell.selectionStyle = .none
             return cell
@@ -340,11 +345,11 @@ final class GitSettingsController: TableController {
             return valueCell(String(localized: "Signed In"), login)
         case let .repository(repository):
             let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
-            var content = UIListContentConfiguration.subtitleCell()
+            var content = UIListContentConfiguration.stackedValueCell()
             content.text = repository.fullName
             content.secondaryText = repository.sourceURL
             content.secondaryTextProperties.color = .secondaryLabel
-            content.textToSecondaryTextVerticalPadding = 4
+
             cell.contentConfiguration = content
             cell.accessibilityHint = String(localized: "Copies the source address.")
             cell.accessibilityCustomActions = [
@@ -362,21 +367,21 @@ final class GitSettingsController: TableController {
             let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
             var content = cell.defaultContentConfiguration()
             content.text = switch row {
-            case .gitHubSignIn: String(localized: "Sign In with GitHub…")
-            case .createRepository: String(localized: "Create Distribution Repository…")
+            case .gitHubSignIn: String(localized: "Sign In…")
+            case .createRepository: String(localized: "Create Repository…")
             case .repositoryCard: String(localized: "Repository Card…")
             case .updateRepository: String(localized: "Update Repository…")
-            default: String(localized: "Link Distribution Repository…")
+            default: String(localized: "Link Repository…")
             }
-            let enabled = switch row {
-            case let .createRepository(enabled), let .linkRepository(enabled): enabled
-            default: true
-            }
-            content.textProperties.color = enabled ? .tintColor : .tertiaryLabel
+            content.textProperties.color = .tintColor
             cell.contentConfiguration = content
             cell.accessibilityTraits.insert(.button)
-            if !enabled {
+            if case .createRepository = row, isPreparingCreation {
+                let spinner = UIActivityIndicatorView(style: .medium)
+                spinner.startAnimating()
+                cell.accessoryView = spinner
                 cell.accessibilityTraits.insert(.notEnabled)
+                cell.accessibilityValue = String(localized: "Loading…")
             }
             return cell
         }
@@ -396,7 +401,8 @@ final class GitSettingsController: TableController {
 
     override func tableView(_: UITableView, shouldHighlightRowAt indexPath: IndexPath) -> Bool {
         switch dataSource.value(at: indexPath) {
-        case .gitHubSignIn?, .repository?, .repositoryCard?, .updateRepository?, .createRepository(enabled: true)?, .linkRepository(enabled: true)?: true
+        case .createRepository?: !isPreparingCreation
+        case .gitHubSignIn?, .repository?, .repositoryCard?, .updateRepository?, .linkRepository?: true
         default: false
         }
     }
@@ -413,9 +419,12 @@ final class GitSettingsController: TableController {
             showCard(of: repository)
         case let .updateRepository(repository)?:
             flow.confirmUpdate(repository)
-        case .createRepository(enabled: true)?:
-            flow.create()
-        case .linkRepository(enabled: true)?:
+        case .createRepository?:
+            flow.create { [weak self] loading in
+                self?.isPreparingCreation = loading
+                self?.updateRows(changedItems: [.createRepository])
+            }
+        case .linkRepository?:
             flow.pick()
         default:
             break

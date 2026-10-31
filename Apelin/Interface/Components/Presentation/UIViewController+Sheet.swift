@@ -42,13 +42,16 @@ extension UIViewController {
     }
 
     /// `page` as a form sheet, closed by the cross at the leading end of its
-    /// bar.
-    func presentPageAsFormSheet(_ page: UIViewController) {
+    /// bar; with `deeper`, opened at that page, already pushed on `page`.
+    func presentPageAsFormSheet(_ page: UIViewController, openedAt deeper: UIViewController? = nil) {
         let navigation = SheetNavigationController(rootViewController: page)
         page.navigationItem.leftBarButtonItem = UIBarButtonItem(
             image: UIImage(systemName: "xmark"),
             primaryAction: UIAction { [weak navigation] _ in navigation?.dismiss(animated: true) },
         ).then { $0.accessibilityLabel = String(localized: "Close") }
+        if let deeper {
+            navigation.pushViewController(deeper, animated: false)
+        }
         presentAsFormSheet(navigation)
     }
 }

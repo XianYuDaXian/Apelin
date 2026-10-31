@@ -13,8 +13,8 @@ import Foundation
 /// The event's payload is a `BuildArtifact` (`artifactID`, `digest`,
 /// `packageID`, `version`) plus what the host needs to find and judge it:
 /// `path` — the `.deb`, absolute, inside `~/Documents/wiki.qaq.apelin/` —,
-/// `projectID` and `packagingDigest` (`sha256:…`, the packaging description
-/// the deb was made from).
+/// `projectID`, `packagingDigest` (`sha256:…`, the packaging description
+/// the deb was made from) and `packageFiles`, what the deb installs.
 actor ArtifactRegistry {
     struct Artifact: Codable, Equatable, Sendable {
         var artifactID: String
@@ -27,6 +27,8 @@ actor ArtifactRegistry {
         var buildID: String?
         var packagingDigest: String?
         var recordedAt: Date
+        /// The deb's files as dpkg lists them, for explaining a refused install.
+        var packageFiles: [String]?
     }
 
     static let maximumCount = 256
@@ -60,6 +62,7 @@ actor ArtifactRegistry {
             buildID: buildID.rawValue,
             packagingDigest: payload["packagingDigest"]?.stringValue,
             recordedAt: Date(),
+            packageFiles: Self.packageFiles(payload["packageFiles"]),
         )
         artifacts.removeAll { $0.artifactID == artifactID }
         artifacts.append(artifact)
@@ -84,8 +87,23 @@ actor ArtifactRegistry {
         return artifacts.last { $0.artifactID == id }
     }
 
+    /// The newest artifact a build reported at `path`, as it spelled it.
+    func artifact(path: String) -> Artifact? {
+        loadIfNeeded()
+        return artifacts.last { $0.path == path }
+    }
+
     static func validID(_ id: String) -> Bool {
         !id.isEmpty && id.count <= 128 && !id.hasPrefix("file:") && !CanonicalPath.containsNUL(id) && !id.contains("/")
+    }
+
+    /// Absolute paths only, no more than a build sends.
+    static func packageFiles(_ value: JSONValue?) -> [String]? {
+        guard case let .array(items)? = value else { return nil }
+        let paths = items.compactMap(\.stringValue).filter {
+            $0.hasPrefix("/") && $0.utf8.count <= 4096 && !CanonicalPath.containsNUL($0)
+        }
+        return Array(paths.prefix(BuildArtifact.maximumPackageFiles))
     }
 
     private func loadIfNeeded() {

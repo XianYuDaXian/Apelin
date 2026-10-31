@@ -178,7 +178,9 @@ private final class ProgressCardController: UIViewController {
         bar.snp.makeConstraints { $0.leading.trailing.centerY.equalToSuperview() }
         spinner.snp.makeConstraints { $0.center.equalToSuperview() }
         separator.backgroundColor = AlertControllerConfiguration.separatorColor
-        separator.snp.makeConstraints { $0.height.equalTo(1 / UIScreen.main.scale) }
+        // a hairline at the scale of the display the card is on: a device
+        // with two displays has no one main screen to ask
+        separator.snp.makeConstraints { $0.height.equalTo(1 / max(traitCollection.displayScale, 1)) }
 
         // the library fills a card's only action, so the card's only button
         // is filled, and as tall as the library's: its title and 8 pt above

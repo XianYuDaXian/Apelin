@@ -1,5 +1,6 @@
 import ApelinCore
 import ApelinGit
+import ApelinProject
 import ApelinProtocol
 import Foundation
 
@@ -63,14 +64,19 @@ public struct GitService: Sendable {
         })
     }
 
-    /// A repository for a project that has none, on `main`.
+    /// A repository for a project that has none, on `main`, keeping
+    /// Apelin's own files out as a new project's does.
     public func initialize(_ request: GitInitRequest) throws -> GitInitResponse {
         let project = try projects.locate(request.projectID)
         var metadata = stat()
         guard lstat(project.root.appendingPathComponent(".git").path, &metadata) != 0 else {
             throw ApelinError(.conflict, "\(project.name) already has a repository")
         }
-        let repository = try mapped { try GitRepository.create(at: project.root, initialBranch: Self.initialBranch) }
+        let repository = try mapped {
+            let repository = try GitRepository.create(at: project.root, initialBranch: Self.initialBranch)
+            try repository.addExcludes(ProjectExcludes.apelinFiles)
+            return repository
+        }
         return GitInitResponse(branch: repository.head().branch ?? Self.initialBranch)
     }
 
@@ -171,16 +177,9 @@ public struct GitService: Sendable {
     /// What Apelin itself keeps in a project folder, none of it the
     /// repository's, so a repository taken into a workspace keeps it out
     /// through `.git/info/exclude`: the description and the icon beside it,
-    /// the agent's saved attachments, and the temporary files the project
-    /// metadata writer and the agent's file tools write beside a file they
-    /// replace.
-    static let apelinFiles = [
-        "/apelin-project.json",
-        "/apelin-icon.png",
-        "/Attachments/",
-        "/.apelin-metadata-*",
-        ".*.apelin-*",
-    ]
+    /// and what every repository Apelin makes keeps out
+    /// (`ProjectExcludes.apelinFiles`).
+    static let apelinFiles = ["/apelin-project.json", "/apelin-icon.png"] + ProjectExcludes.apelinFiles
 
     /// Validates a clone-into request before the task is accepted: the
     /// project is an empty workspace's kind, has no repository yet, or only
@@ -252,7 +251,9 @@ public struct GitService: Sendable {
         return try remoteTarget(repository, remote: remote, branch: branch)
     }
 
-    /// Validates a push before the task is accepted.
+    /// Validates a push before the task is accepted. With a URL, the remote
+    /// is added first when the repository does not have it, and taken away
+    /// again when the push does not pass.
     public func preparePush(_ request: GitPushRequest) throws -> RemoteTarget {
         let repository = try open(request.projectID).repository
         guard let branch = request.branch ?? repository.head().branch else {
@@ -262,12 +263,42 @@ public struct GitService: Sendable {
             throw ApelinError(.badRequest, "\(branch.debugDescription) is not a branch name")
         }
         let remote = request.remote ?? "origin"
-        // A push goes to `pushurl` when the remote has one, and through any
-        // `pushInsteadOf`: what libgit2 will push to must pass too.
-        if let pushURL = repository.remotePushURL(remote) {
-            try checkRemoteURL(pushURL)
+        let added = try request.url.map { try addRemote(remote, url: $0, to: repository) } ?? false
+        do {
+            // A push goes to `pushurl` when the remote has one, and through
+            // any `pushInsteadOf`: what libgit2 will push to must pass too.
+            if let pushURL = repository.remotePushURL(remote) {
+                try checkRemoteURL(pushURL)
+            }
+            return try remoteTarget(repository, remote: remote, branch: branch)
+        } catch {
+            if added {
+                try? repository.removeRemote(remote)
+            }
+            throw error
         }
-        return try remoteTarget(repository, remote: remote, branch: branch)
+    }
+
+    /// Adds `remote` fetching from `url` when the repository does not have
+    /// it, as `git remote add` does; one it has must have that URL already,
+    /// so a push never moves a remote somewhere else. Answers whether it
+    /// added it.
+    private func addRemote(_ remote: String, url: String, to repository: GitRepository) throws -> Bool {
+        try checkRemoteURL(url)
+        if let existing = repository.remoteURL(remote) {
+            guard existing == url else {
+                // Never quoted when it could carry a credential.
+                let shown = GitClone.isAcceptedRemote(existing) ? " \(existing)" : " another URL"
+                throw ApelinError(
+                    .conflict,
+                    "\(remote) already points to\(shown). Push to it without a URL, or name another remote.",
+                    reason: .remoteURLDiffers,
+                )
+            }
+            return false
+        }
+        try mapped { try repository.addRemote(remote, url: url) }
+        return true
     }
 
     /// `progress` while it fetches, then `{remote, updated: [{ref, from?, to}]}`.
@@ -492,7 +523,7 @@ public struct GitService: Sendable {
 
     private func remoteTarget(_ repository: GitRepository, remote: String, branch: String?) throws -> RemoteTarget {
         guard let url = repository.remoteURL(remote) else {
-            throw ApelinError(.notFound, "no remote \(remote.debugDescription)")
+            throw ApelinError(.notFound, "no remote \(remote.debugDescription)", reason: .noSuchRemote)
         }
         try checkRemoteURL(url)
         return RemoteTarget(repository: repository, remote: remote, branch: branch)
@@ -538,13 +569,28 @@ public struct GitService: Sendable {
 
     private func open(_ projectID: String) throws -> (project: ProjectLocator.Project, repository: GitRepository) {
         let project = try projects.locate(projectID)
+        let repository: GitRepository
         do {
-            return try (project, GitRepository(at: project.root))
+            repository = try GitRepository(at: project.root)
         } catch let error as GitError where error.kind == .notFound {
-            throw ApelinError(.notFound, "project \(project.name) is not a git repository")
+            throw ApelinError(.notFound, "project \(project.name) is not a git repository", reason: .notARepository)
         } catch {
             throw Self.apelinError(error)
         }
+        keepApelinFilesOut(of: repository, in: project)
+        return (project, repository)
+    }
+
+    /// A repository made before every one Apelin makes kept its own files
+    /// out (`ProjectExcludes.apelinFiles`) is given them once the agent has
+    /// saved an attachment in the project, before anything reads the work
+    /// tree, so the chat's files are never a change to show or commit.
+    /// What is tracked stays tracked; a failure leaves it for the next call.
+    private func keepApelinFilesOut(of repository: GitRepository, in project: ProjectLocator.Project) {
+        var metadata = stat()
+        guard lstat(project.root.appendingPathComponent("Attachments").path, &metadata) == 0,
+              metadata.st_mode & S_IFMT == S_IFDIR else { return }
+        try? repository.addExcludes(ProjectExcludes.apelinFiles)
     }
 
     private func checkedPaths(_ paths: [String], in project: ProjectLocator.Project) throws -> [String] {
@@ -606,10 +652,9 @@ public struct GitService: Sendable {
 /// What a failed remote operation's error names beyond its code, for a
 /// caller that acts on it (the agent asks for a credential, or pulls before
 /// it pushes again). A task carries it in its final `state` as `reason`.
+/// `authenticationRequired` is ApelinProtocol's, which GitHub's API answers
+/// with too.
 extension ApelinError.Reason {
-    /// `denied`: the remote asked for a sign-in and no credential is saved
-    /// for its host, or it refused the one it was given.
-    static let authenticationRequired = Self(rawValue: "authenticationRequired")
     /// `conflict`: the remote refused a push.
     static let rejected = Self(rawValue: "rejected")
     /// `conflict`: a pull cannot fast-forward the branch, which has diverged.

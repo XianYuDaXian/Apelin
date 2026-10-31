@@ -1,3 +1,4 @@
+import ApelinAgent
 import ApelinProtocol
 import Foundation
 import KWWKAI
@@ -16,13 +17,12 @@ enum ProviderModels {
     }
 
     static func isDeepSeek(_ credentials: OAuthCredentials) -> Bool {
-        guard case let .string(base)? = credentials.extras[AgentSignInField.baseURL.rawValue] else { return false }
-        return URLComponents(string: base)?.host?.lowercased() == "api.deepseek.com"
+        DeepSeekProvider.isOfficial(credentials)
     }
 
     /// The kwwk model catalog the account's models come from.
     private static func catalogKey(_ provider: AgentProvider, credentials: OAuthCredentials) -> String? {
-        isDeepSeek(credentials) ? "deepseek" : providerDescriptor(forStoreId: provider.storeID)?.catalogKey
+        provider == .deepSeek || isDeepSeek(credentials) ? "deepseek" : providerDescriptor(forStoreId: provider.storeID)?.catalogKey
     }
 
     static func list(_ provider: AgentProvider, credentials: OAuthCredentials) -> [String] {
@@ -87,13 +87,13 @@ enum ProviderModels {
         let defaultURL = provider.keyFields.first { $0.field == .baseURL }?.defaultValue
             ?? (provider == .openRouter ? "https://openrouter.ai/api/v1" : nil)
         guard let base = configured ?? defaultURL, var url = URLComponents(string: base) else { return nil }
-        if isDeepSeek(credentials) {
+        if url.host?.lowercased() == "api.deepseek.com" {
             url.path = "/models"
         } else if provider == .anthropic {
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             url.path = "/" + path + (path.hasSuffix("v1") ? "/models" : "/v1/models")
             url.path = url.path.replacingOccurrences(of: "//", with: "/")
-        } else if provider == .openAI || provider == .openAICompatible || provider == .openRouter {
+        } else if provider == .openAI || provider == .openAICompatible || provider == .openRouter || provider == .deepSeek {
             let path = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             url.path = "/" + (path.isEmpty ? "v1" : path) + "/models"
         } else if provider == .google {

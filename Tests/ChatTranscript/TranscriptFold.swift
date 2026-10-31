@@ -36,6 +36,7 @@ private struct FoldCoverage {
     var senders = 0
     var attached = 0
     var bannered = 0
+    var reconnecting = 0
 
     /// `transcript`, built at once with `sending`, at a time `wentQuiet`
     /// says is past its quiet deadline or not.
@@ -57,12 +58,13 @@ private struct FoldCoverage {
         attached += rows.contains { !$0.attachments.isEmpty } ? 1 : 0
         // a running summary's line: its newest call, with a file tool's counts
         bannered += rows.contains { $0.role.isThinking && $0.banner?.change != nil } ? 1 : 0
+        reconnecting += rows.contains(where: \.isReconnecting) ? 1 : 0
     }
 
     func expectEverything() {
         let counts = [
             waitingForQuiet, standingInForQuiet, counting, settling, compacting, compacted, queued, onTheirWay, decided, senders,
-            attached, bannered,
+            attached, bannered, reconnecting,
         ]
         precondition(!counts.contains(0), "the random logs reach every part of a transcript: \(self)")
     }
@@ -135,7 +137,7 @@ private func checkCache(seed: UInt64, seen: inout FoldCoverage) {
     let log = FoldLog.make(count: 240, random: &random)
     var files = FoldFiles()
     var cache = ChatTranscriptCache()
-    var record = ChatRecord(summary: ChatSummary(title: "Fold", updated: Date()))
+    var record = ChatRecord(summary: ChatSummary(title: "Fold", lastInteraction: Date()))
     var renamed = false
     var clock = Date.distantPast
     while record.events.count < log.events.count {
@@ -292,7 +294,7 @@ private struct FoldLog {
             "apelin_project_create", "patch_file", "build",
         ]
         while log.events.count < count {
-            switch random.int(in: 0 ... 27) {
+            switch random.int(in: 0 ... 29) {
             case 0, 1:
                 let id = random.id()
                 log.messageIDs.append(id)
@@ -382,6 +384,9 @@ private struct FoldLog {
             case 25:
                 let states = ["running", "succeeded", "failed", "cancelled", "interrupted", "waitingForApproval"]
                 add(TaskEvent.stateKind, ["state": .string(states[random.int(in: 0 ... states.count - 1)])])
+            // a message given up, kwwk's or the network's request made again
+            case 26: add("messageDiscarded", [:])
+            case 27: add("reconnecting", [:])
             default:
                 add(random.chance(2) ? "title" : "conversationOpened", ["text": .string("t")])
             }

@@ -42,7 +42,7 @@ fi
 mkdir -p "$output_directory"
 output_directory="$(cd "$output_directory" && pwd -P)"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/apelin-extensions.XXXXXX")"
-trap 'rm -rf "$scratch"' EXIT
+trap 'rm -rf -- "${scratch:?}"' EXIT
 
 # manifest_field <manifest> <field> [flavor]: one value the packager needs,
 # read with the same loader the checks use.

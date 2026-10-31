@@ -9,13 +9,25 @@ import UIKit
 /// Not Now skips the step, and Retry follows a failure.
 final class WelcomeEnvironmentPage: WelcomeListPage {
     private enum Section: Hashable { case introduction, recommended }
-    private enum Row: Hashable { case toolchain, sdk }
+    private enum Row: Hashable { case introduction, toolchain, sdk }
     private enum Primary { case install, next, retry }
     private lazy var dataSource = TableDataSource<Section, Row, Row>(
         tableView: tableView,
         identifier: { $0 },
     ) { [weak self] _, _, row in
-        row == .toolchain ? self?.toolchainRow : self?.sdkRow
+        switch row {
+        case .introduction:
+            let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+            var content = UIListContentConfiguration.cell()
+            content.text = String(localized: "A compatible toolchain and iOS SDK, selected for this device. You can also install them later in Settings.")
+            content.textProperties.font = .preferredFont(forTextStyle: .body)
+            content.textProperties.numberOfLines = 0
+            cell.contentConfiguration = content
+            cell.selectionStyle = .none
+            return cell
+        case .toolchain: return self?.toolchainRow
+        case .sdk: return self?.sdkRow
+        }
     }
 
     private var recommendation: WelcomeEnvironmentRecommendation?
@@ -37,7 +49,7 @@ final class WelcomeEnvironmentPage: WelcomeListPage {
         title = String(localized: "Build Tools")
         next { [weak self] in self?.performPrimary() }
         updateRows()
-        dataSource.update([(.introduction, []), (.recommended, [.toolchain, .sdk])])
+        dataSource.update([(.introduction, [.introduction]), (.recommended, [.toolchain, .sdk])])
         load()
     }
 
@@ -74,24 +86,26 @@ final class WelcomeEnvironmentPage: WelcomeListPage {
                 resolving = false
                 failed = true
                 recommendation = nil
-                statusText = String(localized: "Unable to load recommendations. Tap Retry or continue to set up later.")
+                statusText = String(localized: "Unable to load recommendations. Tap “Retry” or continue to set up later.")
                 updateRows()
             }
         }
     }
 
-    func tableView(_: UITableView, heightForRowAt _: IndexPath) -> CGFloat {
-        UIFontMetrics(forTextStyle: .body).scaledValue(for: 65)
+    func tableView(_: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        dataSource.itemIdentifier(for: indexPath) == .introduction
+            ? UITableView.automaticDimension : UIFontMetrics(forTextStyle: .body).scaledValue(for: 65)
     }
 
     func tableView(_: UITableView, viewForHeaderInSection section: Int) -> UIView? {
         dataSource.sectionIdentifier(for: section) == .introduction
-            ? text(.groupedHeader(), String(localized: "A compatible toolchain and iOS SDK, selected for this device. You can also install them later in Settings."))
+            ? nil
             : recommendedHeader
     }
 
-    func tableView(_: UITableView, didSelectRowAt _: IndexPath) {
-        guard let statusText, !resolving, !installing else { return }
+    func tableView(_: UITableView, didSelectRowAt indexPath: IndexPath) {
+        guard dataSource.itemIdentifier(for: indexPath) != .introduction,
+              let statusText, !resolving, !installing else { return }
         presentNotice(title: "Build Tools", message: statusText)
     }
 

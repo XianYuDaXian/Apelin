@@ -136,6 +136,53 @@ struct ChannelHostBackendTests {
     }
 
     @Test
+    func `a build's findings keep their field, and a schema error says where the schema is`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.buildStart, reply: TaskHandle(taskID: TaskID("build-task"), kind: .build))
+        try fixture.host.on(.buildAttach, reply: batch("build-task", [
+            ("diagnostic", ApelinCore.JSONValue(encoding: ProjectDiagnostic(
+                code: "project.invalid",
+                severity: .error,
+                message: "unknown member",
+                file: "apelin-project.json",
+                field: "/configurations/Debug/linkerFlags",
+            ))),
+            stateEvent(.failed, "the project check failed"),
+        ]))
+        let response = try await fixture.backend.build(BuildRequest(context: fixture.context(), configuration: .debug, buildDescriptionDigest: "d"))
+        #expect(response.diagnostics.map(\.field) == ["/configurations/Debug/linkerFlags", nil])
+        let note = try #require(response.diagnostics.last)
+        #expect(note.severity == .note && note.message.contains("apelin-project.schema.json (apelin_skill_read)"))
+    }
+
+    @Test
+    func `a build refused over a project file that does not read names each field and the schema`() async throws {
+        let fixture = try Fixture()
+        // In Strict mode the host has no description to match.
+        fixture.host.on(.buildStart) { _ in
+            throw ApelinError(.denied, "approval required: the host could not compute the build description of x, so it cannot tell it matches the template")
+        }
+        fixture.host.on(.projectCheck, reply: ProjectCheckResponse(passed: false, diagnostics: [
+            ProjectDiagnostic(code: "project.invalid", severity: .error, message: "unknown member", file: "apelin-project.json", field: "/configurations/Debug/linkerFlags"),
+            ProjectDiagnostic(code: "project.invalid", severity: .error, message: "missing optimization", file: "apelin-project.json", field: "/configurations/Release"),
+        ]))
+        let request = BuildRequest(context: fixture.context(), configuration: .debug, buildDescriptionDigest: "d")
+        let refusal = await #expect(throws: ApelinError.self) { _ = try await fixture.backend.build(request) }
+        #expect(refusal?.code == .badRequest)
+        #expect(refusal?.message.contains("/configurations/Debug/linkerFlags: unknown member; /configurations/Release: missing optimization") == true)
+        #expect(refusal?.message.contains("apelin-project.schema.json") == true)
+
+        // A refusal over anything else stands as it came.
+        fixture.host.on(.buildStart) { _ in throw ApelinError(.notFound, "toolchain clt-16.4-c is not registered") }
+        fixture.host.on(.projectCheck, reply: ProjectCheckResponse(passed: false, diagnostics: [
+            ProjectDiagnostic(code: "environment.device.toolchain", severity: .error, message: "not registered", field: "/environment/toolchain"),
+        ]))
+        await #expect(throws: ApelinError(.notFound, "toolchain clt-16.4-c is not registered")) {
+            _ = try await fixture.backend.build(request)
+        }
+    }
+
+    @Test
     func `apelin_project_check_distribution counts what stops the build, and says a workspace's package is checked by its build`() async throws {
         let fixture = try Fixture()
         fixture.host.on(.projectCheck, reply: ProjectCheckResponse(
@@ -158,6 +205,17 @@ struct ChannelHostBackendTests {
         ]))
         let described = try await fixture.backend.checkDistribution(DistributionCheckRequest(project: fixture.project))
         #expect(!described.ready && described.issues.map(\.message) == ["local identifier"] && described.note == nil)
+    }
+
+    @Test
+    func `apelin_project_check_distribution names each issue's field, and where the schema is`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.projectCheck, reply: ProjectCheckResponse(passed: false, diagnostics: [
+            ProjectDiagnostic(code: "project.invalid", severity: .error, message: "unknown member", file: "apelin-project.json", field: "/configurations/Debug/linkerFlags"),
+        ]))
+        let check = try await fixture.backend.checkDistribution(DistributionCheckRequest(project: fixture.project))
+        #expect(!check.ready && check.issues.map(\.field) == ["/configurations/Debug/linkerFlags", nil])
+        #expect(check.issues.last?.severity == .note && check.issues.last?.message.contains("apelin-project-description") == true)
     }
 
     @Test
@@ -189,6 +247,80 @@ struct ChannelHostBackendTests {
         #expect(response.succeeded)
         #expect(response.installationID == "inst-1")
         #expect(response.transactionID == "tx-1")
+        #expect(response.conflicts == nil)
+    }
+
+    @Test
+    func `a refused install names the packages in its way, with the installation to remove`() async throws {
+        let fixture = try Fixture()
+        let renamed = InstallConflict(
+            relation: .file,
+            file: "/Library/MobileSubstrate/DynamicLibraries/DockFlip.dylib",
+            packageID: "local.apelin.dockflip",
+            version: "0.1",
+            installationID: "0b6f3c2e-0000-4000-8000-000000000001",
+            projectID: "p-1",
+        )
+        let declared = InstallConflict(relation: .conflicts, packageID: "com.example.old", version: "1.0")
+        fixture.host.on(.installPackage, reply: TaskHandle(taskID: TaskID("install-task"), kind: .install))
+        try fixture.host.on(.buildAttach, reply: batch("install-task", [
+            ("irisin", .object(["seq": .number(1), "kind": .string("failure"), "text": .string("owned")])),
+            ("conflict", ApelinCore.JSONValue(encoding: renamed)),
+            ("conflict", ApelinCore.JSONValue(encoding: declared)),
+            stateEvent(.failed, "…already belongs to local.apelin.dockflip 0.1…"),
+        ]))
+        let response = try await fixture.backend.install(InstallRequest(context: fixture.context(), artifactID: "art-2", artifactDigest: "sha256:cd", packagingDescriptionDigest: "p"))
+        #expect(!response.succeeded)
+        #expect(response.installationID == nil)
+        #expect(response.conflicts == [renamed, declared])
+        #expect(response.message.contains("local.apelin.dockflip"))
+    }
+
+    /// The tweak template's filterBundles is a list of bundle IDs: its
+    /// default is listed as one, and one given is sent as a JSON array.
+    @Test
+    func `a list template value is listed and sent as a JSON array`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.extensionList, reply: ExtensionListResponse(extensions: [
+            DevelopmentExtension(id: "wiki.qaq.apelin.dev.tweak", version: "0.1.0", kind: .tweak, displayName: "Tweak Development", templates: [
+                TemplateSummary(id: "wiki.qaq.apelin.dev.tweak/objc-hook", displayName: "Objective-C Tweak", parameters: [
+                    TemplateParameter(name: "filterBundles", kind: "bundleIDList", defaultValue: .array([.string("com.apple.springboard")])),
+                    TemplateParameter(name: "mixed", kind: "bundleIDList", defaultValue: .array([.string("a.b"), .number(1)])),
+                ]),
+            ]),
+        ]))
+        let templates = try await fixture.backend.projectTemplates().templates
+        #expect(templates.first?.parameters.map(\.defaultValue) == [.list(["com.apple.springboard"]), nil])
+
+        fixture.host.on(.projectCreate, reply: ProjectCreateResponse(projectID: "p-1", name: "Settings Tweak", path: "/p"))
+        _ = try await fixture.backend.createProject(ProjectCreateToolRequest(
+            context: fixture.context(),
+            templateID: "wiki.qaq.apelin.dev.tweak/objc-hook",
+            name: "Settings Tweak",
+            values: ["filterBundles": .list(["com.apple.springboard", "com.apple.Preferences"]), "displayName": .string("X")],
+        ))
+        let sent = try #require(fixture.host.requests(ProjectCreateRequest.self).first)
+        #expect(sent.values == [
+            "filterBundles": .array([.string("com.apple.springboard"), .string("com.apple.Preferences")]),
+            "displayName": .string("X"),
+        ])
+    }
+
+    @Test
+    func `the installation list is installationList, each project named by its folder`() async throws {
+        let fixture = try Fixture(manifest: #"{"projectID":"6f1c5b0e-0000-4000-8000-000000000001"}"#)
+        defer { try? FileManager.default.removeItem(at: fixture.dataFolder) }
+        let installedAt = Date(timeIntervalSince1970: 1_790_000_000)
+        fixture.host.on(.installationList, reply: InstallationListResponse(installations: [
+            InstallationSummary(installationID: "inst-2", packageID: "wiki.qaq.hello", version: "0.0.2", projectID: fixture.project.id, buildID: "B-2", installedAt: installedAt, removable: true),
+            InstallationSummary(installationID: "inst-1", packageID: "local.apelin.gone", version: "1", projectID: "deleted-project", installedAt: installedAt, removable: false, reason: "local.apelin.gone is now version 2"),
+        ]))
+        let listed = try await fixture.backend.installations(InstallationListToolRequest(packageID: "wiki.qaq.hello"))
+        let sent = try #require(fixture.host.requests(InstallationListRequest.self).first)
+        #expect(sent.packageID == "wiki.qaq.hello" && sent.projectID == nil)
+        #expect(listed.installations.map(\.project) == ["Hello", nil], "a project still under Projects/ is named by its folder")
+        #expect(listed.installations.last?.reason == "local.apelin.gone is now version 2" && listed.installations.last?.removable == false)
+        #expect(listed.installations.first?.buildID == "B-2" && !listed.truncated)
     }
 
     @Test
@@ -223,11 +355,32 @@ struct ChannelHostBackendTests {
         #expect(sent.imageCheck == nil, "the agent never asks for the image list")
         #expect(fixture.host.requests.map(\.operation) == [.confirmLoaded, .confirmLoadedAttach])
         #expect(response.markerLogged)
-        #expect(!response.imageLoaded)
-        #expect(response.imageEvidence.isEmpty)
         #expect(response.filterMatches == true)
         #expect(response.loaded)
-        #expect(response.notes.contains("image: notRead"))
+        #expect(response.basis == ApelinAgent.ConfirmLoadedResponse.markerBasis)
+        #expect(response.notes == "log: confirmed: Marker logged by pid 55.\nfilter: confirmed: com.apple.springboard", "the image is never read: basis says so once")
+    }
+
+    @Test
+    func `apelin_package_confirm_loaded answers the host's verdict when the marker is not heard`() async throws {
+        let fixture = try Fixture()
+        let answer = ApelinProtocol.ConfirmLoadedResponse(loaded: false, evidence: [
+            LoadEvidence(kind: "log", passed: false, detail: "absent: No line containing \"ApelinLoaded B-42\" from SpringBoard in 30 s."),
+            LoadEvidence(kind: "image", passed: false, detail: "notRead: The image list was not read."),
+            LoadEvidence(kind: "filter", passed: false, detail: "absent: com.apple.Preferences only"),
+            LoadEvidence(kind: "trigger", passed: false, detail: "the respring failed"),
+        ])
+        fixture.host.on(.confirmLoaded, reply: TaskHandle(taskID: TaskID("confirm-task"), kind: .confirmLoaded))
+        try fixture.host.on(.confirmLoadedAttach, reply: batch("confirm-task", [
+            (TaskEvent.stateKind, .object(["state": .string("succeeded"), ApelinProtocol.ConfirmLoadedResponse.stateMember: JSONValue(encoding: answer)])),
+        ]))
+        let response = try await fixture.backend.confirmLoaded(ApelinAgent.ConfirmLoadedRequest(context: fixture.context(), buildID: "B-42", target: "SpringBoard", respring: true))
+        #expect(!response.loaded)
+        #expect(!response.markerLogged)
+        #expect(response.filterMatches == false)
+        #expect(response.logEvidence == ["absent: No line containing \"ApelinLoaded B-42\" from SpringBoard in 30 s."])
+        let kinds = response.notes.split(separator: "\n").map { line in String(line.prefix { $0 != ":" }) }
+        #expect(kinds == ["log", "filter", "trigger"], "the trigger's failure stays; the image is never read")
     }
 
     @Test
@@ -314,7 +467,7 @@ struct ChannelHostBackendTests {
                 .object(["identifier": .string(""), "label": .string("Cancel"), "role": .string("button")]),
             ]),
         ])))
-        fixture.host.on(.uiAction, reply: Acknowledged())
+        fixture.host.on(.uiAction, reply: ApelinProtocol.UIActionResponse())
         let tree = try await fixture.backend.readUITree(ApelinAgent.ReadUITreeRequest(context: fixture.context(), targetID: nil, maxDepth: 4))
         #expect(tree.root.children.map(\.id) == ["ok-button", "text:Cancel"])
         #expect(tree.root.children.first?.frame == [1, 2, 3, 4])
@@ -323,6 +476,52 @@ struct ChannelHostBackendTests {
         _ = try await fixture.backend.uiAction(ApelinAgent.UIActionRequest(context: fixture.context(), targetID: nil, action: .tapElement(id: "ok-button")))
         let actions = fixture.host.requests(ApelinProtocol.UIActionRequest.self).map(\.action)
         #expect(actions == [.tapElement(text: "Cancel", identifier: nil), .tapElement(text: nil, identifier: "ok-button")])
+    }
+
+    @Test
+    func `a wake says what it left, and a device still locked is the user's to unlock`() async throws {
+        let fixture = try Fixture()
+        let press = ApelinAgent.UIActionRequest(context: fixture.context(), targetID: nil, action: .pressButton("wake"))
+        fixture.host.on(.uiAction, reply: ApelinProtocol.UIActionResponse(locked: true, screenOff: false))
+        let locked = try await fixture.backend.uiAction(press)
+        #expect(locked.performed)
+        #expect(locked.message.contains("still locked"))
+        #expect(locked.message.contains("ask the user to unlock the device"))
+        #expect(locked.message.contains("never ask for or type the passcode"))
+        #expect(fixture.host.requests(ApelinProtocol.UIActionRequest.self).map(\.action) == [.press(button: "wake")])
+
+        fixture.host.on(.uiAction, reply: ApelinProtocol.UIActionResponse(locked: false, screenOff: false))
+        #expect(try await fixture.backend.uiAction(press).message == "The screen is on and the device is unlocked.")
+        fixture.host.on(.uiAction, reply: ApelinProtocol.UIActionResponse(locked: true, screenOff: true))
+        #expect(try await fixture.backend.uiAction(press).message.hasPrefix("The screen is still off."))
+        fixture.host.on(.uiAction, reply: ApelinProtocol.UIActionResponse())
+        let tap = ApelinAgent.UIActionRequest(context: fixture.context(), targetID: nil, action: .tap(x: 1, y: 2))
+        #expect(try await fixture.backend.uiAction(tap).message == "", "only a wake answers the lock state")
+    }
+
+    @Test
+    func `a swipe keeps its duration, and typed text answers what the fields hold`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.uiAction, reply: ApelinProtocol.UIActionResponse())
+        _ = try await fixture.backend.uiAction(ApelinAgent.UIActionRequest(
+            context: fixture.context(),
+            targetID: nil,
+            action: .swipe(fromX: 1, fromY: 2, toX: 3, toY: 4, durationMilliseconds: 1200),
+        ))
+        #expect(fixture.host.requests(ApelinProtocol.UIActionRequest.self).map(\.action) == [
+            .swipe(fromX: 1, fromY: 2, toX: 3, toY: 4, durationMilliseconds: 1200),
+        ])
+
+        fixture.host.on(.uiAction, reply: ApelinProtocol.UIActionResponse(typedTextMatches: false, fieldValues: ["Hello wrd"]))
+        let typed = try await fixture.backend.uiAction(ApelinAgent.UIActionRequest(context: fixture.context(), targetID: nil, action: .typeText("Hello world")))
+        #expect(typed.typedTextMatches == false)
+        #expect(typed.fieldValues == ["Hello wrd"])
+        #expect(typed.message.contains("fieldValues is what they hold now"))
+
+        let untouched = ChannelHostBackend.readBackMessage(ApelinProtocol.UIActionResponse(typedTextMatches: false, fieldValues: []))
+        #expect(untouched.hasPrefix("No field changed"))
+        #expect(ChannelHostBackend.readBackMessage(ApelinProtocol.UIActionResponse(typedTextMatches: true, fieldValues: ["Hello world"])).isEmpty)
+        #expect(ChannelHostBackend.readBackMessage(ApelinProtocol.UIActionResponse()).isEmpty, "a tap says nothing")
     }
 
     @Test

@@ -19,7 +19,7 @@ set -Eeuo pipefail
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 out="$here/binaries"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/apelin-macho-fixture.XXXXXX")"
-trap 'rm -rf "$scratch"' EXIT
+trap 'rm -rf -- "${scratch:?}"' EXIT
 mkdir -p "$out"
 
 ios_sdk="$(xcrun --sdk iphoneos --show-sdk-path)"

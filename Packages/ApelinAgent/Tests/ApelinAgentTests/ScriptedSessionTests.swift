@@ -404,11 +404,22 @@ struct ScriptedSessionTests {
             }
         }
         #expect(dropped == [later])
+        // a stop is a stop: no run follows to take the message
+        await session.waitForIdle()
+        let recorded = try await session.log.records(afterSeq: 0).map(\.event)
+        #expect(recorded.filter { $0 == .finished(reason: .aborted) }.count == 1, "\(recorded)")
+        #expect(!recorded.contains {
+            if case .userMessage(later, _, _) = $0 {
+                true
+            } else {
+                false
+            }
+        }, "\(recorded)")
         await session.close()
     }
 
     @Test(.timeLimit(.minutes(1)))
-    func `a message queued when the run fails is dropped and never reaches the next run`() async throws {
+    func `a message queued when the run fails starts the next run, and is read once`() async throws {
         let home = try TemporaryHome()
         defer { home.remove() }
         let faux = await registerFauxProvider()
@@ -435,7 +446,7 @@ struct ScriptedSessionTests {
                     }.joined()
                 }.joined(separator: "\n")
                 await seen.set(text)
-                return fauxAssistantMessage("Started over.")
+                return fauxAssistantMessage("Kept them.")
             },
         ])
         let session = try await AgentSession(
@@ -452,26 +463,42 @@ struct ScriptedSessionTests {
         let later = UUID()
         try await session.prompt("and keep the logs", messageID: later)
         queued.continuation.yield()
-        var dropped: [UUID] = []
+        var events: [AgentSessionEvent] = []
         var finished: [FinishReason] = []
         for await record in stream {
-            if case let .queuedMessagesDropped(ids) = record.event {
-                dropped = ids
+            events.append(record.event)
+            if case .queuedMessagesDropped = record.event {
+                break
             }
             if case let .finished(reason) = record.event {
                 finished.append(reason)
-                if finished.count == 1 {
-                    try await session.prompt("start over", messageID: UUID())
-                } else {
+                if finished.count == 2 {
                     break
                 }
             }
         }
         #expect(finished == [.failed, .completed])
-        #expect(dropped == [later])
+        #expect(!events.contains {
+            if case .queuedMessagesDropped = $0 {
+                true
+            } else {
+                false
+            }
+        }, "\(events)")
+        let failedAt = events.firstIndex { $0 == .finished(reason: .failed) }
+        let takenAt = events.firstIndex {
+            if case .userMessage(later, "and keep the logs", _) = $0 {
+                true
+            } else {
+                false
+            }
+        }
+        #expect(failedAt != nil && takenAt != nil)
+        if let failedAt, let takenAt {
+            #expect(failedAt < takenAt, "the next run takes it: \(events)")
+        }
         let modelText = await seen.text
-        #expect(modelText.contains("start over"))
-        #expect(!modelText.contains("and keep the logs"), "the dropped message stayed in the steering queue: \(modelText)")
+        #expect(modelText.components(separatedBy: "and keep the logs").count == 2, "read once: \(modelText)")
         await session.close()
     }
 

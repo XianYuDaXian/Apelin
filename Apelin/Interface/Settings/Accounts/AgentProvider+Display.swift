@@ -2,10 +2,11 @@ import ApelinProtocol
 import UIKit
 
 /// How Settings shows each provider: its name, its mark and the one line
-/// that says what signing in to it means. The marks are Apelin's own
-/// drawings in the provider's colour (`Provider*.imageset`, SVG, the source
-/// itself), not the providers' logos. Which providers there are, and in
-/// what order, is apelin-agent's answer (kwwk's list), not this file's.
+/// that says what signing in to it means. Marks live in `Provider*.imageset`;
+/// DeepSeek's is the unmodified official whale SVG:
+/// https://api-docs.deepseek.com/img/favicon.svg
+/// Which providers there are, and in
+/// what order, is apelin-agent's answer, not this file's.
 extension AgentProvider {
     var displayName: String {
         switch self {
@@ -28,6 +29,7 @@ extension AgentProvider {
         case .openRouter: String(localized: "OpenRouter")
         case .openAI: String(localized: "OpenAI API")
         case .google: String(localized: "Google AI Studio")
+        case .deepSeek: String(localized: "DeepSeek")
         }
     }
 
@@ -52,6 +54,7 @@ extension AgentProvider {
         case .openRouter: UIImage(named: "ProviderOpenRouter")
         case .openAI: UIImage(named: "ProviderOpenAIAPI")
         case .google: UIImage(named: "ProviderGoogleAI")
+        case .deepSeek: UIImage(named: "ProviderDeepSeek")
         }
     }
 
@@ -96,6 +99,8 @@ extension AgentProvider {
             String(localized: "Use an API key from the OpenAI platform.")
         case .google:
             String(localized: "Use a Gemini API key from Google AI Studio.")
+        case .deepSeek:
+            String(localized: "Use an API key from the DeepSeek platform.")
         }
     }
 }

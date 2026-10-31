@@ -41,6 +41,12 @@ extension BuiltInSkills {
           commits and pushes. The source shows it once the workflow has run,
           usually within a few minutes; Pages may serve the old index for up
           to ten more.
+        - From a conversation, `apelin_package_publish` does the same with
+          release builds already made: the roothide and the rootless build
+          of one version in one call, each exactly as its build made it.
+          Call it only when the user asked to publish them, or agreed when
+          you asked. Never copy a `.deb` into `debs/` yourself: the tool
+          holds each package to the digest its build recorded.
         - A package's control file needs `Package`, `Name`, `Version`,
           `Architecture`, `Description`, `Maintainer`, `Author` and `Section`
           (the package's category: Tweaks, Applications, Utilities, Themes…); the

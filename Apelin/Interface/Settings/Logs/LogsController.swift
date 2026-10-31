@@ -36,7 +36,7 @@ final class LogsController: TableController {
     /// A launch as its row and its page name it: when it began, else the
     /// file's name.
     static func title(of file: JournalFile) -> String {
-        file.started?.formatted(date: .abbreviated, time: .standard) ?? file.name
+        file.started?.formatted(date: .numeric, time: .shortened) ?? file.name
     }
 
     init() {
@@ -62,7 +62,7 @@ final class LogsController: TableController {
         dataSource.footerTitle = { section in
             switch section {
             case .current: nil
-            case .earlier: String(localized: "Apelin keeps the logs of its last 128 launches.")
+            case .earlier: String(localized: "Apelin keeps the logs of its last 100 launches.")
             }
         }
     }
@@ -91,7 +91,11 @@ final class LogsController: TableController {
                 sections.append((.earlier, earlier))
             }
             dataSource.update(sections, reconfigure: true)
-            tableView.backgroundView = rows.isEmpty ? EmptyStateView(symbolName: "doc.text", text: String(localized: "No Logs")) : nil
+            tableView.backgroundView = rows.isEmpty ? EmptyStateView(
+                symbolName: "doc.text",
+                title: String(localized: "No Logs"),
+                text: String(localized: "Logs appear here when Apelin starts."),
+            ) : nil
         }
     }
 
@@ -100,7 +104,6 @@ final class LogsController: TableController {
             ?? UITableViewCell(style: .value1, reuseIdentifier: "journal")
         var content = UIListContentConfiguration.valueCell()
         content.text = Self.title(of: row.file)
-        content.secondaryText = Int64(row.file.size).formatted(.byteCount(style: .file))
         cell.contentConfiguration = content
         cell.accessoryType = .disclosureIndicator
         return cell

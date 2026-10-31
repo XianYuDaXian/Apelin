@@ -16,7 +16,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 CC="xcrun --sdk iphoneos clang -mios-version-min=16.0 -Os -fvisibility=hidden"
 WORK=$(mktemp -d /private/tmp/apelin-codesign-fixtures.XXXXXX)
-trap 'rm -rf "$WORK"' EXIT
+trap 'rm -rf -- "${WORK:?}"' EXIT
 mkdir -p "$WORK/input" "$WORK/expected"
 
 cat >"$WORK/Info.plist" <<'EOF'

@@ -24,6 +24,23 @@ struct EnvironmentPromptTests {
         #expect(prompt.contains("shell_run has no Apelin compiler until a toolchain is installed"))
         #expect(prompt.contains("never through a login shell"))
         #expect(!prompt.contains("`/rootfs`"), "the rootfs note is roothide's")
+        #expect(!prompt.contains("roothide can rename the install root"), "so is the renamed jbroot's")
+    }
+
+    @Test
+    func `the folders the read tools reach besides the project are named`() throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        let sdks = home.dataRoot.url.appendingPathComponent("SDKs").path
+        let configuration = AgentSessionConfiguration(project: home.project, provider: .githubCopilot(model: "m"), approval: ApprovalPolicy(mode: .confirm), dataRoot: home.dataRoot, installRoot: home.home.path + "/jb")
+        let prompt = try AgentSession.systemPrompt(configuration, root: ScopedRoot(home.projectURL), skills: [])
+        #expect(prompt.contains("- file_read, file_list, file_grep and file_find also read, never write, an absolute path inside Apelin's development extensions (\(home.home.path)/jb/usr/share/apelin/development) or the registered SDKs (\(sdks)). The headers a template's support component adds, such as the Preferences framework's, are in `<extension id>/support/include` there."))
+
+        // Without an install root (no session host) only the SDKs are named.
+        let unhosted = AgentSessionConfiguration(project: home.project, provider: .githubCopilot(model: "m"), approval: ApprovalPolicy(mode: .confirm), dataRoot: home.dataRoot)
+        let section = try EnvironmentPrompt.section(EnvironmentPrompt.inputs(unhosted, root: ScopedRoot(home.projectURL), device: .current))
+        #expect(section.contains("- file_read, file_list, file_grep and file_find also read, never write, an absolute path inside the registered SDKs (\(sdks))."))
+        #expect(!section.contains("development extensions"))
     }
 
     @Test
@@ -35,6 +52,11 @@ struct EnvironmentPromptTests {
         let prompt = try AgentSession.systemPrompt(configuration, root: ScopedRoot(home.projectURL), skills: [])
         #expect(prompt.contains("- Bootstrap: roothide, install root \(jbroot)."))
         #expect(prompt.contains("print `/var/mobile/…` or `/rootfs/…` for a path the toolchain's compilers know by another name"))
+        // A chat that went on after the jbroot was renamed trusted the
+        // paths it had written down.
+        #expect(prompt.contains("roothide can rename the install root when the device is rebooted or jailbroken again"))
+        #expect(prompt.contains("Never write such a path into anything that outlives this run (project files, build scripts, Makefiles, AGENTS.md or CLAUDE.md, memory, skills, package scripts, code)"))
+        #expect(prompt.contains("roothide's `jbroot()`") && prompt.contains("`@PREFIX@` and `@ROOTFS@`"))
     }
 
     @Test
@@ -53,8 +75,14 @@ struct EnvironmentPromptTests {
         var inputs = try EnvironmentPrompt.inputs(configuration, root: ScopedRoot(home.projectURL), device: .current)
         inputs.commandsFound = ["git", "make"]
         #expect(EnvironmentPrompt.section(inputs).contains("- Also on shell_run's PATH: git, make. Not installed: cmake, dpkg-deb, ldid, ninja, perl, python3, xcrun."))
+        #expect(!EnvironmentPrompt.section(inputs).contains("dpkg-deb builds"))
         inputs.commandsFound = []
         #expect(EnvironmentPrompt.section(inputs).contains("- Also on shell_run's PATH: none of cmake, dpkg-deb, git, ldid, make, ninja, perl, python3, xcrun."))
+        // A package is apelin_project_build's, a workspace's script aside.
+        inputs.commandsFound = ["dpkg-deb", "git"]
+        #expect(EnvironmentPrompt.section(inputs).contains(
+            "- Also on shell_run's PATH: dpkg-deb, git. Not installed: cmake, ldid, make, ninja, perl, python3, xcrun. dpkg-deb builds a package only inside a workspace's declared build script, which apelin_project_build runs; never build one with it yourself.",
+        ))
     }
 
     @Test
@@ -71,6 +99,17 @@ struct EnvironmentPromptTests {
         #expect(prompt.contains("Default, prepared."))
         #expect(!prompt.contains("This project's") && !prompt.contains("This project binds"))
         #expect(prompt.contains("IPHONEOS_DEPLOYMENT_TARGET=16.0 (Apelin's default; this chat has no project)"))
+    }
+
+    @Test
+    func `the installed toolchains and SDKs say the user removes them in Settings`() throws {
+        let home = try TemporaryHome()
+        defer { home.remove() }
+        try EnvironmentContextTests.register(in: home)
+        let configuration = AgentSessionConfiguration(project: home.project, provider: .githubCopilot(model: "m"), approval: ApprovalPolicy(mode: .confirm), dataRoot: home.dataRoot)
+        let prompt = try AgentSession.systemPrompt(configuration, root: ScopedRoot(home.projectURL), skills: [])
+        #expect(prompt.contains("- Toolchains (each registered only after its installed tools passed the self-test; the user removes one in Settings ▸ Toolchains):"))
+        #expect(prompt.contains("- iPhoneOS SDKs (registered; the user removes one in Settings ▸ SDKs):"))
     }
 
     @Test

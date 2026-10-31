@@ -1,26 +1,28 @@
 import ApelinCore
 import ApelinProtocol
-import CryptoKit
 import Then
 import UIKit
 
 /// One release build for one distribution target, started as the page
-/// opens: its stages while it runs, then Export Package for the one
-/// `.deb` it made, or Retry. A workspace's build runs its own script, and
-/// what the build finds in the package it wrote (a placeholder identifier,
-/// a version packaged before, another package for the other target) is
-/// listed under the outcome. The `…` menu holds the build's whole log and,
-/// once the package is ready, Publish, which adds it to the linked package
-/// repository (Settings ▸ Git ▸ Publishing) and pushes it.
+/// opens: its stages while it runs, then Distribute for the one `.deb` it
+/// made, or Retry. Distribute is the page's prominent action, and its menu
+/// keeps the two ways out apart: Share Package hands the file to the share
+/// sheet, Publish to Repository adds it to the linked package repository
+/// and pushes it, or, with none linked, opens Settings ▸ Git, where
+/// Publishing creates or links one. A workspace's build runs its own
+/// script, and what the build finds in the package it wrote (a placeholder
+/// identifier, a version packaged before, another package for the other
+/// target) is listed under the outcome. The `…` menu holds the build's
+/// whole log and, once the package is ready, the same two choices.
 @MainActor
 final class DistributionBuildController: TableController {
     private enum Stage: Int {
-        case preparing, compiling, running, packaging, verifying
+        case preparing, compiling, running, packaging, verifying, readyToDistribute
 
         /// apelin-build's own stages, or a workspace's script's
         /// (`ExternalBuild`: `script`, then `verify`).
         static func stages(for method: ProjectBuildMethod) -> [Stage] {
-            method == .script ? [.preparing, .running, .verifying] : [.preparing, .compiling, .packaging, .verifying]
+            method == .script ? [.preparing, .running, .verifying, .readyToDistribute] : [.preparing, .compiling, .packaging, .verifying, .readyToDistribute]
         }
 
         var title: String {
@@ -29,7 +31,8 @@ final class DistributionBuildController: TableController {
             case .compiling: String(localized: "Compiling")
             case .running: String(localized: "Running Build Script")
             case .packaging: String(localized: "Packaging")
-            case .verifying: String(localized: "Verifying")
+            case .verifying: String(localized: "Verifying Package")
+            case .readyToDistribute: String(localized: "Ready to Distribute")
             }
         }
 
@@ -56,8 +59,6 @@ final class DistributionBuildController: TableController {
         var row: Row
         var text: String?
         var secondaryText: String?
-        var complete = false
-        var active = false
     }
 
     private let projectName: String
@@ -69,32 +70,70 @@ final class DistributionBuildController: TableController {
     private var findings: [ProjectDiagnostic] = []
     private var work: Task<Void, Never>?
     private var outcome: String?
+    private var finishedState: TaskState?
+    private lazy var stepCells = Dictionary(uniqueKeysWithValues: Stage.stages(for: method).map { ($0, TaskStepCell(stage: String($0.rawValue))) })
     private var logLines: [String] = []
     private weak var logPage: TaskLogController?
     private var dataSource: TableDataSource<Section, Row, RowContent>!
-    private lazy var exportButton = UIBarButtonItem(
-        title: String(localized: "Export Package"),
-        primaryAction: UIAction { [weak self] _ in self?.exportPackage() },
-    )
-    private lazy var moreButton = UIBarButtonItem(image: UIImage(systemName: "ellipsis"), menu: moreMenu)
-        .then { $0.accessibilityLabel = String(localized: "More") }
+    /// While the package is read back for Share Package or Publish to
+    /// Repository: neither starts again until it is done.
+    private var isPreparingPackage = false {
+        didSet { distributeButton.isEnabled = !isPreparingPackage }
+    }
 
-    /// The log always; Publish once there is a package.
-    private var moreMenu: UIMenu {
-        var items = [
-            UIAction(title: String(localized: "Build Log"), image: UIImage(systemName: "doc.plaintext")) { [weak self] _ in
-                self?.openLog()
-            },
-        ]
+    /// The menus read the page as they open, so neither is rebuilt when the
+    /// build ends or a package is being read back.
+    private lazy var distributeButton: UIBarButtonItem = .init(
+        title: String(localized: "Distribute"),
+        menu: UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            guard let self else { completion([]); return }
+            completion(distributionActions(anchor: distributeButton))
+        }]),
+    ).then {
+        // iOS 26's prominent style (the same value), a bold title before it
+        $0.style = .done
+    }
+
+    private lazy var moreButton = UIBarButtonItem(
+        image: UIImage(systemName: "ellipsis"),
+        menu: UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            completion(self?.moreMenuElements() ?? [])
+        }]),
+    ).then { $0.accessibilityLabel = String(localized: "More") }
+
+    /// Distribute's choices once there is a package, then the log.
+    private func moreMenuElements() -> [UIMenuElement] {
+        var elements: [UIMenuElement] = []
         if artifact != nil, work == nil {
-            items.append(UIAction(
-                title: String(localized: "Publish to Package Repository"),
+            elements.append(UIMenu(options: .displayInline, children: distributionActions(anchor: moreButton)))
+        }
+        elements.append(UIAction(title: String(localized: "Build Log"), image: UIImage(systemName: "doc.plaintext")) { [weak self] _ in
+            self?.openLog()
+        })
+        return elements
+    }
+
+    /// Share Package and Publish to Repository; the share sheet points at
+    /// `anchor`, the item whose menu they were chosen from.
+    private func distributionActions(anchor: UIBarButtonItem) -> [UIMenuElement] {
+        let attributes: UIMenuElement.Attributes = isPreparingPackage ? .disabled : []
+        return [
+            UIAction(
+                title: String(localized: "Share Package"),
+                image: UIImage(systemName: "square.and.arrow.up"),
+                attributes: attributes,
+            ) { [weak self, weak anchor] _ in
+                guard let anchor else { return }
+                self?.sharePackage(from: anchor)
+            },
+            UIAction(
+                title: String(localized: "Publish to Repository"),
                 image: UIImage(systemName: "shippingbox"),
+                attributes: attributes,
             ) { [weak self] _ in
                 self?.publish()
-            })
-        }
-        return UIMenu(children: items)
+            },
+        ]
     }
 
     init(projectName: String, target: BuildBootstrap, method: ProjectBuildMethod) {
@@ -118,12 +157,15 @@ final class DistributionBuildController: TableController {
             tableView: tableView,
             identifier: { $0.row },
         ) { [weak self] tableView, indexPath, content in
+            if case let .stage(stage) = content.row {
+                return self?.stepCells[stage]
+            }
             let cell = tableView.dequeueReusableCell(withIdentifier: "Build", for: indexPath)
             self?.configure(cell, value: content)
             return cell
         }
         dataSource.headerTitle = { section in
-            section == .progress ? String(localized: "Release Build") : nil
+            section == .progress ? String(localized: "Steps") : nil
         }
         start()
     }
@@ -131,7 +173,10 @@ final class DistributionBuildController: TableController {
     // MARK: - Rows
 
     private func configure(_ cell: UITableViewCell, value: RowContent) {
-        var content = UIListContentConfiguration.subtitleCell()
+        var content: UIListContentConfiguration = switch value.row {
+        case .finding: .explanatoryCell()
+        default: .stackedValueCell()
+        }
         content.text = value.text
         content.secondaryText = value.secondaryText
         content.secondaryTextProperties.color = .secondaryLabel
@@ -142,18 +187,14 @@ final class DistributionBuildController: TableController {
         cell.accessibilityValue = nil
         switch value.row {
         case .stage:
-            content.image = UIImage(systemName: value.complete ? "checkmark.circle.fill" : "circle")
-            content.imageProperties.tintColor = value.complete ? .systemGreen : .tertiaryLabel
-            if value.active {
-                let spinner = UIActivityIndicatorView(style: .medium)
-                spinner.startAnimating()
-                cell.accessoryView = spinner
-            }
-            cell.accessibilityValue = value.complete
-                ? String(localized: "Completed")
-                : value.active ? String(localized: "In Progress") : String(localized: "Waiting")
+            break
         case .outcome:
             content.textProperties.numberOfLines = 0
+            content.secondaryTextProperties.numberOfLines = 0
+            if finishedState == .failed || finishedState == .cancelled {
+                content.image = UIImage(systemName: finishedState == .cancelled ? "stop.circle.fill" : "exclamationmark.triangle.fill")
+                content.imageProperties.tintColor = finishedState == .cancelled ? .secondaryLabel : .systemRed
+            }
         case .finding:
             content.image = UIImage(systemName: "exclamationmark.triangle.fill")
             content.imageProperties.tintColor = .systemOrange
@@ -165,24 +206,47 @@ final class DistributionBuildController: TableController {
     }
 
     private func updateRows() {
+        for item in Stage.stages(for: method) {
+            let state: EnvironmentTaskProgress.StageState = if finishedState == .succeeded || item.rawValue < stage.rawValue {
+                .done
+            } else if item == stage {
+                finishedState == nil ? .running(nil) : .failed
+            } else {
+                .pending
+            }
+            let status: String = switch state {
+            case .done: String(localized: "Completed")
+            case .running: String(localized: "In Progress")
+            case .failed: finishedState == .cancelled ? String(localized: "Stopped") : String(localized: "Failed")
+            default: finishedState == nil ? String(localized: "Waiting") : String(localized: "Not Started")
+            }
+            stepCells[item]?.show(state, status: status, animated: tableView.window != nil && !UIAccessibility.isReduceMotionEnabled, title: item.title)
+        }
         var sections: [(Section, [RowContent])] = [
             (.progress, Stage.stages(for: method).map { item in
                 RowContent(
                     row: .stage(item),
                     text: item.title,
-                    complete: artifact != nil || item.rawValue < stage.rawValue,
-                    active: work != nil && item == stage,
                 )
             }),
         ]
         if let outcome {
-            sections.append((.outcome, [RowContent(row: .outcome, text: outcome)] + findings.indices.map { index in
+            let title = switch finishedState {
+            case .succeeded: String(localized: "Completed")
+            case .cancelled: String(localized: "Stopped")
+            default: String(localized: "Failed")
+            }
+            var rows: [RowContent] = finishedState == .succeeded ? [] : [RowContent(row: .outcome, text: title, secondaryText: EnvironmentTaskProgress.readableDetail(outcome))]
+            rows += findings.indices.map { index in
                 RowContent(
                     row: .finding(index),
                     text: DistributionAdvice.title(of: findings[index]),
                     secondaryText: DistributionAdvice.advice(for: findings[index]),
                 )
-            }))
+            }
+            if !rows.isEmpty {
+                sections.append((.outcome, rows))
+            }
         }
         dataSource.update(sections, reconfigure: true)
     }
@@ -191,22 +255,19 @@ final class DistributionBuildController: TableController {
         let running = work != nil
         navigationController?.isModalInPresentation = running
         navigationItem.hidesBackButton = running
-        let primary: UIBarButtonItem
-        if running {
-            primary = UIBarButtonItem(
+        let primary: UIBarButtonItem = if running {
+            UIBarButtonItem(
                 title: String(localized: "Stop"),
                 primaryAction: UIAction { [weak self] _ in self?.work?.cancel() },
             )
         } else if artifact != nil {
-            exportButton.isEnabled = true
-            primary = exportButton
+            distributeButton
         } else {
-            primary = UIBarButtonItem(
+            UIBarButtonItem(
                 title: String(localized: "Retry"),
                 primaryAction: UIAction { [weak self] _ in self?.start() },
             )
         }
-        moreButton.menu = moreMenu
         // the right bar's items run from the trailing edge in
         navigationItem.rightBarButtonItems = [primary, moreButton]
     }
@@ -217,6 +278,7 @@ final class DistributionBuildController: TableController {
         guard work == nil else { return }
         artifact = nil
         outcome = nil
+        finishedState = nil
         findings = []
         stage = .preparing
         logLines = []
@@ -227,10 +289,14 @@ final class DistributionBuildController: TableController {
                 let id = try await DistributionProject.id(named: projectName)
                 try Task.checkCancellation()
                 artifact = try await build(projectID: id)
+                finishedState = .succeeded
                 outcome = String(localized: "The package is ready to export.")
+                StarPrompt.buildsCompleted(1, from: self)
             } catch is CancellationError {
+                finishedState = .cancelled
                 outcome = String(localized: "Distribution stopped. You can try again.")
             } catch {
+                finishedState = .failed
                 outcome = error.readableMessage
             }
             work = nil
@@ -277,8 +343,8 @@ final class DistributionBuildController: TableController {
                 throw ApelinError(
                     .internal,
                     failure ?? (method == .script
-                        ? String(localized: "The package could not be built. Check the build script's log and try again.")
-                        : String(localized: "The package could not be built. Check the project's build description and try again.")),
+                        ? String(localized: "The package could not be built. Check the build script’s log and try again.")
+                        : String(localized: "The package could not be built. Check the project’s build description and try again.")),
                 )
             }
             return artifact
@@ -310,91 +376,35 @@ final class DistributionBuildController: TableController {
         navigationController?.pushViewController(page, animated: true)
     }
 
-    /// The build's package where the build left it, with the bytes it
-    /// recorded; read off the main thread.
-    private static func verifiedPackage(_ artifact: BuildArtifact) async throws -> URL {
-        try await Task.detached {
-            guard let path = artifact.path, let canonical = CanonicalPath.resolve(path),
-                  let builds = CanonicalPath.resolve(DataFolder.app.root.appendingPathComponent("Builds").path),
-                  CanonicalPath.isCanonical(canonical, inside: builds)
-            else {
-                throw ApelinError(
-                    .notFound,
-                    String(localized: "The package is no longer available. Build it again."),
-                )
-            }
-            let url = URL(fileURLWithPath: canonical)
-            let digest = try "sha256:"
-                + SHA256.hash(data: Data(contentsOf: url)).map { String(format: "%02x", $0) }.joined()
-            guard digest == artifact.digest else {
-                throw ApelinError(.conflict, String(localized: "The package changed after it was built. Build it again before exporting."))
-            }
-            return url
-        }.value
+    /// The package this build made, as sharing and publishing take it.
+    private var item: DistributionPublishing.Item? {
+        guard let artifact, artifact.bootstrap == target.rawValue else { return nil }
+        return DistributionPublishing.Item(
+            path: artifact.path,
+            digest: artifact.digest,
+            packageID: artifact.packageID,
+            version: artifact.version,
+            bootstrap: target,
+        )
     }
 
-    private func exportPackage() {
-        guard let artifact, artifact.bootstrap == target.rawValue, exportButton.isEnabled else { return }
-        exportButton.isEnabled = false
+    private func sharePackage(from anchor: UIBarButtonItem) {
+        guard let item, work == nil, !isPreparingPackage else { return }
+        isPreparingPackage = true
         Task { [weak self] in
             guard let self else { return }
-            defer { exportButton.isEnabled = true }
-            do {
-                let url = try await Self.verifiedPackage(artifact)
-                guard self.artifact == artifact else { return }
-                let sheet = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-                sheet.popoverPresentationController?.barButtonItem = exportButton
-                present(sheet, animated: true)
-            } catch {
-                guard self.artifact == artifact else { return }
-                presentNotice(title: "Unable to Export", message: error.readableMessage)
-            }
+            await DistributionPublishing.share(item, from: self, anchor: anchor)
+            isPreparingPackage = false
         }
     }
 
-    /// The package into the linked package repository: checked as an export
-    /// is, confirmed with where it goes, then followed as a task.
     private func publish() {
-        guard let artifact, artifact.bootstrap == target.rawValue, work == nil else { return }
+        guard let item, work == nil, !isPreparingPackage else { return }
+        isPreparingPackage = true
         Task { [weak self] in
             guard let self else { return }
-            do {
-                let url = try await Self.verifiedPackage(artifact)
-                guard let linked = try await ApelinService.app.distributionRepositoryList(repositories: false).linked else {
-                    presentNotice(
-                        title: "No Package Repository",
-                        message: "Create or link one in Settings ▸ Git ▸ Publishing first.",
-                    )
-                    return
-                }
-                presentConfirmation(
-                    title: "Publish to \(linked.fullName)?",
-                    message: "The package is added to the repository's debs folder, committed and pushed. Devices with \(linked.sourceURL) see it within a few minutes.",
-                    confirmTitle: "Publish",
-                ) { [weak self] in
-                    self?.startPublishing(url)
-                }
-            } catch {
-                presentNotice(title: "Unable to Publish", message: error.readableMessage)
-            }
-        }
-    }
-
-    private func startPublishing(_ package: URL) {
-        Task { [weak self] in
-            guard let self else { return }
-            do {
-                let handle = try await ApelinService.app.distributionPublish(files: [package.path])
-                let page = EnvironmentTaskController(
-                    handle: handle,
-                    work: .distributionPublish,
-                    title: String(localized: "Publishing Package"),
-                    doneTitle: String(localized: "Published"),
-                )
-                navigationController?.pushViewController(page, animated: true)
-            } catch {
-                presentNotice(title: "Unable to Publish", message: error.readableMessage)
-            }
+            await DistributionPublishing.publish([item], from: self)
+            isPreparingPackage = false
         }
     }
 }

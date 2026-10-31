@@ -113,6 +113,9 @@ platformize-app-ios's; the quoted name is its section.
 - [x] The root is a real tab bar for more than three top-level pages and a single navigation stack for three or fewer, never a `UITabBarController` with its bar hidden.
       SKILL.md "Gotchas observed across the apps".
       **Done:** A single navigation stack with a Settings button; the rule is in `AGENTS.md` ▸ Decisions.
+- [x] Layout asks the window for its size class and the room it has, never the idiom or a device's size, and insets each edge by its own safe-area inset.
+      iphone-duo-readiness, "Hunt the fixed assumptions": regular width is not always an iPad, and a vertical bar insets one side only.
+      **Done:** The root tiles the sidebar only beside a page 402 pt wide and is a drawer otherwise; the conversation's list, composer and chevron keep to the safe area edge by edge (`AGENTS.md` ▸ Decisions ▸ The root, The SDK tier).
 
 ## Accessibility
 
@@ -164,6 +167,9 @@ platformize-app-ios's; the quoted name is its section.
 - [x] `ci.yml` and `release.yml` are both in, copied as a pair: CI builds and keeps `<app>-<sha>` for thirty days, Release waits for that run, compiles nothing, and publishes the artifact CI verified.
       SKILL.md "Publishing": CI builds, Release publishes what CI built.
       **Done:** Both in, trimmed: CI runs the harness beside deb-all and keeps `apelin-<sha>` 30 days; Release compiles nothing.
+- [x] The SDK the app is linked against is chosen, `make build` refuses an older one, the packager reads it back from the app it ships, and CI selects that Xcode by name.
+      iphone-duo-readiness, "Establish the baseline": the SDK, not the floor, decides how an iPhone Duo lays the app out.
+      **Done:** iOS 27.1 (`IOS_SDK_TIER`, `AGENTS.md` ▸ Decisions ▸ The SDK tier); CI on the `xcode-27` image with Xcode 27.1.
 - [x] The release workflow is named `Release`, shaped test ‖ compile → release, and publishes one dSYM zip per build listed in `SHA256SUMS`.
       SKILL.md "Publishing"; "Native Depiction".
       **Done:** Named `Release`; CI's test ‖ build, then Release publishes; one dSYM zip in `SHA256SUMS`.

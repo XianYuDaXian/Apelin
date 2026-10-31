@@ -176,6 +176,75 @@ struct GitBackendTests {
     }
 
     @Test
+    func `a push with a URL sends it, and a sign-in failure there names its host`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.gitPush, reply: TaskHandle(taskID: TaskID("push-task"), kind: .environment))
+        fixture.host.on(.environmentAttach, reply: batch("push-task", [
+            stateEvent(.failed, "denied: authentication required for https://github.com/owner/fresh.git"),
+        ]))
+        await #expect {
+            _ = try await fixture.backend.gitPush(GitRemoteToolRequest(
+                context: fixture.context(), branch: "main", url: "https://github.com/owner/fresh.git",
+            ))
+        } throws: { error in
+            let message = (error as? GitToolFailure)?.message ?? ""
+            return message.contains("Sign In with GitHub")
+        }
+        let sent = try #require(fixture.host.requests(GitPushRequest.self).first)
+        #expect(sent.url == "https://github.com/owner/fresh.git")
+        #expect(sent.remote == nil)
+    }
+
+    @Test
+    func `a project without a repository or a remote is told what makes one`() async throws {
+        let fixture = try Fixture()
+        // A name that reads like a sign-in failure does not make it one.
+        fixture.host.on(.gitStatus) { _ in
+            throw ApelinError(.notFound, "project Token Clock is not a git repository", reason: .notARepository)
+        }
+        fixture.host.on(.gitPush) { _ in throw ApelinError(.notFound, "no remote \"origin\"", reason: .noSuchRemote) }
+        fixture.host.on(.gitDiff) { _ in throw ApelinError(.notFound, "no path Sources/Gone.m") }
+
+        await #expect {
+            _ = try await fixture.backend.gitStatus(GitStatusToolRequest(context: fixture.context()))
+        } throws: { error in
+            let message = (error as? GitToolFailure)?.message ?? ""
+            return message.hasPrefix("git status failed: project Token Clock is not a git repository.")
+                && message.contains("git_init") && !message.contains("credential")
+        }
+        await #expect {
+            _ = try await fixture.backend.gitPush(GitRemoteToolRequest(context: fixture.context()))
+        } throws: { error in
+            let message = (error as? GitToolFailure)?.message ?? ""
+            return message.contains("git_push with url") && message.contains("empty repository")
+                && message.contains("apelin_git_create_repository")
+        }
+        await #expect {
+            _ = try await fixture.backend.gitDiff(GitDiffToolRequest(context: fixture.context(), path: "Sources/Gone.m"))
+        } throws: { error in
+            (error as? GitToolFailure)?.message == "git diff failed: no path Sources/Gone.m."
+        }
+    }
+
+    @Test
+    func `a push URL that is not the remote's says so, not to pull`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.gitPush) { _ in
+            throw ApelinError(
+                .conflict,
+                "origin already points to https://example.com/a.git. Push to it without a URL, or name another remote.",
+                reason: .remoteURLDiffers,
+            )
+        }
+        await #expect {
+            _ = try await fixture.backend.gitPush(GitRemoteToolRequest(context: fixture.context(), url: "https://example.com/b.git"))
+        } throws: { error in
+            let message = (error as? GitToolFailure)?.message ?? ""
+            return message.hasPrefix("git push failed: origin already points to") && !message.contains("pull")
+        }
+    }
+
+    @Test
     func `a push approval carries its remote and branch in the event`() {
         let request = ApprovalRequest(
             id: "a", toolCallID: "c", tool: "git_push", arguments: "{}", workingDirectory: ".",

@@ -58,7 +58,7 @@ final class WelcomeActionBar: UIView {
             x.top.equalTo(rule.snp.top)
         }
         button.snp.makeConstraints { x in
-            x.top.equalTo(rule.snp.bottom).offset(12)
+            x.top.equalTo(rule.snp.bottom).offset(24)
             x.leading.trailing.equalToSuperview().inset(24)
             x.height.equalTo(48)
         }

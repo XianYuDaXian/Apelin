@@ -44,10 +44,14 @@ Nothing takes a command, a predicate or a free path:
   Protected reports stay the host's: it opens them by report id.
 - `screenshot()` — JPEG bytes in memory, capped at 2 MB; never a path.
 - `uiTree(UITreeRequest)` — 1–2000 elements.
-- `perform(UIAction)` — `.tap(point)`, `.tapElement(selector)`,
-  `.swipe(from:to:seconds:)`, `.type(text:delayMilliseconds:)`, each range
-  checked, refused while locked. Binding the action to a verified target is
-  the host's job (`foregroundApp().verified`).
+- `perform(UIAction)` — `.tap(point)`, `.tapElement(selector)` (after
+  waiting for the element), `.swipe(from:to:seconds:)`,
+  `.type(text:delayMilliseconds:)`, `.press(button)`, each range checked,
+  refused while locked but for a wake. It answers a `UIActionOutcome`: a
+  wake the `LockState` it left, a `type` its `TypedText` (the values that
+  changed while it went in, and whether one holds the text), every other
+  action nil. Binding the action to a verified
+  target is the host's job (`settledForegroundApp(expecting:)`).
 - `foregroundApp()`, `runningApps()`, `respring()`.
 
 `IcliSurface` is the seam: `IcliKitSurface` calls IcliKit (iOS only); the

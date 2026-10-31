@@ -239,9 +239,16 @@ public extension GitRepository {
 
     /// Adds the remote `name` fetching from `url` with git's default refspec.
     func addRemote(_ name: String, url: String) throws {
+        guard !name.utf8.contains(0), !url.utf8.contains(0) else { throw GitError(.invalid, "bad remote") }
         var remote: OpaquePointer?
         try GitError.check(git_remote_create(&remote, pointer, name, url), "add the remote \(name)")
         git_remote_free(remote)
+    }
+
+    /// Removes the remote `name`, with its remote-tracking references.
+    func removeRemote(_ name: String) throws {
+        guard !name.utf8.contains(0) else { throw GitError(.invalid, "\(name.debugDescription) is not a remote name") }
+        try GitError.check(git_remote_delete(pointer, name), "remove the remote \(name)")
     }
 
     /// The remote `name`. The caller frees it.

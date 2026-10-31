@@ -118,7 +118,7 @@ struct EnvironmentBackendTests {
         #expect(sent.source == .appleCatalog(productID: "082-15") && sent.components == [.c, .swift])
         #expect(fixture.host.requests.map(\.operation) == [.toolchainSetup, .environmentAttach])
         #expect(result.succeeded && result.stages == ["downloading", "installing"])
-        #expect(result.toolchain?.id == "clt-15.3-c-swift" && result.failedTests == ["swift · arm64e: dyld: missing symbol"])
+        #expect(result.toolchain?.id == "clt-15.3-c-swift" && result.failedTests == ["The swift self-test failed on arm64e.\ndyld: missing symbol"])
         #expect(result.warnings == ["1 of 2 self-test cases failed"] && result.message == nil)
     }
 
@@ -167,6 +167,28 @@ struct EnvironmentBackendTests {
         let checked = try await fixture.backend.checkEnvironment(EnvironmentCheckToolRequest(context: fixture.context(), toolchainID: nil, sdkID: "iPhoneOS27.0-cccccccc"))
         #expect(checked.sdk == ComponentBinding(id: "iPhoneOS27.0-cccccccc", digest: "sha256:3"))
         #expect(checked.diagnostics == [EnvironmentDiagnostic(code: "environment.sdk.tooNewForToolchain", severity: "error", message: "supports iPhoneOS SDKs up to 18.5")], "only the environment's findings decide a switch")
+    }
+
+    @Test
+    func `a switch on a description apelin_project_create never wrote says it is none, and what builds a workspace`() async throws {
+        let fixture = try Fixture()
+        fixture.host.on(.projectCheck, reply: ProjectCheckResponse(passed: false, diagnostics: [
+            ProjectDiagnostic(code: "project.invalid", severity: .error, message: "missing template", file: "apelin-project.json", field: "/"),
+            ProjectDiagnostic(code: "project.invalid", severity: .error, message: "missing environment", file: "apelin-project.json", field: "/"),
+        ]))
+        let request = EnvironmentCheckToolRequest(context: fixture.context(), toolchainID: nil, sdkID: "iPhoneOS27.0-cccccccc")
+        let failure = await #expect(throws: EnvironmentToolFailure.self) { _ = try await fixture.backend.checkEnvironment(request) }
+        let message = failure?.message ?? ""
+        #expect(message.contains("(/: missing template; /: missing environment)"), "\(message)")
+        #expect(message.contains("not an Apelin build description") && message.contains("apelin-external-build"), "\(message)")
+
+        fixture.host.on(.projectCheck, reply: ProjectCheckResponse(passed: false, diagnostics: [
+            ProjectDiagnostic(code: "project.invalid", severity: .error, message: "unknown member", file: "apelin-project.json", field: "/configurations/Debug/linkerFlags"),
+        ]))
+        let misspelled = await #expect(throws: EnvironmentToolFailure.self) { _ = try await fixture.backend.checkEnvironment(request) }
+        #expect(misspelled?.message.contains("(/configurations/Debug/linkerFlags: unknown member)") == true)
+        #expect(misspelled?.message.contains("apelin-project.schema.json") == true)
+        #expect(misspelled?.message.contains("not an Apelin build description") == false)
     }
 
     @Test

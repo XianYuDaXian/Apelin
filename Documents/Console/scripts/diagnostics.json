@@ -1,7 +1,9 @@
 {
-  "name": "diagnostics: needs nothing (confirmLoaded asks about a build that does not exist and may fail); a screenshot, the UI tree, one tap in the status bar clear of an iPad window's controls, and a loaded check that finds nothing, and the attach of a load check that does not exist refused",
+  "name": "diagnostics: needs nothing (confirmLoaded asks about a build that does not exist and may fail); a wake, which leaves the screen on, a screenshot, the UI tree, one tap in the status bar clear of an iPad window's controls, and a loaded check that finds nothing, and the attach of a load check that does not exist refused",
   "steps": [
     {"op": "hello"},
+    {"op": "uiAction", "label": "wake", "request": {"action": {"press": {"button": "wake"}}}},
+    {"op": "expect", "request": {"step": "wake", "path": "response.screenOff", "equals": false}},
     {"op": "captureScreen", "label": "screen", "request": {}},
     {"op": "expect", "request": {"step": "screen", "path": "response.width", "exists": true}},
     {"op": "readUITree", "label": "tree", "request": {}},

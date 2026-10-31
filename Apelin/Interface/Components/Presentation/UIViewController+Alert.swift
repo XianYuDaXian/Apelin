@@ -45,10 +45,12 @@ extension UIViewController {
     /// whatever the accent's own is. The library has one accent for all and
     /// reads it while the alert is built, and its buttons read it again for
     /// their borders once they are in the window, so the swap lasts until
-    /// the alert is on screen.
+    /// the alert is on screen. `cancelTitle` names the first button, the one
+    /// that answers no.
     func presentConfirmation(
         title: String.LocalizationValue,
         message: String.LocalizationValue,
+        cancelTitle: String.LocalizationValue = "Cancel",
         confirmTitle: String.LocalizationValue = "Confirm",
         destructive: Bool = false,
         onConfirm: @escaping () -> Void,
@@ -60,7 +62,7 @@ extension UIViewController {
             AlertControllerConfiguration.accentForegroundColor = .white
         }
         let alert = AlertViewController(title: title, message: message) { context in
-            context.addAction(title: "Cancel") {
+            context.addAction(title: cancelTitle) {
                 context.dispose()
             }
             context.addAction(title: confirmTitle, attribute: .accent) {

@@ -33,7 +33,9 @@ enum ProjectBuildSystem: Equatable {
         return script
     }
 
-    private static func manifest(in root: ScopedRoot) -> [String: Any]? {
+    /// The manifest as JSON; nil when it is missing, not a regular file,
+    /// larger than `maxManifestBytes` or not a JSON object.
+    static func manifest(in root: ScopedRoot) -> [String: Any]? {
         guard let path = try? root.resolveExisting(manifestFile),
               let attributes = try? FileManager.default.attributesOfItem(atPath: path),
               attributes[.type] as? FileAttributeType == .typeRegular,

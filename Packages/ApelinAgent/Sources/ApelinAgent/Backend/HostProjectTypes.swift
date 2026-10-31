@@ -4,11 +4,14 @@ import Foundation
 // MARK: - Projects
 
 /// A template parameter's value: the kinds a template declares are strings
-/// (identifiers and choices among them), booleans and integers.
+/// (identifiers and choices among them), booleans, integers and lists of
+/// strings (bundleIDList and executableList, such as the tweak's
+/// filterBundles).
 public enum TemplateValue: Sendable, Hashable, Codable {
     case string(String)
     case boolean(Bool)
     case integer(Int)
+    case list([String])
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
@@ -16,6 +19,8 @@ public enum TemplateValue: Sendable, Hashable, Codable {
             self = .boolean(value)
         } else if let value = try? container.decode(Int.self) {
             self = .integer(value)
+        } else if let value = try? container.decode([String].self) {
+            self = .list(value)
         } else {
             self = try .string(container.decode(String.self))
         }
@@ -27,6 +32,7 @@ public enum TemplateValue: Sendable, Hashable, Codable {
         case let .string(value): try container.encode(value)
         case let .boolean(value): try container.encode(value)
         case let .integer(value): try container.encode(value)
+        case let .list(value): try container.encode(value)
         }
     }
 }
@@ -34,8 +40,9 @@ public enum TemplateValue: Sendable, Hashable, Codable {
 public struct ProjectTemplate: Sendable, Hashable, Codable {
     public struct Parameter: Sendable, Hashable, Codable {
         public var name: String
-        /// The manifest's type: string, identifier, bundleID, packageID,
-        /// reverseDNS, enum, boolean or integer.
+        /// The manifest's type: projectName, identifier, bundleID,
+        /// packageID, version, deploymentTarget, string, enum, bool, or a
+        /// list of strings: bundleIDList or executableList.
         public var kind: String
         public var summary: String?
         public var defaultValue: TemplateValue?
@@ -91,10 +98,14 @@ public struct ProjectCreateToolResponse: Sendable, Hashable, Codable {
     public var name: String
     /// `apelin://project/<projectID>`, which opens it in the app.
     public var link: String
-    public init(projectID: String, name: String) {
+    /// The identifiers Apelin made up for it, to ask the user about
+    /// (`PlaceholderIdentifiers`); the agent adds it, the host never does.
+    public var identifierHint: String?
+    public init(projectID: String, name: String, identifierHint: String? = nil) {
         self.projectID = projectID
         self.name = name
         link = ApelinLink.project(projectID)
+        self.identifierHint = identifierHint
     }
 }
 
@@ -150,6 +161,31 @@ public struct ProjectRenameToolRequest: Sendable, Hashable, Codable {
     }
 }
 
+/// apelin_project_delete: another project, for good, by `projectDelete`.
+public struct ProjectDeleteToolRequest: Sendable, Hashable, Codable {
+    public var context: HostCallContext
+    public var projectID: String
+    /// The folder the card named; the host deletes the project only there.
+    public var folder: String
+    public init(context: HostCallContext, projectID: String, folder: String) {
+        self.context = context
+        self.projectID = projectID
+        self.folder = folder
+    }
+}
+
+public struct ProjectDeleteToolResponse: Sendable, Hashable, Codable {
+    public var projectID: String
+    public var folder: String
+    /// What went with it, for the reply to the user.
+    public var deleted: String
+    public init(projectID: String, folder: String) {
+        self.projectID = projectID
+        self.folder = folder
+        deleted = "The project's folder with every file in it, and its conversations, which were closed first; Apelin no longer lists them."
+    }
+}
+
 public struct ProjectRenameToolResponse: Sendable, Hashable, Codable {
     public var projectID: String
     public var folder: String
@@ -159,6 +195,9 @@ public struct ProjectRenameToolResponse: Sendable, Hashable, Codable {
     public var changed: Bool
     /// `apelin://project/<projectID>`, which opens it in the app.
     public var link: String
+    /// After an automatic rename, the identifiers Apelin made up for the
+    /// project (`PlaceholderIdentifiers`); the agent adds it.
+    public var identifierHint: String?
     public init(projectID: String, folder: String, displayName: String, changed: Bool) {
         self.projectID = projectID
         self.folder = folder

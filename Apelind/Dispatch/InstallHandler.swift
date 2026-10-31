@@ -1,7 +1,7 @@
 import ApelinProtocol
 
-/// Install through irisind, managed removal, respring and the approval
-/// ledger's read side: the host's own work (Session/Install/InstallBridge,
+/// Install through irisind, managed removal and its list, respring and the
+/// approval ledger's read side: the host's own work (Session/Install/InstallBridge,
 /// Session/Approval/ApprovalLedger), never a worker's.
 enum InstallHandler: DomainHandler {
     static func handle(_ request: HostRequest, host: SessionHost) async -> HostReply {
@@ -13,6 +13,10 @@ enum InstallHandler: DomainHandler {
         case .removePackage:
             await request.serve(RemovePackageRequest.self) { remove in
                 try await host.install.remove(remove, caller: request.caller)
+            }
+        case .installationList:
+            await request.serve(InstallationListRequest.self) { query in
+                try await host.install.list(query, caller: request.caller)
             }
         case .respring:
             await request.serve(RespringRequest.self) { _ in

@@ -38,6 +38,8 @@ sys.path.insert(0, str(REPOSITORY / "Documents" / "Schemas" / "Tools"))
 import apelin_schema as schema  # noqa: E402
 
 PREFIX = {"rootless": "/var/jb", "roothide": ""}
+PAGES = "https://owngoal-dev.github.io/Apelin/"
+SITE = REPOSITORY / "Documents" / "Site"
 
 
 def extension_directories() -> list[Path]:
@@ -317,17 +319,23 @@ def main() -> int:
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 schema.instantiate(extension, manifest, template, sample_values(manifest, template), destination)
                 digests = schema.project_digests(destination)
+                project = schema.load_json(destination / "apelin-project.json")
+                # A package manager shows the extension's own icon, one Pages serves.
+                icon = f"icons/{manifest['id']}.png"
+                if project["package"].get("icon") != PAGES + icon or not (SITE / icon).is_file():
+                    failures += 1
+                    print(f"FAIL {manifest['id']}/{template['id']}: package.icon is not {PAGES}{icon}, a file in Documents/Site")
+                    continue
                 print(f"ok   {manifest['id']}/{template['id']}: generated project valid")
                 print(f"       build      {digests['build']['digest']}")
                 print(f"       packaging  {digests['packaging']['digest']}")
                 if args.no_build:
                     continue
-                project = schema.load_json(destination / "apelin-project.json")
                 if project["language"] == "swift" and shutil.which("xcrun") is None:
                     continue
                 for line in reference_build(destination, extensions, Path(scratch) / "build" / manifest["id"] / template["id"]):
                     print(f"       built {line}")
-    return 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

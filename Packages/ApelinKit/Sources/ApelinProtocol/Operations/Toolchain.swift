@@ -296,7 +296,22 @@ public struct ToolchainRemoveRequest: OperationRequest {
     }
 }
 
+/// Changes the fallback for new projects; existing project bindings stay intact.
+public struct ToolchainSetDefaultRequest: OperationRequest {
+    public typealias Response = Acknowledged
+    public static let operation = AppOperation.toolchainSetDefault
+    public var id: String
+
+    public init(id: String) {
+        self.id = id
+    }
+}
+
 public extension ApelinService {
+    func toolchainSetDefault(id: String) async throws {
+        _ = try await send(ToolchainSetDefaultRequest(id: id))
+    }
+
     func toolchainStatus() async throws -> ToolchainStatusResponse {
         try await send(ToolchainStatusRequest())
     }

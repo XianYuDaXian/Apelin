@@ -59,6 +59,60 @@
       }
     },
     {
+      "op": "feedbackSend",
+      "request": {
+        "title": "",
+        "body": "Refused before any sign-in is read: nothing reaches GitHub."
+      },
+      "label": "empty-feedback",
+      "allowError": true
+    },
+    {
+      "op": "expect",
+      "request": {
+        "step": "empty-feedback",
+        "errorCode": "badRequest"
+      }
+    },
+    {
+      "op": "feedbackRead",
+      "request": {
+        "number": 0
+      },
+      "label": "no-issue",
+      "allowError": true
+    },
+    {
+      "op": "expect",
+      "request": {
+        "step": "no-issue",
+        "errorCode": "badRequest"
+      }
+    },
+    {
+      "op": "feedbackEdit",
+      "request": {
+        "number": 1,
+        "title": "",
+        "expectedTitle": "Refused before any sign-in is read",
+        "expectedBody": "Nothing reaches GitHub."
+      },
+      "label": "empty-edit",
+      "allowError": true
+    },
+    {
+      "op": "expect",
+      "request": {
+        "step": "empty-edit",
+        "errorCode": "badRequest"
+      }
+    },
+    {
+      "op": "feedbackStarState",
+      "label": "star-state",
+      "allowError": true
+    },
+    {
       "op": "distributionRepositoryUnlink",
       "label": "unlink"
     },

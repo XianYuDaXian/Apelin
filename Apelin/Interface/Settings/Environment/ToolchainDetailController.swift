@@ -4,28 +4,33 @@ import SnapKit
 import Then
 import UIKit
 
-/// Toolchain ▸ one toolchain: what it is, what was checked about it, where
-/// it lives, and removing it.
+/// Toolchain details: version, self-tests, supported languages and architectures.
 final class ToolchainDetailController: TableController {
-    /// Told once the toolchain is removed, so the list reads itself again.
-    var onRemove: (() -> Void)?
+    /// Refresh the list when its default or installed toolchains change.
+    var onChange: (() -> Void)?
+
+    private enum Section: Hashable {
+        case overview, selfTests, languages, architectures, metadata
+    }
 
     private enum Field: Hashable {
-        case version, languages, swiftVersion, minimumOS, architectures, isDefault, files, appleProduct, selfTests
+        case version, swiftVersion, minimumOS, isDefault, files, appleProduct, selfTests
+        case language(String), architecture(String)
     }
 
     private enum Row: Equatable {
         case value(Field, String, String)
+        case item(Field, String)
         case selfTests([ToolchainSelfTestResult])
         var id: Field {
             switch self {
-            case let .value(id, _, _): id
+            case let .value(id, _, _), let .item(id, _): id
             case .selfTests: .selfTests
             }
         }
     }
 
-    private lazy var dataSource = TableDataSource<Int, Field, Row>(
+    private lazy var dataSource = TableDataSource<Section, Field, Row>(
         tableView: tableView,
         identifier: { $0.id },
     ) { [weak self] _, _, row in
@@ -33,12 +38,19 @@ final class ToolchainDetailController: TableController {
     }
 
     private let record: ToolchainRecord
-    private let isDefault: Bool
+    private var isDefault: Bool
+    private var isSettingDefault = false
 
     /// `…` in the bar: Export, anchoring the share sheet that follows.
     private lazy var moreItem: UIBarButtonItem = .init(
         image: UIImage(systemName: "ellipsis"),
-        menu: UIMenu(children: [
+        menu: UIMenu(children: [UIDeferredMenuElement.uncached { [weak self] completion in
+            completion(self?.menuItems() ?? [])
+        }]),
+    ).then { $0.accessibilityLabel = String(localized: "More") }
+
+    private func menuItems() -> [UIMenuElement] {
+        var items: [UIMenuElement] = [
             UIAction(title: String(localized: "Show in Fila"), image: UIImage(systemName: "folder")) { [weak self] _ in
                 self?.revealInFila(path: self?.record.path ?? "")
             },
@@ -53,8 +65,15 @@ final class ToolchainDetailController: TableController {
                 image: UIImage(systemName: "trash"),
                 attributes: .destructive,
             ) { [weak self] _ in self?.confirmRemoval() },
-        ]),
-    ).then { $0.accessibilityLabel = String(localized: "More") }
+        ]
+        if !isDefault {
+            items.insert(UIAction(
+                title: String(localized: "Set as Default…"),
+                image: UIImage(systemName: "checkmark.circle"),
+            ) { [weak self] _ in self?.confirmSetDefault() }, at: 0)
+        }
+        return items
+    }
 
     init(record: ToolchainRecord, isDefault: Bool) {
         self.record = record
@@ -92,48 +111,54 @@ final class ToolchainDetailController: TableController {
         title = Self.name(of: record)
         navigationItem.backButtonDisplayMode = .minimal
         navigationItem.rightBarButtonItem = moreItem
-
-        var rows: [Row] = [.value(.version, String(localized: "Version"), record.version)]
-        let languages = Self.languages(of: record)
-        if !languages.isEmpty {
-            rows.append(.value(.languages, String(localized: "Languages"), languages))
+        dataSource.headerTitle = { section in
+            switch section {
+            case .languages: String(localized: "Languages")
+            case .architectures: String(localized: "Architectures")
+            default: nil
+            }
         }
+        updateRows()
+    }
+
+    private func updateRows() {
+        var overview: [Row] = [
+            .value(.version, String(localized: "Version"), record.version),
+            .value(.isDefault, String(localized: "Default"), isDefault ? String(localized: "Yes") : String(localized: "No")),
+        ]
         if let swift = record.swiftRequirements, record.components.contains(where: { $0.kind == .swift }) {
-            rows.append(.value(.swiftVersion, String(localized: "Swift Version"), swift.version))
-            rows.append(.value(.minimumOS, String(localized: "Minimum iOS Version"), swift.minimumHost))
+            overview.append(.value(.swiftVersion, String(localized: "Swift Version"), swift.version))
+            overview.append(.value(.minimumOS, String(localized: "Minimum iOS Version"), swift.minimumHost))
+        }
+        var sections: [(Section, [Row])] = [(.overview, overview)]
+        if let tests = record.selfTests, !tests.isEmpty {
+            sections.append((.selfTests, [.selfTests(tests)]))
+        }
+        var languages: [String] = []
+        if record.components.contains(where: { $0.kind == .c }) {
+            languages += ["C", "C++", "Objective-C"]
+        }
+        if record.components.contains(where: { $0.kind == .swift }) {
+            languages.append("Swift")
+        }
+        if !languages.isEmpty {
+            sections.append((.languages, languages.map { .item(.language($0), $0) }))
         }
         let architectures = Array(Set((record.selfTests ?? []).map(\.architecture))).sorted()
         if !architectures.isEmpty {
-            rows.append(.value(
-                .architectures,
-                String(localized: "Architectures"),
-                architectures.joined(separator: ", "),
-            ))
+            sections.append((.architectures, architectures.map { .item(.architecture($0), $0) }))
         }
-        rows.append(.value(
-            .isDefault,
-            String(localized: "Default"),
-            isDefault ? String(localized: "Yes") : String(localized: "No"),
-        ))
-        if let tests = record.selfTests, !tests.isEmpty {
-            rows.append(.selfTests(tests))
-        }
+        var metadata: [Row] = []
         if let count = record.fileCount {
-            rows.append(.value(.files, String(localized: "Files"), count.formatted()))
+            metadata.append(.value(.files, String(localized: "Files"), count.formatted()))
         }
         if let product = Self.product(of: record) {
-            rows.append(.value(.appleProduct, String(localized: "Apple Product ID"), product))
+            metadata.append(.value(.appleProduct, String(localized: "Apple Product ID"), product))
         }
-        // the package and where it lies, as Irisin ends its settings: small
-        // grey lines under the list, not rows
-        let lines = [record.packageID, record.path].compactMap(\.self)
-        tableView.tableFooterView = lines.isEmpty ? nil : TableFootnoteView(lines: lines)
-        dataSource.update([(0, rows)])
-    }
-
-    override func viewDidLayoutSubviews() {
-        super.viewDidLayoutSubviews()
-        (tableView.tableFooterView as? TableFootnoteView)?.fit(in: tableView)
+        if !metadata.isEmpty {
+            sections.append((.metadata, metadata))
+        }
+        dataSource.update(sections)
     }
 
     // MARK: - Table
@@ -146,6 +171,9 @@ final class ToolchainDetailController: TableController {
         case let .value(_, name, value):
             content.text = name
             content.secondaryText = value
+        case let .item(_, name):
+            content = .cell()
+            content.text = name
         case let .selfTests(tests):
             let passed = tests.filter(\.passed).count
             content.text = String(localized: "Self-Tests")
@@ -170,7 +198,7 @@ final class ToolchainDetailController: TableController {
         switch row {
         case let .selfTests(tests):
             navigationController?.pushViewController(SelfTestsController(record: record, tests: tests), animated: true)
-        case .value:
+        case .value, .item:
             break
         }
     }
@@ -183,7 +211,7 @@ final class ToolchainDetailController: TableController {
         let text: String
         guard let row = dataSource.value(at: indexPath) else { return nil }
         switch row {
-        case let .value(_, _, value): text = value
+        case let .value(_, _, value), let .item(_, value): text = value
         default: return nil
         }
         return UIContextMenuConfiguration(actionProvider: { _ in
@@ -194,6 +222,35 @@ final class ToolchainDetailController: TableController {
                 UIPasteboard.general.string = text
             }])
         })
+    }
+
+    private func confirmSetDefault() {
+        presentConfirmation(
+            title: "Set as Default?",
+            message: "New projects will use this toolchain. To switch an existing project’s toolchain, ask the model in that project.",
+            confirmTitle: "Set as Default",
+        ) { [weak self] in self?.setDefault() }
+    }
+
+    private func setDefault() {
+        guard !isDefault, !isSettingDefault else { return }
+        isSettingDefault = true
+        moreItem.isEnabled = false
+        Task { [weak self, record] in
+            guard let self else { return }
+            defer {
+                isSettingDefault = false
+                moreItem.isEnabled = true
+            }
+            do {
+                try await ApelinService.app.toolchainSetDefault(id: record.id)
+                isDefault = true
+                updateRows()
+                onChange?()
+            } catch {
+                presentNotice(title: "Unable to Set Default", message: error.readableMessage)
+            }
+        }
     }
 
     private func confirmRemoval() {
@@ -239,7 +296,7 @@ final class ToolchainDetailController: TableController {
                     }
                     return progress
                 }
-                onRemove?()
+                onChange?()
                 if outcome.state == .succeeded {
                     navigationController?.popViewController(animated: true)
                 } else {
@@ -255,16 +312,49 @@ final class ToolchainDetailController: TableController {
 /// Toolchain ▸ Self-Tests: each language and architecture the installed
 /// tools were checked with, and what the check found.
 private final class SelfTestsController: TableController {
-    private lazy var dataSource = TableDataSource<Int, String, ToolchainSelfTestResult>(
+    private enum Section: Hashable {
+        case explanation
+        case language(String)
+    }
+
+    private enum Row: Equatable {
+        case explanation
+        case result(ToolchainSelfTestResult)
+
+        var id: String {
+            switch self {
+            case .explanation: "explanation"
+            case let .result(test): test.language + "\u{1f}" + test.architecture
+            }
+        }
+    }
+
+    private lazy var dataSource = TableDataSource<Section, String, Row>(
         tableView: tableView,
-        identifier: { $0.language + "\u{1f}" + $0.architecture },
-    ) { [weak self] _, _, test in
-        self?.cell(for: test)
+        identifier: { $0.id },
+    ) { [weak self] _, _, row in
+        switch row {
+        case .explanation: self?.explanationCell()
+        case let .result(test): self?.cell(for: test)
+        }
     }
 
     private func updateRows() {
-        dataSource.footerTitle = { [weak self] _ in self?.footer() }
-        dataSource.update([(0, tests)])
+        dataSource.headerTitle = { section in
+            if case let .language(name) = section {
+                return name
+            }
+            return nil
+        }
+        var languages: [String] = []
+        for test in tests where !languages.contains(test.language) {
+            languages.append(test.language)
+        }
+        var sections: [(Section, [Row])] = [(.explanation, [.explanation])]
+        for language in languages {
+            sections.append((.language(language), tests.filter { $0.language == language }.map(Row.result)))
+        }
+        dataSource.update(sections)
     }
 
     private let record: ToolchainRecord
@@ -330,34 +420,73 @@ private final class SelfTestsController: TableController {
         }
     }
 
-    private func footer() -> String? {
-        String(localized: """
+    private func explanationCell() -> UITableViewCell {
+        let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+        var content = UIListContentConfiguration.cell()
+        content.text = String(localized: """
         Checked after installation by compiling, linking, signing and running a program \
         for each language and architecture.
         """)
+        content.textProperties.font = .preferredFont(forTextStyle: .body)
+        content.textProperties.numberOfLines = 0
+        cell.contentConfiguration = content
+        cell.selectionStyle = .none
+        return cell
     }
 
     private func cell(for test: ToolchainSelfTestResult) -> UITableViewCell {
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
+        cell.selectionStyle = .none
         let seconds = String(localized: "\(test.seconds.formatted(.number.precision(.fractionLength(2)))) s")
-        // one line for a pass, its time at the end; only a failure says
-        // what the check found, under it
-        var content = test.passed || test.detail.isEmpty
-            ? UIListContentConfiguration.valueCell()
-            : UIListContentConfiguration.subtitleCell()
-        content.text = "\(test.language) · \(test.architecture)"
-        content.secondaryText = test.passed || test.detail.isEmpty ? seconds : test.detail
-        content.secondaryTextProperties.color = test.passed ? .secondaryLabel : .systemRed
-        content.secondaryTextProperties.numberOfLines = test.passed ? 1 : 3
-        content.image = UIImage(systemName: test.passed ? "checkmark.circle.fill" : "xmark.circle.fill")
-        content.imageProperties.tintColor = test.passed ? .systemGreen : .systemRed
-        cell.contentConfiguration = content
-        // the mark is drawn; say it
+        let architecture = UILabel()
+        architecture.text = test.architecture
+        architecture.font = .preferredFont(forTextStyle: .body)
+        architecture.adjustsFontForContentSizeCategory = true
+        architecture.numberOfLines = 0
+
+        let duration = UILabel()
+        duration.text = seconds
+        duration.font = .preferredFont(forTextStyle: .body)
+        duration.adjustsFontForContentSizeCategory = true
+        duration.textColor = .secondaryLabel
+        duration.setContentHuggingPriority(.required, for: .horizontal)
+        duration.setContentCompressionResistancePriority(.required, for: .horizontal)
+
+        let result = UIImageView(image: UIImage(systemName: test.passed ? "checkmark.circle.fill" : "xmark.circle.fill"))
+        result.preferredSymbolConfiguration = UIImage.SymbolConfiguration(textStyle: .body)
+        result.tintColor = test.passed ? .systemGreen : .systemRed
+        result.contentMode = .scaleAspectFit
+        result.setContentHuggingPriority(.required, for: .horizontal)
+        result.setContentCompressionResistancePriority(.required, for: .horizontal)
+        let summary = UIStackView(arrangedSubviews: [architecture, duration, result])
+        summary.axis = .horizontal
+        summary.alignment = .center
+        summary.spacing = 12
+
+        let stack = UIStackView(arrangedSubviews: [summary])
+        stack.axis = .vertical
+        stack.spacing = 8
+        if !test.passed, !test.detail.isEmpty {
+            let detail = UILabel()
+            detail.text = test.detail
+            detail.font = .preferredFont(forTextStyle: .body)
+            detail.adjustsFontForContentSizeCategory = true
+            detail.textColor = .systemRed
+            detail.numberOfLines = 0
+            stack.addArrangedSubview(detail)
+        }
+        cell.contentView.addSubview(stack)
+        stack.snp.makeConstraints { make in
+            make.edges.equalTo(cell.contentView.layoutMarginsGuide)
+        }
         cell.isAccessibilityElement = true
-        cell.accessibilityLabel = content.text
-        cell.accessibilityValue = test.passed
-            ? String(localized: "Passed") + ", " + seconds
-            : String(localized: "Failed") + ", " + (content.secondaryText ?? "")
+        cell.accessibilityTraits = .staticText
+        cell.accessibilityLabel = test.architecture
+        var spoken = [test.passed ? String(localized: "Passed") : String(localized: "Failed"), seconds]
+        if !test.passed, !test.detail.isEmpty {
+            spoken.append(test.detail)
+        }
+        cell.accessibilityValue = spoken.joined(separator: "\n")
         return cell
     }
 }

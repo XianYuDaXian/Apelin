@@ -178,6 +178,7 @@ EDITS = [
     ("postinst edited", lambda r: append(r / "Packaging/postinst", "# edited\n"), False, True),
     ("installed data file edited", lambda r: append(r / "Packaging/apelinhello.conf", "x=1\n"), False, True),
     ("dependency added", lambda r: edit_json(r / "apelin-project.json", lambda d: d["package"].__setitem__("depends", ["coreutils"])), False, True),
+    ("icon set", lambda r: edit_json(r / "apelin-project.json", lambda d: d["package"].__setitem__("icon", "https://example.com/icon.png")), False, True),
     ("install path changed", lambda r: edit_json(r / "apelin-project.json", lambda d: d["package"]["layout"][0].__setitem__("path", "/usr/local/bin/apelinhello")), False, True),
 ]
 

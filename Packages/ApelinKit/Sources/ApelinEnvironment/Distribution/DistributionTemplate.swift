@@ -120,7 +120,7 @@ enum DistributionTemplate {
     set -euo pipefail
 
     repository_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-    cd "$repository_root"
+    cd "${repository_root:?}"
 
     for command_name in apt-ftparchive xz; do
       if ! command -v "$command_name" >/dev/null 2>&1; then
@@ -132,7 +132,7 @@ enum DistributionTemplate {
     name="${REPOSITORY_NAME:-$(basename "$repository_root")}"
     owner="${REPOSITORY_OWNER:-$name}"
     work_dir="$(mktemp -d "$repository_root/.repo-build.XXXXXX")"
-    trap 'rm -rf -- "$work_dir"' EXIT
+    trap 'rm -rf -- "${work_dir:?}"' EXIT
     site_dir="$work_dir/site"
     mkdir -p "$site_dir"
 
@@ -205,8 +205,9 @@ enum DistributionTemplate {
     # Pages runs no Jekyll over the site.
     touch "$site_dir/.nojekyll"
 
-    rm -rf -- "$repository_root/_site"
-    mv "$site_dir" "$repository_root/_site"
+    # Never on an empty path: an empty root would make this /_site.
+    rm -rf -- "${repository_root:?}/_site"
+    mv "$site_dir" "${repository_root:?}/_site"
     echo "Built the APT repository in _site/ (${#packages[@]} packages)"
 
     """#
