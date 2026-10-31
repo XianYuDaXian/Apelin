@@ -907,6 +907,12 @@ public actor AgentSession {
         guard let previous = messages.last(where: { $0.role != .system }), previous.role != .assistant else {
             throw ApelinError(.conflict, "There is nothing before this reply to answer again.")
         }
+        // A retry is a new run: give it the tools and system prompt the
+        // conversation has now, after an extension install or compaction.
+        refreshToolExtensions()
+        if snapshotStale {
+            takeSnapshot()
+        }
         // Nothing a stopped run left may reach the new one.
         agent.clearSteeringQueue()
         agent.clearFollowUpQueue()

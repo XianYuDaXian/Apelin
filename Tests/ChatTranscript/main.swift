@@ -827,7 +827,7 @@ let asked = compacted.take([event(15, "compactionStarted"), event(16, "compactio
 precondition(asked.map(\.kind) == ["compactionStarted", "compactionFinished"], "the one asked for after a reopen is taken")
 // A retry reopens with no user message after it: the `regenerated` event
 // ends the replay; one already in the history is not new.
-var retried = ChatRecord(summary: ChatSummary(title: "Retry", updated: Date()))
+var retried = ChatRecord(summary: ChatSummary(title: "Retry", lastInteraction: Date()))
 retried.task = TaskHandle(taskID: .make(), kind: .agent)
 retried.events = history + [event(13, "regenerated")]
 retried.reopen(as: TaskHandle(taskID: .make(), kind: .agent))
@@ -839,8 +839,19 @@ let newTurn = retried.take([
     event(16, "text", ["text": .string("Again")]),
     event(17, "finished"),
 ])
-precondition(newTurn.map(\.kind) == ["regenerated", "messageStarted", "text", "finished"],
+precondition(newTurn.map { $0.kind } == ["regenerated", "messageStarted", "text", "finished"],
              "the retry after a reopen is taken")
+// A task that stopped before the retry left its terminal state in the
+// history; the retry after it still belongs to the replay, not a new turn.
+var stoppedThenRetried = ChatRecord(summary: ChatSummary(title: "Stopped", lastInteraction: Date()))
+stoppedThenRetried.task = TaskHandle(taskID: .make(), kind: .agent)
+let stopped = event(13, TaskEvent.stateKind, ["state": .string(TaskState.interrupted.rawValue)])
+stoppedThenRetried.events = history + [stopped, event(14, "regenerated")]
+stoppedThenRetried.reopen(as: TaskHandle(taskID: .make(), kind: .agent))
+precondition(stoppedThenRetried.take(stoppedThenRetried.events).isEmpty,
+             "a terminal state before a retry does not end the replay")
+let afterStop = stoppedThenRetried.take([event(15, "regenerated"), event(16, "finished")])
+precondition(afterStop.map { $0.kind } == ["regenerated", "finished"], "the retry after a stopped task is taken")
 print("ok: a reopened session's replay is read past, and the conversation keeps its rows")
 
 checkReplayEnd()

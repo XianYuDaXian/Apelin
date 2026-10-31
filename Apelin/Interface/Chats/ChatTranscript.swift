@@ -61,7 +61,7 @@ struct ChatTranscript {
     /// meanwhile (a title, a message queued, the count).
     private static let endsAttempt: Set<String> = [
         "prompt", "steer", "message", "toolCall", "toolResult", "approvalRequested", "approvalResolved",
-        "error", "finished", "compactionStarted", "compactionFinished", TaskEvent.stateKind,
+        "error", "finished", "regenerated", "compactionStarted", "compactionFinished", TaskEvent.stateKind,
     ]
     /// What ends `reconnecting`: the request answered, or the run moved on.
     private static let endsReconnecting = endsAttempt.union(["messageStarted", "thinking", "toolCallPreparing", "text"])
