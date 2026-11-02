@@ -340,7 +340,7 @@ public actor AgentSession {
         // A stream function of its own costs kwwk's automatic native
         // compaction; give it back, so a long conversation still compacts
         // through the provider instead of a summary prompt.
-        agent.autoCompact?.config.nativeCompaction = { _, context, instructions, given in
+        let liveNativeCompaction: NativeCompactionFn = { _, context, instructions, given in
             var options = given ?? StreamOptions()
             let live = await liveModel.current()
             var model = live.model
@@ -349,7 +349,11 @@ public actor AgentSession {
                 let auth = try await resolver(model, options.sessionId)
                 options.resolvedAuth = auth
                 options.apiKey = auth?.token
-                options.metadata = auth?.metadata
+                if let metadata = auth?.metadata, !metadata.isEmpty {
+                    options.metadata = metadata
+                } else {
+                    options.metadata = nil
+                }
                 if let baseURL = auth?.baseURL, !baseURL.isEmpty { model.baseURL = baseURL }
             } else {
                 options.resolvedAuth = nil
@@ -367,6 +371,12 @@ public actor AgentSession {
                 return nil
             }
         }
+        // The journal wraps the compactor, and the live model is read inside
+        // it, so native compaction is still recorded after a model switch.
+        let journaledCompaction = journal.observingCompaction(
+            AgentContextCompactionConfig(nativeCompaction: liveNativeCompaction)
+        )
+        agent.autoCompact?.config.nativeCompaction = journaledCompaction.nativeCompaction
 
         workspace = root
         told = snapshot
@@ -457,6 +467,7 @@ public actor AgentSession {
         )
         resolvedFrom = (provider, resolved.credentials)
         resolvedContextWindow = contextWindow
+        journal.modelChanged(to: resolved.model)
         let change = PendingSwitch(
             model: resolved.model,
             authResolver: resolved.authResolver,
