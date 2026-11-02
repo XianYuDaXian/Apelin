@@ -1,3 +1,4 @@
+import struct ApelinProtocol.GitSquashResponse
 import Foundation
 
 /// Everything the agent asks of the session host.
@@ -67,10 +68,26 @@ public protocol AgentHostBackend: Sendable {
     func gitFetch(_ request: GitRemoteToolRequest) async throws -> GitTaskToolResponse
     /// Fetch, then fast-forward only, read to the end.
     func gitPull(_ request: GitRemoteToolRequest) async throws -> GitTaskToolResponse
-    /// Push a branch, never forced, read to the end.
+    /// Push a branch, read to the end: never forced without the lease the
+    /// user approved.
     func gitPush(_ request: GitRemoteToolRequest) async throws -> GitTaskToolResponse
     /// Import a repository into the session's own (empty) workspace.
     func gitClone(_ request: GitCloneToolRequest) async throws -> GitTaskToolResponse
+    /// The checked-out branch's last commits combined into one, or, as a
+    /// preview, what that would combine; the host checks it was approved.
+    func gitSquash(_ request: GitSquashToolRequest) async throws -> GitSquashResponse
+    /// The session's project's remotes, without credentials.
+    func gitRemoteList(_ request: GitRemoteListToolRequest) async throws -> GitRemoteListToolResponse
+    /// A remote added at an HTTPS address, or pointed there.
+    func gitRemoteSet(_ request: GitRemoteSetToolRequest) async throws -> GitRemoteSetToolResponse
+    func gitRemoteRemove(_ request: GitRemoteRemoveToolRequest) async throws -> GitRemoteListToolResponse
+    /// Fetches a remote's branch and reads what making the project that
+    /// branch would lose, read to the end; only the remote-tracking branch
+    /// moves.
+    func gitResetPreview(_ request: GitResetPreviewToolRequest) async throws -> GitResetPreviewToolResponse
+    /// The project made that branch, against exactly the state the card
+    /// showed, read to the end; the host spends the user's approval of it.
+    func gitResetToRemote(_ request: GitResetToolRequest) async throws -> GitResetToolResponse
     /// The device's commit author and the hosts with a saved credential.
     func gitSettings(context: HostCallContext) async throws -> GitSettingsToolResponse
     func gitSetAuthor(_ request: GitAuthorToolRequest) async throws -> GitSettingsToolResponse
@@ -193,6 +210,10 @@ public extension AgentHostBackend {
 
     func sendFeedback(_: FeedbackToolRequest) async throws -> FeedbackToolResponse {
         throw ToolDeniedError(message: "sending feedback is not available here")
+    }
+
+    func gitSquash(_: GitSquashToolRequest) async throws -> GitSquashResponse {
+        throw ToolDeniedError(message: "squashing commits is not available here")
     }
 
     func readFeedback(_: FeedbackReadToolRequest) async throws -> FeedbackReadToolResponse {

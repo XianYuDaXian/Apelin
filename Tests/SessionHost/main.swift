@@ -1390,6 +1390,10 @@ await rootRunChecks(scratch: scratch, scratchPath: scratchPath)
 
 await screenConsentChecks(scratch: scratch, scratchPath: scratchPath)
 
+// MARK: - A reset to a remote (ResetToRemoteChecks.swift)
+
+await resetToRemoteChecks(scratch: scratch, scratchPath: scratchPath)
+
 // MARK: - Install bridge against a fake irisind
 
 final class FakeIrisin: InstallService, @unchecked Sendable {
@@ -3269,6 +3273,162 @@ do {
     check(noSession?.code == .denied, "a worker with no session opens nothing")
 }
 
+// MARK: - A forced push goes only on the user's approval of exactly it, in every mode
+
+do {
+    let registry = TaskRegistry(directory: scratch.appendingPathComponent("agent-force-push-tasks"))
+    await registry.load()
+    let sessions = AgentSessionTable.shared
+    func session(_ id: String, mode: ApprovalMode) async -> AgentSessionTable.Entry {
+        let entry = await AgentSessionTable.Entry(
+            sessionID: id,
+            task: registry.create(kind: .agent, owner: .agent, ownerKey: id),
+            project: ResolvedProject(id: "p-force", name: "Force", path: scratchPath),
+            mode: mode,
+            createdAt: Date(),
+        )
+        await sessions.add(entry)
+        return entry
+    }
+    let theirs = String(repeating: "a", count: 40)
+    let mine = String(repeating: "b", count: 40)
+    let lease = GitPushLease(expectedCommit: theirs, localCommit: mine)
+    let push = GitPushRequest(projectID: "p-force", branch: "main", forceWithLease: lease)
+    // What apelin-agent writes into a forced git_push's approvalRequested
+    // (ApelinAgentWorker's tests hold that shape).
+    func ask(
+        _ entry: AgentSessionTable.Entry,
+        _ approvalID: String,
+        tool: String = "git_push",
+        project: String = "p-force",
+        remote: String = "origin",
+        branch: String = "main",
+        expected: String? = nil,
+        local: String? = nil,
+    ) async {
+        await registry.append(entry.task.taskID, kind: "approvalRequested", payload: .object([
+            "approvalID": .string(approvalID), "tool": .string(tool), "allowsSessionScope": .bool(false),
+            "detail": .object([AgentForcePushRules.detailKey: .object([
+                "projectID": .string(project), "remote": .string(remote), "branch": .string(branch),
+                "expectedCommit": .string(expected ?? theirs), "localCommit": .string(local ?? mine),
+                "overwritten": .array([.object(["commit": .string(theirs), "subject": .string("Theirs")])]),
+                "overwrittenCount": .number(1),
+            ])]),
+        ]))
+        await sessions.record(entry.sessionID, approvalID: approvalID, decision: .approve)
+    }
+    func authorized(_ entry: AgentSessionTable.Entry?, _ request: GitPushRequest = push) async -> ApelinError? {
+        await AgentForcePushRules.authorize(request, session: entry?.sessionID, registry: registry)
+    }
+    for mode in [ApprovalMode.confirm, .relaxed, .full] {
+        let entry = await session("force-\(mode.rawValue)", mode: mode)
+        let unasked = await authorized(entry)
+        check(unasked?.code == .denied, "\(mode.rawValue): a forced push goes only on the user's approval")
+        await ask(entry, "force-\(mode.rawValue)-other-lease", expected: String(repeating: "c", count: 40))
+        await ask(entry, "force-\(mode.rawValue)-other-local", local: String(repeating: "c", count: 40))
+        await ask(entry, "force-\(mode.rawValue)-other-branch", branch: "release")
+        await ask(entry, "force-\(mode.rawValue)-other-remote", remote: "upstream")
+        await ask(entry, "force-\(mode.rawValue)-other-project", project: "p-elsewhere")
+        await ask(entry, "force-\(mode.rawValue)-other-tool", tool: "git_pull")
+        let near = await authorized(entry)
+        let unspent = await sessions.approvedIDs(entry.sessionID)
+        check(
+            near != nil && unspent.count == 6,
+            "\(mode.rawValue): an approval covers the remote, branch, project and lease it named only, and stays unspent (\(unspent))",
+        )
+        await ask(entry, "force-\(mode.rawValue)-exact")
+        let approved = await authorized(entry)
+        check(approved == nil, "\(mode.rawValue): the approved forced push goes")
+        let again = await authorized(entry)
+        check(again != nil, "\(mode.rawValue): once, never for the session: the next one asks again")
+    }
+    let relaxed = await session("force-unnamed", mode: .relaxed)
+    let ordinary = await authorized(relaxed, GitPushRequest(projectID: "p-force", branch: "main"))
+    check(ordinary == nil, "a push without a lease is never forced, and asks the host nothing")
+    let unnamed = await authorized(relaxed, GitPushRequest(
+        projectID: "p-force",
+        forceWithLease: GitPushLease(expectedCommit: theirs, localCommit: mine),
+    ))
+    let noLocal = await authorized(relaxed, GitPushRequest(
+        projectID: "p-force",
+        branch: "main",
+        forceWithLease: GitPushLease(expectedCommit: theirs),
+    ))
+    check(unnamed?.code == .badRequest && noLocal?.code == .badRequest, "an agent's lease names the branch and the local commit")
+    let noSession = await authorized(nil)
+    check(noSession?.code == .denied, "a worker with no session forces nothing")
+}
+
+// MARK: - A squash goes under Strict only on the user's approval of exactly it
+
+do {
+    check(CallerPolicy.allows(.worker(.agent, instance: "s"), .gitSquash), "the agent may squash its project's commits")
+    check(!CallerPolicy.allows(.worker(.build, instance: nil), .gitSquash), "the build worker may not")
+    let registry = TaskRegistry(directory: scratch.appendingPathComponent("agent-squash-tasks"))
+    await registry.load()
+    let sessions = AgentSessionTable.shared
+    func session(_ id: String, mode: ApprovalMode) async -> AgentSessionTable.Entry {
+        let entry = await AgentSessionTable.Entry(
+            sessionID: id,
+            task: registry.create(kind: .agent, owner: .agent, ownerKey: id),
+            project: ResolvedProject(id: "p-squash", name: "Squash", path: scratchPath),
+            mode: mode,
+            createdAt: Date(),
+        )
+        await sessions.add(entry)
+        return entry
+    }
+    let base = String(repeating: "a", count: 40)
+    let head = String(repeating: "b", count: 40)
+    let squash = GitSquashRequest(projectID: "p-squash", base: base, message: "Add the clock", expectedHead: head)
+    let strict = await session("squash-strict", mode: .confirm)
+    // What apelin-agent writes into git_squash's approvalRequested
+    // (ApelinAgentWorker's tests hold that shape).
+    func ask(
+        _ approvalID: String,
+        tool: String = "git_squash",
+        project: String = "p-squash",
+        base asked: String? = nil,
+        head shown: String? = nil,
+        message: String = "Add the clock",
+    ) async {
+        await registry.append(strict.task.taskID, kind: "approvalRequested", payload: .object([
+            "approvalID": .string(approvalID), "tool": .string(tool), "allowsSessionScope": .bool(false),
+            "detail": .object([AgentSquashRules.detailKey: .object([
+                "projectID": .string(project), "branch": .string("main"), "base": .string(asked ?? base),
+                "expectedHead": .string(shown ?? head), "message": .string(message), "count": .number(3),
+                "commits": .array([]), "published": .number(0),
+            ])]),
+        ]))
+        await sessions.record(strict.sessionID, approvalID: approvalID, decision: .approve)
+    }
+    func authorized(_ entry: AgentSessionTable.Entry?, _ request: GitSquashRequest = squash) async -> ApelinError? {
+        await AgentSquashRules.authorize(request, session: entry?.sessionID, registry: registry)
+    }
+    let unasked = await authorized(strict)
+    check(unasked?.code == .denied, "Strict squashes only as the user approved it")
+    let preview = await authorized(strict, GitSquashRequest(projectID: "p-squash", count: 3, preview: true))
+    check(preview == nil, "a preview changes nothing and asks nothing")
+    await ask("squash-other-base", base: String(repeating: "c", count: 40))
+    await ask("squash-other-head", head: String(repeating: "c", count: 40))
+    await ask("squash-other-message", message: "Something else")
+    await ask("squash-other-project", project: "p-elsewhere")
+    await ask("squash-other-tool", tool: "git_commit")
+    let near = await authorized(strict)
+    let unspent = await sessions.approvedIDs(strict.sessionID)
+    check(near != nil && unspent.count == 5, "an approval covers the base, head, message and project it named only (\(unspent))")
+    await ask("squash-exact")
+    let approved = await authorized(strict)
+    check(approved == nil, "the approved squash goes")
+    let again = await authorized(strict)
+    check(again != nil, "once, never for the session: the next one asks again")
+    let relaxed = await authorized(session("squash-relaxed", mode: .relaxed))
+    let full = await authorized(session("squash-full", mode: .full))
+    check(relaxed == nil && full == nil, "Relaxed and Full squash as they commit")
+    let noSession = await authorized(nil)
+    check(noSession?.code == .denied, "a worker with no session squashes nothing")
+}
+
 // MARK: - Packages are published under Strict only as the user approved exactly them
 
 do {
@@ -4820,6 +4980,15 @@ do {
     let other = "20261022-000000-000-" + BackupStore.key(for: "/x-var/jb/etc/hosts")
     FileManager.default.createFile(atPath: store.folder + "/" + other, contents: Data())
     check(!store.list(for: "/var/jb/etc/hosts").contains(other), "a backup is listed for its own file only")
+
+    // Issue #34: roothide renames its root on a reboot; a file's backups
+    // keep their key, and those made under the whole path are still listed.
+    let before = "/var/containers/Bundle/Application/.jbroot-F1E6FD3C82204430/etc/hosts"
+    let after = "/var/containers/Bundle/Application/.jbroot-809D56B82B2E1CEA/etc/hosts"
+    check(BackupStore.key(for: before) == BackupStore.key(for: after), "a backup's key outlives the root's name")
+    let legacy = "20261022-000000-000-" + BackupStore.legacyKey(for: after)
+    FileManager.default.createFile(atPath: store.folder + "/" + legacy, contents: Data())
+    check(store.list(for: after).contains(legacy), "a backup an earlier version made is still listed")
 }
 
 print("\(checks - failures)/\(checks) session host checks passed")

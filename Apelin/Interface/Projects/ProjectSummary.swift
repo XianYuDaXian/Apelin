@@ -37,6 +37,7 @@ struct ProjectSummary: Hashable, Sendable {
                     projectID: document["projectID"]?.stringValue,
                     automaticallyNamed: document["autoName"]?.boolValue == true,
                     buildMethod: ProjectBuildMethod(manifest: document),
+                    created: (try? FileManager.default.attributesOfItem(atPath: root))?[.creationDate] as? Date,
                 )
             }
         }.value
@@ -49,6 +50,9 @@ struct ProjectSummary: Hashable, Sendable {
     var automaticallyNamed = false
     /// How its package is built, if it can be yet (`ProjectBuildMethod`).
     var buildMethod = ProjectBuildMethod.missingDescription
+    /// When its folder was made, which the project menu counts as its
+    /// first use (`ProjectMenuOrder`); nil when it could not be read.
+    var created: Date?
 
     var displayTitle: String {
         displayName.flatMap { ProjectDisplayName.isValid($0) ? $0 : nil } ?? name

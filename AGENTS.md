@@ -162,6 +162,29 @@ the same executable in session mode; the workers are its children.
   `@PREFIX@/…`, a system one `@ROOTFS@/…` (the packager writes `/rootfs` for
   roothide, nothing for rootless). `Scripts/check-launchd-paths.py` fails
   `make check` on a bare one; a plist without such keys needs neither.
+- **One saved entry that does not read never costs the others.** A list
+  kept on disk and written back is read one element at a time
+  (`PreservedList` in ApelinCore: what does not decode is kept and written
+  back as it was), a folder of records is read per file, and a file that
+  does not read at all is set aside (`UnreadableFile.setAside`) — never
+  replaced by an empty state the next save makes permanent, and never a
+  reason to delete what the record named (the SDK sweep counts every record
+  file, readable or not). `make check` runs `Scripts/check-persisted-reads.py`,
+  which fails on a bare `try` read inside a `map`/`compactMap`/`flatMap`/
+  `forEach` walk and on a `try?` decode that falls back to `[]`, `[:]` or an
+  empty value; `// persisted-read: <why>` on or above the line passes data
+  that is never written back. Issue #33 lost every chat to one cut-short
+  file; the audit after it found the toolchain registry, the SDK sweep, the
+  artifact registry, the approval ledger, the git credential list, the
+  symbol index and the notice marks the same way.
+- **No absolute path under the bootstrap root outlives the boot.** roothide
+  renames `.jbroot-<id>` on a reboot. A path a record keeps is taken
+  through `BootstrapRootPath.rebased` (only the root's name changes, so two
+  readers get the same string) wherever it is read — toolchain and SDK
+  records, the host's and the build's artifact records —, and a name made
+  from a path (a backup's key) is made from the part below the root
+  (`BootstrapRootPath.belowRoot`). A new record with a path takes the same
+  care, or keeps the path relative (issue #34).
 - **Versions and the deployment target live in `Configuration/*.xcconfig`
   only.** `make check` rejects either in `project.pbxproj`.
 - **No project generators.** `project.pbxproj` is hand-written; `objectVersion`
@@ -232,7 +255,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   `gitStatus`, `gitDiff`, `gitStage`, `gitUnstage`, `gitCommit`, `gitInit`,
   `gitClone`, `gitCloneInto`, `gitFetch`, `gitPull`, `gitPush`, `gitSettings`,
   `gitAuthorSet`, `gitCredentialSet`, `gitCredentialRemove`,
-  `gitRepositoryCreate`, `gitIssueCreate`;
+  `gitRepositoryCreate`, `gitIssueCreate`, `gitSquash`, `gitRemoteList`,
+  `gitRemoteSet`, `gitRemoteRemove`, `gitResetPreview`, `gitResetToRemote`;
   `distributionRepositoryList`, `distributionRepositoryCreate`,
   `distributionRepositoryLink`, `distributionRepositoryUnlink`,
   `distributionPublish`, `feedbackSend`, `feedbackRead`, `feedbackEdit`,
@@ -305,6 +329,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   `AgentFeedbackRules`, and `feedbackRead`;
   `gitRepositoryCreate`, narrowed by `AgentRepositoryCreateRules`;
   `gitIssueCreate`, narrowed by `AgentIssueCreateRules`;
+  `gitResetToRemote`, narrowed in every mode by `AgentResetToRemoteRules`,
+  with `gitResetPreview`;
   `distributionPublish`, narrowed by `AgentPublishRules`, the rest of the
   package repository's operations staying the app's), the
   environment worker `installPackage`, `removePackage`
@@ -502,8 +528,32 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
     exactly that repository and those files and digests, in order
     (`detail.packagePublish` {repository, sourceURL?, packages: [{buildID,
     packageID, version, architecture, bootstrap, file, digest}]}).
+    An agent's forced push (owner, 2026-10-31, issue #29;
+    `AgentForcePushRules`, GitHandler) goes, in every mode — Strict,
+    Relaxed and Full alike, since Full lifts root commands, not this —,
+    only by spending one approval the app gave this session whose own
+    `approvalRequested` names exactly it (`detail.forcePush` {projectID,
+    remote, url?, branch, expectedCommit, localCommit, localSubject,
+    overwritten, overwrittenCount}): the request's remote, branch, url and
+    lease must be the card's, the branch and the local commit named, so
+    what reaches apelin-environment is the lease the user saw; never for
+    the session. A push without a lease asks the host nothing.
+    An agent's squash (owner, 2026-10-31; `AgentSquashRules`) under Confirm
+    spends one approval naming exactly it (`detail.squash` {projectID,
+    branch, base, expectedHead, message, commits, count, upstream?,
+    published}), the request's base, expected head and message the card's;
+    never for the session. Relaxed and Full squash as they commit, and a
+    preview passes in every mode.
     `environmentAttach` reads only the tasks the session started
     (`startedTasks`, recorded by `startTask`).
+    A reset to a remote (owner, 2026-10-31, issue #32;
+    `Session/Agent/AgentResetToRemoteRules.swift`) discards local work, so
+    an agent's `gitResetToRemote` spends, in every mode, Full included, one
+    approval the app gave this session whose own `approvalRequested` names
+    exactly it (`detail.resetToRemote` {projectID, remote, url, branch,
+    remoteCommit, head?}, with what is lost beside it for the card), never
+    for the session; the request must carry that commit, HEAD and address,
+    which apelin-environment holds the project to again.
   - *Files* (`Session/Files/`). `fileRead` scopes: a project ID or
     `project:<name>`, `sdk:<id>`, `extension:<id>`, `agent-tools:<id>`,
     `grant:<id>` (app only); canonical paths, checked again on the opened
@@ -612,7 +662,9 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   copies, ordinary events leaving the record alone and its number and time
   read back from the log, one `agentOpen` of a session at a time, Ask
   Before Using the Screen's refusals and spends in every mode
-  (`ScreenConsentChecks.swift`), and a real PTY.
+  (`ScreenConsentChecks.swift`), a reset to a remote only on the approval
+  of exactly it, in every mode (`ResetToRemoteChecks.swift`), and a real
+  PTY.
   `Documents/Console/scripts/i1-smoke.json` drives it on a device;
   `r1-resume-build.json`, `r1-resume-sdk-import.json` and
   `r2-resume-toolchain.json` check a resume, killing the host by its
@@ -669,12 +721,51 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   Remotes (2026-10-22): `gitFetch`, `gitPull` (fetch, then a fast-forward
   only: a diverged branch or a worktree change it would overwrite is
   `conflict` and nothing changes) and `gitPush` (one branch to the branch
-  of the same name, never forced, recorded as its upstream; with `url`, a
+  of the same name, recorded as its upstream, never forced without a
+  lease; with `url`, a
   remote it names that the repository lacks is added first, HTTPS as a
   clone's, and taken away again when the push is refused before it
   starts; one it has must have that URL, else `conflict`, reason
   `remoteURLDiffers`; a missing one without `url` is `notFound`, reason
-  `noSuchRemote`) are tasks that are not resumed; `gitCloneInto` imports a
+  `noSuchRemote`) are tasks that are not resumed; `gitFetch {branch}`
+  also answers that local branch beside the branch of that name the
+  remote advertised to the fetch (`comparison`, `GitBranchComparison`:
+  both commits, the push URL, the remote's commits the local branch
+  lacks, newest first, the first ten with their subjects and all of them
+  counted), and the push result names `from`, the commit the remote's
+  branch was at. A forced push (owner, 2026-10-31, issue #29;
+  `Operations/GitHistory.swift`) is `gitPush {forceWithLease:
+  {expectedCommit, localCommit?}}`, full commit IDs checked before the
+  task is accepted, a local branch that is not at `localCommit` refused
+  there too (`conflict`, reason `localChanged`): libgit2 pushes
+  `+refs/heads/<branch>` on one connection, and its `push_negotiation`
+  callback, which gets the commit the remote advertised on that very
+  connection as each update's old value, stops it before anything is sent
+  unless that is `expectedCommit` (`conflict`, reason `remoteChanged`, a
+  branch the remote lacks too: nothing to overwrite, an ordinary push
+  makes it). The update goes to the remote as `<expectedCommit> <local>
+  <ref>`, so git's receive-pack or GitHub refuse it as well when the
+  branch moved after the check, in their own words (`rejected`); libgit2's
+  local transport writes the branch without that check, so
+  `GitLeaseTests` proves it through `git daemon`. A `lease` event
+  {branch, expectedCommit, localCommit?, found?, held} records what the
+  remote said, and the result `forced`. A squash (owner, 2026-10-31;
+  `GitSquashRequest`, `ApelinGit/GitSquash.swift`) is `gitSquash {base,
+  message, expectedHead}`, one request, not a task: the commits after
+  `base` on the checked-out branch become one commit on `base` with HEAD's
+  tree, the message and the author `gitCommit` would take; the branch
+  moves from `expectedHead` alone (`git_reference_create_matching`), the
+  work tree, the index and every remote are left as they are, nothing is
+  pushed, and the branch's reflog keeps `previousHead`. Refused with
+  nothing changed: HEAD not at `expectedHead` (`conflict`, reason
+  `headChanged`), a base that is no ancestor of HEAD, fewer than two
+  commits after it, a tracked change in the work tree or the index
+  (`conflict`; untracked files are left alone), HEAD not on a branch.
+  `preview: true` changes nothing and answers what it would combine — by
+  `base` (seven digits or more) or `count` back along first parents —:
+  the commits, newest first, the first fifty, and how many of them the
+  branch's upstream has as last fetched (`published`), when publishing it
+  would take a forced push; `gitCloneInto` imports a
   repository into an existing workspace project — the repository
   initialised in the folder, `origin`
   fetched in full, the branch checked out without overwriting a file
@@ -682,7 +773,73 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   own files kept out through `.git/info/exclude`. The untouched repository
   a new workspace starts with (`GitRepository.isUntouched`: HEAD unborn, no
   reference, remote or staged entry) is replaced, and put back on its
-  branch when the import fails; any other `.git` is `conflict`. Credentials are one per
+  branch when the import fails; any other `.git` is `conflict`.
+  A project's own remotes (owner, 2026-10-31, issue #32;
+  `GitService+Remotes.swift`): `gitRemoteList` names each remote and its
+  address, never a user, token, query or fragment in it
+  (`GitRemoteURL.shown`, `hidesCredential` when one was left out);
+  `gitRemoteSet {name, url}` adds one, or points one at another address
+  for fetch and push alike (its own `pushurl` taken away), fetching
+  nothing; `gitRemoteRemove` takes one away with its tracking branches
+  and any upstream record of it (`notFound`, reason `noSuchRemote`, when
+  there is none). A name is `GitRemoteName`'s (letters, digits, `.`, `_`
+  and `-`, at most 64, a letter or digit first, no `..`: never a path, an
+  option or an address), an address `GitRemoteURL`'s (HTTPS with a host,
+  no user, password, query, fragment or white space). A fetch, pull or
+  push given an address where a remote's name goes is `badRequest`
+  saying to add a remote at it first, never `noSuchRemote`.
+  "Remote wins" (owner, 2026-10-31, issue #32; `GitService+Reset.swift`,
+  ApelinGit's `GitReset.swift`): `gitResetPreview {projectID, remote,
+  branch?}` fetches that branch alone (nil: the one the remote's HEAD
+  names) into its remote-tracking branch, whatever refspecs the remote
+  has, and answers what a reset would do (`GitResetPreview`: the remote's
+  commit, HEAD, whether the histories are unrelated, the commits that
+  leave the branch, the tracked files whose uncommitted changes go, the
+  untracked or ignored files the remote's tree replaces, each list's count
+  and its first 50, and what `apelin-project.json` becomes);
+  `gitResetToRemote {projectID, remote, branch, expectedRemoteCommit,
+  expectedHead, expectedURL?}` fetches again and, only while the remote is
+  at that commit and address and HEAD at that commit (nil: none), else
+  `conflict` with nothing changed, does what `git checkout -f -B <branch>
+  <remote>/<branch>` does: the local branch of that name moved there and
+  checked out, the index and tracked files the remote's, untracked and
+  ignored files it lacks left alone, upstream recorded; it works as well
+  on a history unrelated to the remote's. First it saves what it would
+  lose on a new branch `apelin-backup/<yyyyMMdd-HHmmss>` (a number after
+  it when taken), named in its result: HEAD's commit, with a commit on top
+  holding the tracked files as they are and the files it replaces when
+  anything is uncommitted or replaced. A local branch of that name that is
+  not checked out and has commits the remote lacks is `conflict`. The
+  project keeps its identity: the remote's `apelin-project.json` with this
+  project's `projectID` in its one quoted place (`RepositoryManifest`,
+  refused when it does not read), or this project's own, kept out through
+  `.git/info/exclude`, when the remote has none; the icon likewise. Both
+  are tasks that are not resumed.
+  A repository's own `apelin-project.json` coming into a new workspace
+  (owner, 2026-10-31, issue #32; `RepositoryManifest`): while the
+  workspace's manifest holds nothing but its identity
+  (`ProjectManifestIdentity.isBareWorkspace`, what `createEmpty` writes),
+  the repository's file takes its place instead of clashing
+  (`GitClone.Replacement`: settled before anything is checked out, the
+  workspace's set aside and put back when the import fails), and the
+  display name follows it. It keeps its `projectID` when that is a
+  lowercase UUID no other project, conversation (`sessions/*/session.json`),
+  build (`Builds/<id>/`) or memory record names, and nothing names the
+  workspace's ID yet (`ProjectReferences`); otherwise the workspace's ID
+  goes in its one quoted place (`ProjectManifestIdentity.replacing`, the
+  transfer import's rule) and the file shows as changed in git. A
+  conversation names its workspace from the moment it opens (its session
+  reopens only on the ID it was made with), so the agent's git_clone
+  always keeps the workspace's ID; an import the app runs before any
+  conversation can take the repository's. The result says which
+  (`projectFile`, `GitProjectFile`) and the ID the project has
+  (`projectID`). A file that is not a JSON object with a `projectID`, or
+  one whose ID appears twice where it must be replaced, is `badRequest`,
+  the workspace left as it was; a file only in a subfolder is any file;
+  a workspace whose manifest holds more (a declared build) clashes as
+  before. Nothing in it runs and nothing is recorded as approved: the
+  host's ledger holds no digest for an imported description, so a Strict
+  build of it asks. Credentials are one per
   host (lowercased, with `:port` when named): a username and a token
   (`GitCredentialStore`, keychain service and access group
   `wiki.qaq.apelin.git`, `keychain-access-groups` on apelin-environment
@@ -949,7 +1106,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   no `.git` anywhere but the top (compared without case); a new project ID
   written into `apelin-project.json` by replacing its one quoted
   occurrence, nothing else changed (so the Confirm ledger has nothing
-  approved under it and two folders never share an ID); `.git` given a
+  approved under it and two folders never share an ID), the file then in
+  its written form (`ProjectManifestFormat`); `.git` given a
   fresh minimal `config` (the HTTPS origin kept) and dropped with a warning
   if it does not open; moved into `Projects/<name>/` by
   `renamex_np(RENAME_EXCL)` — `projectName` taken is `conflict`, absent the
@@ -1058,9 +1216,9 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   message's `<system-state>` (below); a new conversation and one an agent
   opened are told nothing (`Tests/SessionHost/AgentHostRunChecks.swift`,
   `HostRestartNoteTests`). The tier last chosen is kwwk's
-  `AgentState.serviceTier` (kwwk 0.1.100), which its loop sends with every
-  turn. The session's stream function reads a live model of its own, so a
-  switch made during a run lands at that run's next request
+  `AgentState.serviceTier` (kwwk 0.1.100 and later), which its loop sends
+  with every turn. The session's stream function reads a live model of its
+  own, so a switch made during a run lands at that run's next request
   (`agentModelSwitch`); because a stream function of the agent's own costs
   kwwk's automatic native compaction, the session hands the compactor the
   provider's native one itself. The agent wraps that stream in
@@ -1088,7 +1246,67 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   last number), and a reattach replays from disk outside the log's actor
   while appends go on, so an open answers at once and a send never waits
   behind the history; a line that will not decode stands as an `error` of
-  its number. `agentCompact` (the
+  its number. Beside it the worker keeps the conversation's diagnostic
+  journal (owner, issue #27; `ApelinAgent/Journal/`), which Settings ▸
+  Logs lists under Chats: `Journal/Agent/<session>.log` in the data
+  folder, its levels made as mobile without following a link (Dog's own
+  files stay at the top of `Journal/`), in Dog's line format — a
+  `[Category]` line at each change, `* |<level>| <yyyy-MM-dd_HH-mm-ss>|
+  <message>`, a line break in a message written `\n` so no tool output
+  starts an entry —, appended across reopens, formatted and written on a
+  queue of its own, never on the session's actor, and only while the file
+  is a regular one of mobile's with one link (`DiagnosticJournal`). Past 2 MB it becomes `<session>.old.log`,
+  replacing the one before; each open keeps the 100 journals written last.
+  `SessionJournal` writes, by category: Session (open or reopen with
+  provider, model id, API wire and the endpoint's host, never a key; an
+  open that failed; model and mode changes; close), Model (each run's
+  start and end with its finish reason and tool count, a run's error,
+  every model request that ended on an error with its HTTP status,
+  provider code and request ID — `observingRequests` inside
+  `NetworkRecovery` —, a reply that failed, kwwk's retries, a wait for
+  the network, a partial reply discarded, a title that failed), Tool
+  (`Started call=<id> tool=<name> session=<id> at=<ms>` with the
+  arguments, then `Ended call=… status=…` with start, end, duration, the
+  result and, where it was decided, a `detail`), Approval (asked, with the
+  call and reason; resolved, with the decision and the wait) and
+  Compaction (started — automatic from kwwk's `compactStart`, or
+  requested by `agentCompact` — with the messages, tokens and window and
+  the model; whether the native compaction answered, had no summary or
+  failed with its status, `observingCompaction`; ended with the outcome,
+  `summary=native|local`, the messages compacted and tokens after, or
+  failed with its duration, the HTTP status a request had meanwhile and
+  the error). A call's status is `succeeded`, `failed`, `denied`,
+  `cancelled`, `timed-out` or `interrupted`: the runner notes a refusal,
+  a stop or a timeout where it is decided (`ToolCallOutcome`: the policy's
+  `deny`, the user's decline, the host's `denied`/`timeout`, shell_run's
+  `timedOut`, an extension's `timeout`, apelin_web_fetch's 30 s), kwwk's
+  `toolExecutionEnd` ends the call with it, a call still running at close
+  or when the host closes the worker's channel (`WorkerMain`'s `onClose`)
+  ends `interrupted`, and one the journal shows started and never ended is
+  ended `interrupted` when the conversation opens again, so a crash leaves
+  no call that looks as if it were running. Every line is redacted first
+  (`JournalRedaction` over ApelinCore's `LogRedaction`, every rule linear
+  in the text and a long text redacted only as far as it can be kept,
+  then cut): tokens and keys by their shapes (`ghp_`, `gho_`,
+  `github_pat_`, `sk-`, `oc_sk_`, `xai-`, `glpat-`, `hf_`, `gsk_`,
+  `sk_live_`, AWS, Slack, Google, JWTs, private keys), Bearer and Basic
+  values, fields, headers, environment variables and options named like
+  a secret (`isSecretName`, inside JSON written as a string too), a
+  password in an address, e-mail addresses, mobile's home (`~`), the
+  install root, roothide's `.jbroot-<id>`, root's home, an app
+  container's ID, and the device and network identifiers feedback refuses
+  (`PrivateShapes`: UDIDs, serials, MAC addresses, local addresses and
+  names, the device's own name); an endpoint on the local network is
+  named `local-endpoint`. Arguments keep their shape, each string redacted
+  and then cut to 256 bytes, the whole at most 1 KB; a tool that returns the user's content (the
+  file read tools, file_show, memory and skills, apelin_conversation_read,
+  apelin_web_fetch, logs and crashes, the screen and its UI tree) is
+  recorded by its size alone, any other result by a redacted summary of
+  at most 512 bytes, an error at most 4 KB, each cut marked
+  `… [truncated from <n> bytes]`. The app's own `Conversation` lines go
+  through the same redaction and onto one line (`LogText`). Tested by
+  `SessionJournalTests`, `JournalReviewTests`, `LogRedactionTests`,
+  `LogRedactionAttackTests` and `Tests/Journal`. `agentCompact` (the
   app's alone, 2026-10-24) compacts the conversation between runs with
   kwwk's own compactor, as it does when the context fills — natively where
   the provider can —, answers once begun (`conflict` while a run or
@@ -1160,7 +1378,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   session's log, so a reopened session's replay carries it, and an event
   recorded before it has none. A failure kwwk
   kept as an NSError's whole `description` (`Error Domain=… Code=…
-  "…" UserInfo={…}`, a lost connection) is cut to its localized
+  "…" UserInfo={…}`, a lost connection: every one before kwwk 0.1.106,
+  since then only one with no text of its own) is cut to its localized
   description, the quoted sentence, in `error` and in a failed
   compaction's `message`, and again when the app shows an `error` an
   earlier worker recorded (`ErrorDescription`). An app that is not attached leaves an approval waiting; nothing
@@ -1274,17 +1493,68 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   git_stage, git_unstage, git_commit (`all: true` stages every change)
   and git_init → the matching `git*` request,
   git_fetch, git_pull, git_push and git_clone → `gitFetch`, `gitPull`,
-  `gitPush` and `gitCloneInto` read to their end; all of them run under
+  `gitPush` and `gitCloneInto` read to their end, git_reset_to_remote →
+  `gitResetPreview` before asking, then `gitResetToRemote` with the
+  commits and address its card showed (owner, 2026-10-31, issue #32:
+  asked on a card in every mode, Full included, naming what is lost —
+  commits, uncommitted changes, replaced files, unrelated histories —,
+  never with a session grant; nothing to do is answered without asking;
+  its description, the prompt's `# Working` and `apelin-git-workflow`
+  keep it to the user's explicit request to make the project match the
+  remote, never to resolve a conflict or get past a refused pull or push
+  on its own), and git_remote_list,
+  git_remote_set and git_remote_remove → `gitRemoteList`, `gitRemoteSet`
+  and `gitRemoteRemove` (owner, 2026-10-31, issue #32: a remote added to a
+  project that has none, or pointed elsewhere, with the address the user
+  gave; a name or address the host would refuse, or an address given to
+  git_fetch, git_pull or git_push where a remote's name goes, is refused
+  before the host and told to use git_remote_set); all of them run under
   Confirm like a project edit except git_push, which asks every time for
   the remote and branch it names (the checked-out branch read first when
   none is given, then sent explicitly) and the `url` it adds the remote
-  at, never with a session grant. Nothing rewrites history (no squash, no
-  forced push): a project with no remote is pushed with the `url` of an
+  at, never with a session grant. git_squash {count | base, message}
+  (owner, 2026-10-31; `Tools/ToolRunner+History.swift`) → `gitSquash`:
+  before asking it previews the squash, which refuses there what the
+  squash would; under Strict the card (`detail.squash`,
+  `ApprovalPolicy.squashReason`; the app shows the bound detail,
+  `ApprovalCardText`) names the branch, each commit combined by short sha
+  and subject, the new message and, when the upstream has some of them,
+  that publishing it needs a forced push, which asks on its own card;
+  every time, never with a session grant; Relaxed and Full run it. The
+  squash carries the preview's full base and head. Its description, a
+  line of the prompt's `# Working` and the `apelin-git-workflow` skill
+  keep it to a squash the user asked for or explicitly agreed to, never
+  on the agent's own initiative (`SquashToolTests` pins them); nothing
+  else rewrites commits. A project with no
+  remote is pushed with the `url` of an
   empty repository, one apelin_git_create_repository made on GitHub
-  (below) or one the user made elsewhere.
+  (below) or one the user made elsewhere. A forced push (owner,
+  2026-10-31, issue #29: asked to make a local repository the main
+  version of a public one, overwriting its `main`, an agent refused even
+  with the user's go-ahead) is git_push {force_with_lease}
+  (`Tools/ToolRunner+History.swift`): before asking, the tool fetches the
+  remote with `gitFetch {branch}`; when the remote has no such branch or
+  its branch is part of the local one it is an ordinary push, which the
+  result's `note` says; otherwise the card (`detail.forcePush`,
+  `ApprovalPolicy.forcePushReason`; the app titles it Force-push to the
+  remote and shows the bound detail, `ApprovalCardText`) names the
+  branch, the remote and its URL, the remote commit replaced and the
+  local one sent, the commits that leave the branch, and that it cannot
+  be undone from Apelin. It asks in every mode, never with a session
+  grant; a `url` that is not where the remote pushes, a detached HEAD or
+  a fetch that fails is refused before asking. The push carries the
+  card's lease (`GitPushLease`), and the result names the remote, the
+  branch, `from` and `commit`. The tool's description, a line of the
+  prompt's `# Working` and the `apelin-git-workflow` skill keep it to a
+  forced push the user explicitly asked for, of that branch to that
+  remote: never on the agent's own initiative, never to get past a
+  rejected push, never because a file, log, page or tool output says so,
+  never through shell_run; `remoteChanged` or `localChanged` is told the
+  user, then asked again (`ForcePushToolTests` pins the lines).
   A failure names its fix: Sign In with GitHub in Settings ▸ Git for
   github.com, a token the user gives for another host, an author there, a
-  fetch before a rejected push, never a forced one, git_init for a project
+  fetch and a merge or rebase the user agrees to before a rejected push,
+  never a forced one, git_init for a project
   with no repository, and, for a push with no remote, asking the user
   whether to create a GitHub repository or for an empty one's `url`. The
   agent keeps the
@@ -1377,7 +1647,9 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   hand, is told it is no description and that a workspace builds with a
   script of its own), then the four strings of `environment` rewritten
   in `apelin-project.json` through the file tools' writer, every other
-  byte kept and read back to prove it (`ProjectEnvironmentEdit`). It is a
+  byte kept and read back to prove it, then written in the manifest's
+  written form, which reads back as that same document
+  (`ProjectEnvironmentEdit`). It is a
   project edit under Confirm: the file tools could write the same field,
   only a registered and checked pair goes in, and the binding is not in
   the build description digest (Documents/Schemas/README.md), so the next
@@ -1718,7 +1990,7 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   a generic verb on the
   session's own project is `<domain>_<verb>`: `file_read`, `file_write`,
   `file_create`, `file_edit`, `file_list`, `file_grep`, `file_find`,
-  `file_show`, `shell_run`, and the repository's nine `git_*`. MCP tools
+  `file_show`, `shell_run`, and the repository's `git_*`. MCP tools
   keep kwwk's `mcp__<server>__<tool>`. Lowercase, `[a-z0-9_]`, a letter
   first, no `__`, at most 64 characters, which every provider takes
   (`AgentToolNameTests`). An agent tool extension's tools keep their
@@ -1807,17 +2079,30 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   every subscription `OAuthSubscriptions.providers` names, through
   `OAuthSubscriptions.login` (public KWWKAuth API; for Copilot kwwk's
   model policy activation after selection) — a device code for
-  GitHub Copilot, Kimi For Coding and Grok; Safari with kwwk's loopback
+  GitHub Copilot, Kimi For Coding (kimi.com and, from kwwk 0.1.108, Kimi
+  For Coding Global on kimi.ai, each with its own device id) and Grok;
+  Safari with kwwk's loopback
   listener for Claude Pro or Max, ChatGPT Codex, Devin and OpenRouter; a
   page kwwk polls for Cursor, Qoder, Qoder CN, WorkBuddy, WorkBuddy AI, Z.ai
   and BigModel; Kiro's own listener — and every API-key entry of KWWKCli's
   `loginProviders` (Anthropic, OpenAI, Google AI Studio, OpenRouter,
-  OpenAI-compatible), its fields mirrored once in `SignInKeyForms` (KWWKCli
+  OpenCode Go and OpenCode Zen, OpenAI-compatible), its fields mirrored
+  once in `SignInKeyForms` (KWWKCli
   is an executable target), stored in kwwk's API-key shape (the key as
   `access`, no refresh, never expiring, `baseUrl` and `defaultModel` as
   extras — what KWWKCli's internal `apiKeyCredentials` writes, so it is
   rewritten in `AccountDesk`). DeepSeek adds an API-key form and its own
   `deepseek-api-key` credential item, separate from `openai-compatible`.
+  OpenCode's two plans (owner, 2026-10-31; issue #23, after the OpenCode
+  Go provider Burç contributed in PR #25) are kwwk's from 0.1.109
+  (`OpenCodePlan`, `registerOpenCode`): an OpenCode Console key
+  (`oc_sk_…`) for Go, the subscription, under `opencode-go`, or Zen,
+  pay-as-you-go, under `opencode`, each wire at its own path under the
+  plan's root and every request naming its conversation in
+  `x-opencode-session`, which Go refuses a request without. Apelin adds
+  only the cases, the key forms and model discovery at the plan's
+  `<root>/v1/models`, which, like kwwk's routes, never reads a `baseUrl`
+  an imported credential carries.
   Display order is Apelin's `AgentProvider.signInOrder`, independent of
   kwwk's registration order;
   `AccountDeskTests` fails when kwwk gains a subscription or a stored
@@ -2104,7 +2389,18 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   The button shows the selected project's icon, or the folder in General Chat,
   with its current selection in the accessibility value. Its uncached menu has
   a fixed order: General Chat, a separator, the project names, a separator,
-  and All Projects, which opens the management sheet. Menu rows have no icons
+  and All Projects, which opens the management sheet. The projects are
+  listed newest first (owner, 2026-10-30, issue #22; `ProjectMenuOrder`,
+  tested in `Tests/ChatTranscript`), a project as new as the latest
+  conversation the reader started or wrote in it (`lastInteraction`) or
+  its folder's creation, whichever is later: the five newest, and the open
+  project wherever it falls, then the rest in a More Projects submenu,
+  shown only when there are more. Each row is `Name - Count`
+  (`Pineora - 3`; owner, 2026-10-31, issue #28): the name, then how many
+  of its conversations show the unread dot, the name alone with none and
+  never `- 0`; General Chat counts its temporary conversations and More
+  Projects the projects inside it, so one hidden there is still found
+  (`ChatUnread.Counts`, one format, `%@ - %lld`). Menu rows have no icons
   except the system's selected checkmark. The toolbar is
   glass on iOS 26 and the toolbar's blur before it. Before iOS 26 the
   accent is black in the light and white in the dark, the window's tint
@@ -2121,8 +2417,24 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   darker grey — a
   title on one line each, with a system activity indicator at the trailing
   edge while `ChatSummary.isWorking` is true (and "Working" as the row's
-  accessibility value). `SidebarController.refresh()` reconfigures a row
-  whose title or working state changed without changing selection or order; the runtime derives working state from prompt/finished events.
+  accessibility value), or else a yellow dot while it is unread ("Unread"):
+  `ChatRowStatusView`, the spinner's size with the 10 pt dot centred in it,
+  so the two share a centre and the title keeps its width whichever shows.
+  Unread (owner, 2026-10-31, issue #28; `ChatUnread`, tested in
+  `Tests/ChatTranscript`) is `ChatSummary.isUnread`, saved with the chat
+  (absent: read) and kept apart from working, which wins while it works.
+  A conversation becomes unread when its task brings an assistant message
+  with text, an error, a turn's end the reader did not stop (`aborted`) or
+  an approval asked while the reader is not looking at it — never from a
+  reopened session's replay (`take` reads past it), the reader's own
+  message, a title, a queued echo or a count; events read at launch past
+  the saved cursor count. Looking at it is `ChatRuntime.viewedChat`, which
+  the root sets (`syncViewedChat`): the conversation page is the column's,
+  the app is active and no drawer is out over it — an open drawer is not
+  looking, so a reply behind it gets its dot, and closing the drawer over
+  it reads it; a sheet over the page still counts. Becoming looked at reads
+  it, and so does sending in it. `SidebarController.refresh()` reconfigures a row
+  whose title, working or unread state changed without changing selection or order; the runtime derives working state from prompt/finished events.
   The saved conversation is restored at launch; an iPhone, or any drawer
   layout, without one creates a new chat only after its project selection
   is restored. New Chat reuses the project's untouched conversation (no
@@ -2159,7 +2471,7 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   (`ChatDeletion`). Settings and the picker are form
   sheets through Xrash's `presentAsFormSheet` (`Interface/Components/`). The
   list contains only persisted conversations; no sample conversation is injected at launch.
-  `ChatRuntime` owns drafts, session IDs, task cursors and histories; each chat is atomically saved under `Chats/`. A chat is removed from memory only after its session closes (an absent session is already closed) and its file is deleted; later queued saves cannot restore it.
+  `ChatRuntime` owns drafts, session IDs, task cursors and histories; each chat is atomically saved under `Chats/`. A saved chat that does not decode is moved into `Chats/Unreadable/` and named in the journal, never left to stop the others loading, and a `Chats/` that cannot be read still leaves the list loaded, empty, so a new chat starts (issue #33). A chat is removed from memory only after its session closes (an absent session is already closed) and its file is deleted; later queued saves cannot restore it.
   Projects are read from validated project folders, and the picker refreshes them on appearance. Its swipe and context menu can delete a project after confirming its name: close its chat sessions, remove only its real direct-child directory in `Projects/` without following links, then remove its chat histories. A project whose folder goes some other way — an agent's apelin_project_delete, a command, another app — takes its conversations with it the same way (`DeletedProjects`, `ChatRuntime.forgetDeletedProjects`), at launch and on each change `ProjectCatalogMonitor` reports: banners withdrawn, any session the host left open closed, histories removed, and the sidebar on General Chat when it showed that project; a `Projects/` that does not read takes nothing. With nothing picked the detail column shows
   the app's icon (`NothingSelectedController`) beside the sidebar; behind a
   drawer it is always a conversation. The placeholder cross-fades into a
@@ -2374,7 +2686,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   `AppJournal.start()` calls `Dog.shared.initialization(writableDir:
   DataFolder.app.root)` once, early in `didFinishLaunching`, after making
   `Journal/` with `makeLevels` (so a missing data folder is an NSLog line,
-  never a folder Dog makes), and writes a launch header. `DataFolder.app`,
+  never a folder Dog makes), and writes a launch header, its paths through
+  `AppJournal.redaction` (`~`, `<install root>`). `DataFolder.app`,
   not `DataFolder(home: NSHomeDirectory())`: on roothide `NSHomeDirectory()`
   is the system's `/var/mobile`, not the bootstrap's. Never call it with no
   argument: its default is `.documentDirectory`, which for an app with no
@@ -2386,9 +2699,21 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   Settings ▸ About ▸ Logs (`Apelin/Interface/Settings/Logs/`) reads it
   back: every launch Dog keeps (`JournalFiles`, tested by
   `Tests/Journal`), this one first, each opening Irisin's log page
-  (`LogViewerController`: level and category filters, Errors Only, Share as
+  (`LogViewerController`: level and category filters, Errors Only, a search
+  field over each entry's text — a call ID finds its call —, Share as
   a `.log` file, row Copy; the running launch is followed and can be
-  Cleared from view); an earlier launch's file can be deleted.
+  Cleared from view); an earlier launch's file can be deleted. Under it,
+  Chats lists the agent's journal of each conversation (Agent sessions ▸
+  the diagnostic journal; owner, issue #27), written last first, named by
+  the conversation the runtime has for its session (else by when it was
+  last written), read with its rotated file first and deleted with it.
+  The app's journal itself has one line, category `Conversation`, for each
+  problem it sees arrive in a conversation (`ConversationJournal`): an
+  `error` event, a `compactionFinished` that failed, a Compact… that could
+  not be asked for, with the session, redacted (`LogRedaction`); a
+  reopened session's replay, which `ChatRecord.take` reads past, adds
+  none. The parser is `JournalLines`, Foundation only, which
+  `Tests/Journal` feeds what apelin-agent's `DiagnosticJournal` writes.
 - **Release notes** live in `Documents/Releases/<version>.md`, written before
   the tag.
 - **Before every push, tag or release**, an agent reads the diff, the staged
@@ -2407,6 +2732,34 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   message. Canonical JSON and both approval digests are byte-identical to
   it: the fixtures, the edit table, and every shipped template instantiated
   by both and compared file by file are in `ApelinProjectTests`.
+- **The written form** (owner, 2026-10-31, issue #30; `ProjectManifestFormat`,
+  the reference's `manifest_text`, Documents/Schemas/README.md ▸ Written
+  form): every writer of `apelin-project.json` writes it as
+  `json.dumps(document, ensure_ascii=False, indent=2)` and one `\n` —
+  two spaces a level, one member or element a line, members in their
+  written order, `{}`/`[]` inline, only the escapes JSON needs — so it
+  reads on GitHub and in a diff: `projectCreate` (the generated manifest,
+  and the empty workspace's), the rename, the transfer import and
+  apelin_project_set_environment. Only the text changes: the document read
+  back is the one the file held, order included, so neither approval digest
+  moves (the edit table's "written on one line" and "formatted from one
+  line") — unless the project takes the manifest as a file of its build or
+  package, whose bytes the packaging digest covers; a file the strict
+  reader refuses is left as it is, and one already in the form is the same
+  bytes. Every build puts the manifest into the form before its first step
+  (after the check of a described project, before a workspace's script),
+  says so in one line of its log, and writes nothing when it already is,
+  when the check digested it as a file (`checkedFiles`), or past 1 MB, the
+  most the other readers take: through the opened project folder, which
+  must itself be no link, never through a link, opened non-blocking until
+  it is known to be a regular file, mode and owner kept, only while it is
+  still the file read (`ProjectManifestFile`, the rename's writer). The one-line files came
+  from the rename, which wrote the whole manifest compact
+  (`JSONDocument.description`), and from the empty workspace, written
+  compact and sorted by `JSONCoding`. `Fixtures/manifest-format.json`
+  holds both implementations to it. The template files are not JSON before
+  substitution and keep their layout; the file tools write what the model
+  writes, and the next build tidies it.
 - **Extensions** are scanned from `<install root>/usr/share/apelin/development/`
   on every `extensionList`; each is checked alone and a bad one, or both of
   a duplicate id, is listed with its problems and never offered.
@@ -2447,6 +2800,12 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   passed; tools are `<path>/usr/bin/<tool>` (or the CLT's
   `Library/Developer/CommandLineTools/usr/bin`). A project builds only
   against the toolchain and SDK whose ID *and* digest it is bound to.
+  A record's `path` names the bootstrap root it was registered under,
+  which roothide renames on a reboot (issue #34), so every reader of the
+  records — `ToolchainRegistry.load`, `SDKStore.list`, `EnvironmentStores`,
+  `RegisteredEnvironment.read` — takes it through ApelinCore's
+  `BootstrapRootPath.rebased` onto a path of its own under the current
+  root first; rootless paths are left as they are.
 - **A build** (`ApelinBuild`) has one ID: the host's task ID, which is
   `APELIN_BUILD_ID`, the artifact ID and what `confirmLoaded` takes. Its
   layout comes from the assignment — mobile's home inside the install root
@@ -2499,7 +2858,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   interpreter?, arguments?}` (`ExternalBuildDeclaration` in ApelinProject:
   a regular file inside the project by canonical path, `sh` by default or
   bash, zsh, python3, perl, at most 32 one-line arguments, nothing else).
-  `buildStart` on a workspace runs it in apelin-build (`ExternalBuild`): as
+  `buildStart` on a workspace runs it in apelin-build (`ExternalBuild`),
+  the manifest in its written form first (The written form, above): as
   mobile in the project, the bootstrap's interpreter, stdin closed, its own
   process group, 30 minutes at most (a cancel or the timeout kills the
   group), the output the build log; with the development environment
@@ -2732,7 +3092,8 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   (owner, 2026-10-29), and so does publishing packages to the user's
   package repository (owner, 2026-10-29), and so does editing a feedback
   issue or opening an issue on a repository the user chose (owner,
-  2026-10-30); none is ever granted for the
+  2026-10-30), and so does squashing the project's own commits (owner,
+  2026-10-31); none is ever granted for the
   session, and the host spends the one approval (owner, 2026-10-22). An
   MCP tool and an agent tool extension's tool ask at every call too,
   whatever the extension declares its risk to be; those two may be
@@ -2765,6 +3126,19 @@ What `CHECKLIST.md` asked to be written down, and where the answer lives.
   says root will run without asking, plus the same owner check; leaving it
   asks nothing. The wire value is `full` and old stored values still decode;
   `ApprovalMode.asks` is true for Strict alone.
+  *A forced push* (owner, 2026-10-31, issue #29: "default protected,
+  allowed with explicit authorisation") asks in all three modes, Full
+  included, every time, on a card naming the branch and remote, the
+  commit replaced and the one sent, and the commits that leave the
+  branch; never granted for the session. It goes with
+  `--force-with-lease`'s protection, never a plain force: if the remote's
+  branch is not where the card said, nothing is pushed and the user is
+  asked again.
+  A reset of the project to a remote (git_reset_to_remote, owner,
+  2026-10-31, issue #32) asks in every mode, Full included: it discards
+  local work, so its card names what is lost, it is never granted for the
+  session, and what it discards goes first onto an `apelin-backup/…`
+  branch.
   *Ask Before Using the Screen* (owner, 2026-10-30: asked to
   report a problem upstream, an agent opened the issue page in Safari with
   `icli url open` and read the UI tree twice, never asking) is a setting
@@ -3174,10 +3548,11 @@ its projectID, and under Confirm only by spending one approval the app gave
 that session naming exactly that project and name
 (`detail.projectRename` {projectID, folder, currentName, displayName}),
 every time, never for the session. The file tools still edit the field
-where they reach. The writer opens the
+where they reach. The writer (`ProjectManifestFile`) opens the
 canonical project directory, refuses a symlink manifest, checks its identity and
-bytes again, and replaces it relative to that directory. These display fields
-are excluded from build and packaging approval digests.
+bytes again, and replaces it relative to that directory, its mode and owner
+kept, in the manifest's written form (`ProjectManifestFormat`). These display
+fields are excluded from build and packaging approval digests.
 
 Deleting a project (owner, 2026-10-29: dangerous, but the feature exists
 and the agent may do it, under the modes as they are) is `projectDelete`
@@ -3476,8 +3851,10 @@ project's history for the user: commit on your own once a change builds
 unless the user drives git, `git_commit` with `all`, messages, `.gitignore`,
 `git_init` for a project without a repository, push only when asked (a
 first one with `url`, to an empty repository apelin_git_create_repository
-made as the user asked, or one the user made; no squash), and github.com
-through Sign In with GitHub. `apelin-package-repository` is the package
+made as the user asked, or one the user made), a squash or a forced push
+only when the user explicitly asks for it (git_squash, git_push with
+force_with_lease, owner, 2026-10-31), and github.com through Sign In
+with GitHub. `apelin-package-repository` is the package
 repository (Distribution repository, below): its layout after
 owngoal-packages, the control fields a package needs, how Publish adds a
 release, and keeping old versions in check. `apelin-icli` (owner,
@@ -3743,6 +4120,41 @@ fragment. The chat's ListViewKit keeps its own update mechanism.
   nothing: the reader reads it and taps Send, so a link from anywhere can
   only suggest a message (≤ 32 KB, no control character but a line break or
   a tab, else `unknown`; without `prompt` the composer is empty).
+  `apelin://import?url=<address>&branch=<name>` (owner, 2026-10-31, issue
+  #31) is Open in Apelin for a Git repository: a README's button
+  (`Documents/Site/open/badge.svg`) links to
+  `https://owngoal-dev.github.io/Apelin/open/?url=…&branch=…`, a static
+  page (`open.js`, the same checks, no markup from the query) that shows
+  the repository, opens this link, says how to install Apelin and copies
+  the address. `url` starts `https://`, in lower case, with a host and a
+  path, printable ASCII, no user, password, query or fragment, ≤ 2 KB
+  (`isRepositoryAddress`); the host is a public name spelt as it is shown
+  — no `%` in it, no address literal, no name only a local network
+  resolves (`localhost`, no dot, `.local`, `.lan`, `.internal`,
+  `.home.arpa` …), a port of 1–65535 (`isPublicHostName`): a web page's
+  link never aims the device's git at its own network;
+  `branch` is optional and a name `git check-ref-format --branch` takes,
+  no white space, format, default-ignorable or blank-drawing character
+  (`isBranchName`); each is named at most once, a value whose escapes do
+  not decode is none, `+` is a plus, anything else is ignored, and a link
+  that fails is `invalidImport` ("names no HTTPS repository Apelin can
+  import"). The app
+  asks first (`RepositoryImportController`, a form sheet): the address,
+  the branch, any project whose `.git/config` origin is the same
+  repository (`RepositoryImportPlan.comparable`), to open instead, and the
+  name, the repository's own (`suggestedName`), never one a project has.
+  Import is `projectCreate` of the empty workspace, then `gitCloneInto`
+  followed on the progress card (`RepositoryImporter`); success opens the
+  project on a new conversation and sends nothing, and a failure or
+  Cancel takes that project away with `projectDelete`, once the clone has
+  ended — after 15 s of a clone that will not end, it is left and the user
+  told which. A failure the import reports after a Cancel is said, never
+  hidden behind the cancel, and the sheet never opens over an alert. A private
+  repository's `authenticationRequired` points to Sign In with GitHub for
+  github.com, else to a token given to the agent. One import at a time
+  (`RepositoryImportFlow`): a link for the one open does nothing more,
+  another says an import is under way. An import link waits through the
+  welcome rather than being dropped.
   `apelin://` opens the app as it is. The format is fixed — the agent
   writes these links. `ApelinLink`
   (`Widgets/Shared/ApelinLink.swift`, Foundation only; `Tests/ApelinLink` in

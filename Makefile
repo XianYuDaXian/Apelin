@@ -65,6 +65,7 @@ FORMAT_STRINGS_CHECK := $(ROOT_DIR)/Scripts/check-format-strings.py
 TRANSLATIONS_CHECK := $(ROOT_DIR)/Scripts/check-translations.py
 CATALOG_KEYS_CHECK := $(ROOT_DIR)/Scripts/check-catalog-keys.py
 SHELL_DELETES_CHECK := $(ROOT_DIR)/Scripts/check-shell-deletes.py
+PERSISTED_READS_CHECK := $(ROOT_DIR)/Scripts/check-persisted-reads.py
 SYMBOL_CHECK        := $(ROOT_DIR)/Scripts/check-symbol-availability.py
 RPATH_CHECK         := $(ROOT_DIR)/Scripts/check-rpath-dependencies.py
 # The device harness: console scripts and suites on a vphone or a device,
@@ -248,7 +249,7 @@ check:
 	@test -d "$(PROJECT)" || { echo "error: Apelin.xcodeproj is missing" >&2; exit 66; }
 	@for script in "$(DEB_PACKAGER)" "$(DEVICE_INSTALLER)" "$(VERSION_APPLIER)" "$(XCODEBUILD_WRAPPER)" \
 		"$(LICENSE_COLLECTOR)" "$(ACCESSIBILITY_CHECK)" "$(STALE_STRINGS_CHECK)" "$(FORMAT_STRINGS_CHECK)" "$(TRANSLATIONS_CHECK)" \
-		"$(CATALOG_KEYS_CHECK)" "$(SHELL_DELETES_CHECK)" \
+		"$(CATALOG_KEYS_CHECK)" "$(SHELL_DELETES_CHECK)" "$(PERSISTED_READS_CHECK)" \
 		"$(SYMBOL_CHECK)" "$(RPATH_CHECK)" "$(SCHEMA_FIXTURES_CHECK)" "$(TEMPLATES_CHECK)" \
 		"$(EXTENSIONS_PACKAGER)" "$(AGENT_TOOLS_BUILDER)" "$(DEVICE_TOOL)"; do \
 		test -x "$$script" || { echo "error: $${script#$(ROOT_DIR)/} is not executable" >&2; exit 66; }; \
@@ -392,6 +393,9 @@ check:
 	@# An empty variable in a removed path removes from /, the bootstrap's
 	@# root on roothide: every recursive rm checks its variables with :?.
 	@"$(SHELL_DELETES_CHECK)" "$(ROOT_DIR)"
+	@# One saved entry that does not decode never takes the others with it,
+	@# nor turns into an empty state the next save writes (issue #33).
+	@"$(PERSISTED_READS_CHECK)" "$(ROOT_DIR)"
 
 # The Mac half of "where things get tested": what can run without a device.
 # RoothideRoot against libroothide's own name rule, ExecutableWatch against a
@@ -451,6 +455,9 @@ xcrun --sdk macosx swiftc -swift-version 5 \
 	"$$harness_dir/composer-drop" && \
 	xcrun --sdk macosx swiftc -swift-version 5 \
 		"$(ROOT_DIR)/Apelin/Interface/Settings/Logs/JournalFiles.swift" \
+		"$(ROOT_DIR)/Apelin/Interface/Settings/Logs/JournalLines.swift" \
+		"$(ROOT_DIR)/Packages/ApelinKit/Sources/ApelinCore/LogText.swift" \
+		"$(ROOT_DIR)/Packages/ApelinAgent/Sources/ApelinAgent/Journal/DiagnosticJournal.swift" \
 		"$(ROOT_DIR)/Tests/Journal/main.swift" \
 		-o "$$harness_dir/journal" && \
 	"$$harness_dir/journal" && \
@@ -467,6 +474,7 @@ xcrun --sdk macosx swiftc -swift-version 5 \
 	xcrun --sdk macosx swiftc -swift-version 5 \
 		"$(ROOT_DIR)/Widgets/Shared/ApelinLink.swift" \
 		"$(ROOT_DIR)/Widgets/Shared/ChatWidgetSnapshot.swift" \
+		"$(ROOT_DIR)/Apelin/Interface/Projects/RepositoryImport/RepositoryImportPlan.swift" \
 		"$(ROOT_DIR)/Tests/ApelinLink/main.swift" \
 		-o "$$harness_dir/apelin-link" && \
 	"$$harness_dir/apelin-link" && \

@@ -11,6 +11,9 @@ extension ToolRunner {
     func gatherFacts(_ tool: InvocationFacts.Tool, arguments: JSONValue) async throws -> InvocationFacts {
         guard case let .local(name) = tool else { return InvocationFacts(tool: tool) }
         var facts = InvocationFacts(tool: tool)
+        if GitRemoteTools.namingRemote.contains(name) {
+            try GitRemoteTools.checkName(arguments.argNonEmptyString("remote"))
+        }
         switch name {
         case .fileWrite, .fileEdit, .fileCreate:
             let path = try arguments.requireString("path")
@@ -74,6 +77,12 @@ extension ToolRunner {
             // An address that would never be fetched is refused before
             // anyone is asked about it.
             _ = try WebFetch.target(arguments.requireString("url"))
+        case .gitRemoteSet:
+            try GitRemoteTools.checkSet(arguments)
+        case .gitResetToRemote:
+            facts.resetToRemote = try await resetToAsk(arguments)
+        case .gitRemoteRemove:
+            try GitRemoteTools.checkName(arguments.argNonEmptyString("name"))
         case .gitPush:
             // The branch the card names is the one pushed: an omitted one is
             // read now and sent explicitly.
@@ -87,11 +96,24 @@ extension ToolRunner {
                 )))
                 branch = status?.branch
             }
-            facts.push = GitPushTarget(
+            var target = GitPushTarget(
                 remote: arguments.argNonEmptyString("remote") ?? "origin",
                 branch: branch,
                 url: arguments.argNonEmptyString("url"),
             )
+            // A forced push asks what the remote has first, and is one only
+            // when the remote's branch would lose commits to it.
+            if arguments.argBool("force_with_lease") == true {
+                switch try await forcePush(target) {
+                case let .force(force):
+                    facts.forcePush = force
+                case let .unforced(why):
+                    target.unforced = why
+                }
+            }
+            facts.push = target
+        case .gitSquash:
+            facts.squash = try await squashPlan(arguments)
         case .gitSetAuthor:
             facts.gitSettings = "the commit author"
         case .gitSaveCredential:

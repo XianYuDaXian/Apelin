@@ -81,6 +81,15 @@ public enum ApprovalDetail: Sendable, Hashable, Codable {
     /// A push: the remote and the local branch it sends, resolved before
     /// asking (nil only when no branch is checked out).
     case gitPush(remote: String, branch: String?)
+    /// A forced push: the remote's branch it overwrites, the commit there
+    /// it replaces and the one it sends, and the commits that leave the
+    /// branch. Asked in every mode, never granted for the session; the host
+    /// lets through only the push it names, with that lease, once.
+    case forcePush(ForcePushApproval)
+    /// A squash of the project's own commits: the branch, each commit it
+    /// combines and the new message. Never granted for the session; the
+    /// host lets through only the squash it names, once.
+    case squash(SquashApproval)
     /// A change to the device's git settings: the author, or the credential
     /// saved for a host (never its token).
     case gitSettings(summary: String)
@@ -129,6 +138,11 @@ public enum ApprovalDetail: Sendable, Hashable, Codable {
     /// mode, never granted for the session; the host lets through only the
     /// call it names, once.
     case screenControl(ScreenControlApproval)
+    /// The project made exactly a remote's branch, discarding local work:
+    /// the state it was read in and what is lost. Asked in every mode,
+    /// never granted for the session; the host lets through only the
+    /// reset it names, once.
+    case resetToRemote(ResetToRemoteApproval)
 }
 
 /// What a card asks while Ask Before Using the Screen is on (owner,

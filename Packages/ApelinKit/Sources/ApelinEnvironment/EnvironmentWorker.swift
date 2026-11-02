@@ -162,6 +162,12 @@ public final class EnvironmentWorker: @unchecked Sendable {
             await WorkerMain.serve(GitCommitRequest.self, request) { [self] in try git.commit($0) }
         case .gitInit:
             await WorkerMain.serve(GitInitRequest.self, request) { [self] in try git.initialize($0) }
+        case .gitRemoteList:
+            await WorkerMain.serve(GitRemoteListRequest.self, request) { [self] in try git.remotes($0) }
+        case .gitRemoteSet:
+            await WorkerMain.serve(GitRemoteSetRequest.self, request) { [self] in try git.setRemote($0) }
+        case .gitRemoteRemove:
+            await WorkerMain.serve(GitRemoteRemoveRequest.self, request) { [self] in try git.removeRemote($0) }
         case .distributionRepositoryList:
             await WorkerMain.serve(DistributionRepositoryListRequest.self, request) { [self] in
                 try await distribution.list($0)
@@ -242,6 +248,16 @@ public final class EnvironmentWorker: @unchecked Sendable {
                 let target = try git.preparePush(typed)
                 return { reporter, _ in try reporter.emit("result", self.git.push(target, reporter: reporter)) }
             }
+        case .gitResetPreview:
+            await startTask(GitResetPreviewRequest.self, request, resultInState: true) { [self] typed, _ in
+                let target = try git.prepareResetPreview(typed)
+                return { reporter, _ in try reporter.emit("result", self.git.resetPreview(target, reporter: reporter)) }
+            }
+        case .gitResetToRemote:
+            await startTask(GitResetToRemoteRequest.self, request, resultInState: true) { [self] typed, _ in
+                let target = try git.prepareReset(typed)
+                return { reporter, _ in try reporter.emit("result", self.git.reset(target, typed, reporter: reporter)) }
+            }
         case .gitSettings:
             await WorkerMain.serve(GitSettingsRequest.self, request) { [self] _ in try git.settings() }
         case .gitAuthorSet:
@@ -254,6 +270,8 @@ public final class EnvironmentWorker: @unchecked Sendable {
             await WorkerMain.serve(GitRepositoryCreateRequest.self, request) { [self] in try await repositories.create($0) }
         case .gitIssueCreate:
             await WorkerMain.serve(GitIssueCreateRequest.self, request) { [self] in try await issues.create($0) }
+        case .gitSquash:
+            await WorkerMain.serve(GitSquashRequest.self, request) { [self] in try git.squash($0) }
         case .transferInspect:
             await WorkerMain.serve(TransferInspectRequest.self, request) { [self] in
                 try transfers.inspect($0, descriptors: request.descriptors)

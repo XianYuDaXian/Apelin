@@ -234,7 +234,7 @@ struct ChatTranscript {
                 if let approvalID = payload?["approvalID"]?.stringValue {
                     let rowID = Self.rowID(approvalID)
                     approvalIDs[rowID] = approvalID
-                    let title = Self.toolTitle(
+                    let title = ApprovalCardText.title(payload) ?? Self.toolTitle(
                         payload?["tool"]?.stringValue ?? "",
                         arguments: payload?["arguments"]?.stringValue,
                     )
@@ -600,6 +600,11 @@ struct ChatTranscript {
         case .gitPull: return String(localized: "Pull from the remote")
         case .gitPush: return String(localized: "Push to the remote")
         case .gitClone: return String(localized: "Import the repository")
+        case .gitSquash: return String(localized: "Squash commits")
+        case .gitRemoteList: return String(localized: "List the remotes")
+        case .gitRemoteSet: return String(localized: "Set a remote")
+        case .gitRemoteRemove: return String(localized: "Remove a remote")
+        case .gitResetToRemote: return String(localized: "Reset to the remote")
         case .gitReadSettings: return String(localized: "Read the Git settings")
         case .gitSetAuthor: return String(localized: "Set the commit author")
         case .gitSaveCredential: return String(localized: "Save a Git credential")

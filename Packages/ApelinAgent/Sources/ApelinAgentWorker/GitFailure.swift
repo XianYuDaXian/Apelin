@@ -23,11 +23,15 @@ enum GitFailure {
         message: String,
         reason: String?,
         host: String?,
+        forced: Bool = false,
     ) -> GitToolFailure {
         let detail = message.isEmpty ? (code?.rawValue ?? "no reason given") : message
-        var text = "\(operation) failed: \(detail)"
+        var text = "\(forced ? "forced " : "")\(operation) failed: \(detail)"
         if !text.hasSuffix(".") {
             text += "."
+        }
+        if forced, let hint = forcedHint(code: code, reason: reason) {
+            return GitToolFailure(message: text + " " + hint)
         }
         if let hint = hint(operation, code: code, message: message, reason: reason, host: host) {
             text += " " + hint
@@ -55,8 +59,13 @@ enum GitFailure {
             return "This project has no repository yet: make one with git_init, then commit with git_commit and all: true."
         }
         if reason == ApelinError.Reason.noSuchRemote.rawValue {
-            guard operation == "git push" else { return nil }
+            guard operation == "git push" else {
+                return "The project has no remote of that name: git_remote_list lists the ones it has, and git_remote_set adds one at the address the user gave you."
+            }
             return "The project has no such remote yet: ask the user whether to create a GitHub repository for it with apelin_git_create_repository, and with which owner, name and visibility, or for the HTTPS address of an empty repository they made (no README, licence or .gitignore); then git_push with url."
+        }
+        if reason == ApelinError.Reason.headChanged.rawValue {
+            return "The branch moved after the user saw what would be squashed, so nothing was squashed. Tell the user; to squash it still, call git_squash again, which reads the commits again and asks again."
         }
         if reason == ApelinError.Reason.remoteURLDiffers.rawValue {
             // The message says where the remote points and what to do instead.
@@ -77,11 +86,27 @@ enum GitFailure {
         case "git pull":
             return "Pull only fast-forwards: the branch has diverged from its upstream, or a local change is in the way. Tell the user; do not force it."
         case "git push":
-            return "The remote has commits this branch does not. Fetch and pull first (pull only fast-forwards); never force the push."
+            return "The remote has commits this branch does not. Fetch and pull first (pull only fast-forwards), then merge or rebase as the user agrees. A refused push is never a reason to force it: force_with_lease is only for a forced push the user explicitly asked for."
+        case "git reset to remote":
+            return "Nothing was changed. Call git_reset_to_remote again, so the user sees what it would discard now and decides again."
         case "git clone":
             return "The workspace already has a repository, or files with the same names as the repository's. Tell the user; do not delete their files to make room."
         default:
             return nil
+        }
+    }
+
+    /// A forced push's refusal: the lease that did not hold, or the
+    /// remote's own no. Nothing was pushed either way.
+    private static func forcedHint(code: ApelinError.Code?, reason: String?) -> String? {
+        switch reason {
+        case ApelinError.Reason.remoteChanged.rawValue:
+            return "The remote's branch changed after the user approved overwriting it, so nothing was pushed. Tell the user what it is at now; to overwrite it still, call git_push with force_with_lease again, which fetches and asks them again with what would be lost now."
+        case ApelinError.Reason.localChanged.rawValue:
+            return "This branch moved after the user approved the forced push, so nothing was pushed. Tell the user; to push it still, call git_push with force_with_lease again, which asks them again with the commit sent now."
+        default:
+            guard code == .conflict else { return nil }
+            return "The remote refused the forced push in its own words above, and nothing was pushed: a protected branch, for one, is the user's to change on the remote. Tell the user what blocks it; never try to get around it."
         }
     }
 }

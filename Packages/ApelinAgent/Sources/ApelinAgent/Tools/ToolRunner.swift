@@ -4,6 +4,7 @@ import enum ApelinCore.MemoryStoreError
 import enum ApelinProtocol.AgentToolName
 import struct ApelinProtocol.ApelinError
 import enum ApelinProtocol.BuildBootstrap
+import struct ApelinProtocol.GitPushLease
 import Foundation
 import KWWKAgent
 import KWWKAI
@@ -34,6 +35,9 @@ actor ToolRunner {
     let webFetch: WebFetch
     /// The agent tool extensions' sessions, opened as their tools are called.
     let toolExtensions: ToolExtensionSessions
+    /// Hears how a call was refused, stopped or ran out of time, where that
+    /// is decided, for the session's diagnostic journal.
+    let journal: SessionJournal?
     private var notices = UserNotices()
 
     init(
@@ -49,6 +53,7 @@ actor ToolRunner {
         readOnlyRoots: ReadOnlyRoots = .none,
         record: (@Sendable (AgentSessionEvent) async throws -> Void)? = nil,
         webFetch: WebFetch = .shared,
+        journal: SessionJournal? = nil,
     ) {
         self.sessionID = sessionID
         self.project = project
@@ -62,6 +67,7 @@ actor ToolRunner {
         self.readOnlyRoots = readOnlyRoots
         self.record = record
         self.webFetch = webFetch
+        self.journal = journal
         toolExtensions = ToolExtensionSessions(backend: backend)
     }
 
@@ -159,7 +165,25 @@ actor ToolRunner {
 
     // MARK: - Gate
 
+    /// Runs one call; one that throws is noted in the journal for what it
+    /// came to (`ToolCallOutcome`), unless where it was decided noted it.
     func run(
+        _ tool: InvocationFacts.Tool,
+        toolCallID: String,
+        arguments: JSONValue,
+        cancellation: CancellationHandle?,
+        mcp: (@Sendable (JSONValue) async throws -> AgentToolResult)?,
+    ) async throws -> AgentToolResult {
+        do {
+            return try await gated(tool, toolCallID: toolCallID, arguments: arguments, cancellation: cancellation, mcp: mcp)
+        } catch {
+            let stopped = cancellation?.isCancelled == true || Task.isCancelled
+            journal?.note(ToolCallOutcome.of(error, stopped: stopped), for: toolCallID)
+            throw error
+        }
+    }
+
+    private func gated(
         _ tool: InvocationFacts.Tool,
         toolCallID: String,
         arguments: JSONValue,
@@ -220,6 +244,7 @@ actor ToolRunner {
         case let .allow(allowed):
             evidence = allowed
         case let .deny(reason):
+            journal?.note(ToolCallOutcome(.denied, "the approval policy refused it: \(reason)"), for: toolCallID)
             throw ToolDeniedError(message: "refused: \(reason)\(readOnlyNote(tool))")
         case let .ask(reason, detail):
             evidence = try await ask(reason, detail)
@@ -301,6 +326,11 @@ actor ToolRunner {
         case .approve:
             return .user(requestID: request.id, fingerprint: fingerprint)
         case let .deny(reason):
+            // a stop while it waited, the run's or the task's, is the stop's,
+            // as the wrapper notes it
+            if cancellation?.isCancelled != true, !Task.isCancelled {
+                journal?.note(ToolCallOutcome(.denied, "the user declined it"), for: toolCallID)
+            }
             throw ToolDeniedError(message: "the user declined this call\(reason.map { ": \($0)" } ?? "")")
         }
     }
@@ -314,12 +344,16 @@ actor ToolRunner {
     /// feedback, nor for a repository made on GitHub or an issue opened on
     /// one, nor for a project's deletion, which cannot be undone, nor for
     /// packages published to the user's package repository, nor for a use
-    /// of the screen while Ask Before Using the Screen is on.
+    /// of the screen while Ask Before Using the Screen is on, nor for a
+    /// forced push, which takes commits off the remote's branch, nor for a
+    /// squash, which replaces the project's own, nor for a reset to a
+    /// remote, which discards work.
     static func allowsSessionScope(_ tool: InvocationFacts.Tool, detail: ApprovalDetail) -> Bool {
         switch tool {
         case .local(.packageRemove), .local(.gitPush), .local(.toolchainSetup), .local(.sdkImport),
              .local(.skillSave), .local(.skillRemove), .local(.feedbackSend), .local(.gitCreateRepository),
-             .local(.projectDelete), .local(.packagePublish), .local(.feedbackEdit), .local(.gitCreateIssue):
+             .local(.projectDelete), .local(.packagePublish), .local(.feedbackEdit), .local(.gitCreateIssue),
+             .local(.gitSquash), .local(.gitResetToRemote):
             return false
         default:
             break
@@ -327,7 +361,7 @@ actor ToolRunner {
         switch detail {
         case .gitSettings, .descriptionChanged, .toolchainSetup, .sdkImport, .otherProject, .externalBuild, .skillChange,
              .projectRename, .rootCommand, .feedback, .feedbackEdit, .repositoryCreate, .issueCreate, .projectDelete,
-             .packagePublish, .screenControl:
+             .packagePublish, .screenControl, .forcePush, .squash, .resetToRemote:
             return false
         case .none, .command, .packageRemoval, .gitPush:
             return true
@@ -490,13 +524,17 @@ actor ToolRunner {
                 throw ToolArgumentError("shell_run needs argv, command or script")
             }
             let timeout = min(1800, max(1, arguments.argInt("timeout_seconds") ?? 120))
-            return try await json(backend.runCode(RunCodeRequest(
+            let ran = try await backend.runCode(RunCodeRequest(
                 context: context,
                 invocation: invocation,
                 workingDirectory: facts.workingDirectory,
                 timeoutSeconds: timeout,
                 asRoot: facts.runsAsRoot,
-            )))
+            ))
+            if ran.timedOut == true {
+                journal?.note(ToolCallOutcome(.timedOut, "killed after \(timeout) s"), for: context.toolCallID)
+            }
+            return json(ran)
 
         case .projectBuild:
             // A workspace has no build description: its build runs its own
@@ -679,12 +717,21 @@ actor ToolRunner {
             return try await json(name == .gitFetch ? backend.gitFetch(request) : backend.gitPull(request))
 
         case .gitPush:
-            return try await json(backend.gitPush(GitRemoteToolRequest(
+            // Forced only with the lease the card named, which the host
+            // holds the request to.
+            let force = facts.forcePush
+            var pushed = try await backend.gitPush(GitRemoteToolRequest(
                 context: context,
                 remote: arguments.argNonEmptyString("remote"),
                 branch: facts.push?.branch,
-                url: facts.push?.url,
-            )))
+                url: force?.url ?? facts.push?.url,
+                lease: force.map { GitPushLease(expectedCommit: $0.expectedCommit, localCommit: $0.localCommit) },
+            ))
+            pushed.note = facts.push?.unforced ?? force.map(Self.forcedPushNote)
+            return json(pushed)
+
+        case .gitSquash:
+            return try await json(squash(facts.squash, context: context))
 
         case .gitClone:
             return try await json(backend.gitClone(GitCloneToolRequest(
@@ -692,6 +739,29 @@ actor ToolRunner {
                 url: arguments.requireString("url"),
                 branch: arguments.argNonEmptyString("branch"),
             )))
+
+        case .gitRemoteList:
+            return try await json(backend.gitRemoteList(GitRemoteListToolRequest(context: context)))
+
+        case .gitRemoteSet:
+            return try await json(backend.gitRemoteSet(GitRemoteSetToolRequest(
+                context: context,
+                name: arguments.requireString("name"),
+                url: arguments.requireString("url"),
+            )))
+
+        case .gitRemoteRemove:
+            return try await json(backend.gitRemoteRemove(GitRemoteRemoveToolRequest(
+                context: context,
+                name: arguments.requireString("name"),
+            )))
+
+        case .gitResetToRemote:
+            // The reset the card named, held to the state it showed.
+            guard let reset = facts.resetToRemote else {
+                throw ToolDeniedError(message: "what the reset would discard could not be read")
+            }
+            return try await json(backend.gitResetToRemote(GitResetToolRequest(context: context, approval: reset)))
 
         case .gitReadSettings:
             return try await json(backend.gitSettings(context: context))

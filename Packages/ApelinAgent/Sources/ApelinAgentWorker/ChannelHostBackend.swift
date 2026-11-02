@@ -116,6 +116,7 @@ public struct ChannelHostBackend: AgentHostBackend {
                 : response.stderr,
             truncated: response.truncated,
             durationMilliseconds: response.durationMilliseconds,
+            timedOut: response.timedOut,
         )
     }
 
@@ -564,7 +565,9 @@ public struct ChannelHostBackend: AgentHostBackend {
     }
 
     public func gitFetch(_ request: GitRemoteToolRequest) async throws -> GitTaskToolResponse {
-        try await gitTask("git fetch") { try await service.gitFetch(projectID: project.id, remote: request.remote) }
+        try await gitTask("git fetch") {
+            try await service.gitFetch(projectID: project.id, remote: request.remote, branch: request.branch)
+        }
     }
 
     public func gitPull(_ request: GitRemoteToolRequest) async throws -> GitTaskToolResponse {
@@ -573,12 +576,26 @@ public struct ChannelHostBackend: AgentHostBackend {
 
     public func gitPush(_ request: GitRemoteToolRequest) async throws -> GitTaskToolResponse {
         let host = request.url.flatMap { URLComponents(string: $0)?.host }
-        return try await gitTask("git push", host: host) {
+        return try await gitTask("git push", host: host, forced: request.lease != nil) {
             try await service.gitPush(GitPushRequest(
                 projectID: project.id,
                 remote: request.remote,
                 branch: request.branch,
                 url: request.url,
+                forceWithLease: request.lease,
+            ))
+        }
+    }
+
+    public func gitSquash(_ request: GitSquashToolRequest) async throws -> GitSquashResponse {
+        try await git("git squash") {
+            try await service.gitSquash(GitSquashRequest(
+                projectID: project.id,
+                base: request.base,
+                count: request.count,
+                message: request.message,
+                expectedHead: request.expectedHead,
+                preview: request.preview ? true : nil,
             ))
         }
     }
@@ -747,7 +764,12 @@ public struct ChannelHostBackend: AgentHostBackend {
 
     /// One git request; a refusal comes back as a `GitToolFailure` that says
     /// what to do about it.
-    private func git<T>(_ operation: String, host: String? = nil, _ body: () async throws -> T) async throws -> T {
+    func git<T>(
+        _ operation: String,
+        host: String? = nil,
+        forced: Bool = false,
+        _ body: () async throws -> T,
+    ) async throws -> T {
         do {
             return try await body()
         } catch let error as ApelinError {
@@ -757,6 +779,7 @@ public struct ChannelHostBackend: AgentHostBackend {
                 message: error.message,
                 reason: error.reason?.rawValue,
                 host: host,
+                forced: forced,
             )
         }
     }
@@ -766,9 +789,21 @@ public struct ChannelHostBackend: AgentHostBackend {
     private func gitTask(
         _ operation: String,
         host: String? = nil,
+        forced: Bool = false,
         _ start: () async throws -> TaskHandle,
     ) async throws -> GitTaskToolResponse {
-        let handle = try await git(operation, host: host, start)
+        try await Self.gitResult(gitTaskResult(operation, host: host, forced: forced, start))
+    }
+
+    /// The `result` a git task reported, read to its final `state`, or a
+    /// failure in words.
+    func gitTaskResult(
+        _ operation: String,
+        host: String? = nil,
+        forced: Bool = false,
+        _ start: () async throws -> TaskHandle,
+    ) async throws -> ApelinCore.JSONValue? {
+        let handle = try await git(operation, host: host, forced: forced, start)
         var result: ApelinCore.JSONValue?
         var reason: String?
         let end = try await read(handle) { event in
@@ -781,14 +816,14 @@ public struct ChannelHostBackend: AgentHostBackend {
         }
         switch end.state {
         case .succeeded:
-            return Self.gitResult(result)
+            return result
         case .cancelled:
             throw GitToolFailure(message: "\(operation) was cancelled.")
         case .interrupted:
             throw GitToolFailure(message: "\(operation) was cut off when the session host stopped; check git_status, then run it again if it is still needed.")
         default:
             let (code, message) = GitFailure.split(end.message)
-            throw GitFailure.describe(operation, code: code, message: message, reason: reason, host: host)
+            throw GitFailure.describe(operation, code: code, message: message, reason: reason, host: host, forced: forced)
         }
     }
 
@@ -805,6 +840,10 @@ public struct ChannelHostBackend: AgentHostBackend {
         if case let .bool(flag)? = json["upToDate"] {
             upToDate = flag
         }
+        var forced: Bool?
+        if case let .bool(flag)? = json["forced"] {
+            forced = flag
+        }
         return GitTaskToolResponse(
             remote: json["remote"]?.stringValue,
             branch: json["branch"]?.stringValue,
@@ -813,7 +852,23 @@ public struct ChannelHostBackend: AgentHostBackend {
             to: json["to"]?.stringValue,
             upToDate: upToDate,
             updated: updates,
+            comparison: try? json["comparison"]?.decode(GitBranchComparison.self),
+            forced: forced,
+            projectFile: json["projectFile"]?.stringValue.flatMap(GitProjectFile.init(rawValue:)).flatMap(projectFileNote),
         )
+    }
+
+    /// What an import or a reset did to apelin-project.json, for the model;
+    /// nil when the project's own stayed.
+    static func projectFileNote(_ file: GitProjectFile) -> String? {
+        switch file {
+        case .repository:
+            "apelin-project.json is now the repository's, as it is: the project is what it describes, with its projectID. A build of that description asks the user first in Strict mode."
+        case .repositoryWithProjectID:
+            "apelin-project.json is now the repository's, with this project's own projectID in place of the one it carried, so git_status shows it changed: commit it with your next change. The project is what it describes; a build of that description asks the user first in Strict mode."
+        case .project:
+            nil
+        }
     }
 
     /// At most `bytes` of `text`, cut at a line end where one is near.

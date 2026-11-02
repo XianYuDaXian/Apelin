@@ -177,8 +177,100 @@ console now goes on after a restart only past a successful respring.
   which clears them.
 - Only the `ApelinLoaded` marker is checked; whether the template's hook
   ran (`ApelinHooked`) is not part of the evidence.
+- Procursus' PreferenceLoader 2.2.8 on the iOS 26.4 iPhone vphone added no
+  row for an installed pane, neither in Settings' list nor under Apps, so
+  a Settings row and its icon are seen only on an older iOS.
 
 ## Still to run on the owner's devices
+
+- [ ] Each conversation's diagnostic journal (2026-10-31, issue #27,
+      AGENTS.md ▸ Agent sessions; only the Mac's `SessionJournalTests`,
+      `LogRedactionTests` and `Tests/Journal` have run). After `make
+      vphone`, on the iPhone and the iPad vphone: in a project's chat, a
+      call that runs (file_read), one declined under Strict, one stopped
+      while it waits, and Compact…; Settings ▸ About ▸ Logs lists the chat
+      under Chats by its name, its page shows the Session, Model, Tool,
+      Approval and Compaction lines, a call ID typed in the search field
+      finds its `Started` and `Ended` lines (succeeded, denied, cancelled),
+      and Share sends `apelin-agent-<session>.log` with no key, home path
+      or jbroot in it. `kill-host` while a shell_run sleeps, then a message
+      in the same chat: the call's `Ended … status=interrupted` line. On a
+      Copilot GPT model where #26's compaction fails, the Compaction line
+      says `Failed … status=400` with the provider's words, and the app's
+      journal for that launch has the `Conversation` line with the session.
+
+- [ ] `apelin-project.json` in its written form (2026-10-31, issue #30,
+      AGENTS.md ▸ The written form; only the Mac harness has run). On a
+      vphone with the package installed (`make vphone`): a project with a
+      one-line manifest (rename one made before this change, or write it
+      on one line from the terminal) builds, its build log says
+      "formatted apelin-project.json", the file is two spaces a level,
+      every value and its order as before, mobile still owns it, and a second
+      build leaves it alone; under Strict that first build asks nothing
+      the template's digests did not. A new project, a workspace, a
+      rename and apelin_project_set_environment each write it formatted.
+
+- [ ] Open in Apelin for a repository (2026-10-31, issue #31; only the
+      Mac harness's `Tests/ApelinLink` and a node run of the landing
+      page's checks have run). After `make vphone` (iPhone and iPad):
+      from a README, `https://owngoal-dev.github.io/Apelin/open/?url=…`
+      shows the repository and Open in Apelin opens the sheet filled in,
+      with the app cold and running; Import makes the project, clones it
+      on the progress card and opens it on a new conversation that sends
+      nothing; Cancel on the sheet makes nothing and Cancel on the card
+      leaves no project; `&branch=` checks that branch out; a private
+      github.com repository without a sign-in offers Settings ▸ Git and
+      leaves no project; a malformed link says it names no repository; a
+      second tap of the same link brings nothing new up and another
+      link's says an import is under way; a repository imported before
+      offers Open; a link during the welcome is shown once it finishes;
+      the page without Apelin installed explains how to get it and copies
+      the address.
+
+- [ ] A forced push with a lease (2026-10-31, issue #29; the Mac only so
+      far: `GitLeaseTests`, `GitForcePushServiceTests`, the session host's
+      checks, `ForcePushToolTests`, `ForcePushBackendTests`, the transcript
+      harness's `ForcePushCardCheck`). On a device: `i2-git-remote`'s two
+      new lease refusals; then, with a GitHub account and a scratch
+      repository whose `main` has a commit the project lacks, a chat asked
+      to force-push `main` there shows the Force-push to the remote card in
+      Relaxed and Full as in Strict, naming the commit replaced, the one
+      sent and the commits lost; Approve overwrites `main` on GitHub; a
+      commit pushed to the scratch repository from elsewhere between the
+      card and Approve ends with nothing pushed and the agent asking again;
+      a protected `main` answers in GitHub's words.
+- [ ] A squash (2026-10-31; the Mac only so far: `GitSquashTests`,
+      `GitSquashServiceTests`, the session host's checks, `SquashToolTests`,
+      `SquashBackendTests`, `SquashCardCheck`). On a device:
+      `i2-git-commit`'s two squash refusals; a chat asked to squash its
+      project's last three commits shows the Squash commits card in Strict
+      with each commit and the new message, and squashes on Approve with
+      the files unchanged; in Relaxed it squashes without a card; after a
+      push, the card says publishing it needs a forced push.
+
+- [ ] Remotes, "remote wins" and a repository's own manifest (2026-10-31,
+      issue #32; the Mac only so far: `GitRemoteSetTests`,
+      `GitImportManifestTests`, `GitResetTests`, `GitResetServiceTests`,
+      `GitRemoteToolTests`, `GitResetToolTests`, the session host's
+      `ResetToRemoteChecks`). On the iPhone vphone, `make device-run
+      SCRIPT=i2-git-remote` (the remote list, set and remove, the refusals
+      before any network, a preview of origin that is up to date). In a
+      project with history and no remote, asked to make it match
+      `owngoal-dev/Pineora` and overwrite what is local: the agent adds the
+      remote with git_remote_set, git_reset_to_remote's card names the
+      commits lost, the unrelated histories and the backup branch, and asks
+      in Strict, Relaxed and Full alike; after Approve the folder is the
+      repository's, `apelin-project.json` keeps the project's projectID (git
+      shows it changed), the project and its conversations are still there,
+      and the `apelin-backup/…` branch holds the old work. New Project with
+      that address: the import succeeds and the sidebar shows the
+      repository's name for it.
+
+- [ ] A preference bundle's Settings row with its icon (2026-10-30, issue
+      #19, `wiki.qaq.apelin.dev.preferences` 0.1.3), on a device where
+      PreferenceLoader shows panes (the owner's iOS 17.3.1 iPhone): a new
+      project from the template, built and installed, shows the plate
+      beside its name in Settings.
 
 - [ ] Deleting a conversation (2026-10-30, AGENTS.md ▸ The root
       and ▸ Project display names and external project actions; only the
@@ -898,7 +990,9 @@ console now goes on after a restart only past a successful respring.
       failed: Anthropic compaction returned no summary" —: a chat past 55k
       tokens compacts, from the menu and on its own at 75 % of the window,
       with no such error, kwwk's own summary where Anthropic's came back
-      empty.
+      empty. And with ChatGPT Codex (kwwk 0.1.109, issue #26, which failed
+      both ways with `{"detail":"Unsupported parameter: metadata"}`): a long
+      chat on a Codex model compacts from the menu and on its own.
 - [ ] A program the agent builds and runs itself (2026-10-29, AGENTS.md ▸
       the system prompt, `apelin-device-executables`; none has run on a
       device, the skill quotes a field conversation). On the iOS 26.4 and
@@ -952,6 +1046,17 @@ console now goes on after a restart only past a successful respring.
       then `icli app launch <bundle id>`, through shell_run as mobile
       (Strict asks for each), and `icli app running` shows a new pid
       running the new build.
+- [ ] OpenCode Go and Zen, and Kimi For Coding Global (2026-10-31, kwwk
+      0.1.109, AGENTS.md ▸ Agent sign-in; none has run on a device, and no
+      key has reached OpenCode). With an `oc_sk_…` key for each plan:
+      Settings ▸ Model Providers ▸ OpenCode Go (or Zen) takes the key,
+      Fetch Models lists the plan's live models, and Save verifies the ones
+      picked. A chat on one model of each wire the plan serves (Go:
+      `glm-5.2`, `grok-4.7`, `claude-haiku-5-5`, `gemini-4-argon`) reads a
+      file with file_read and answers, and Compact… compacts it. A wrong
+      key fails verification without the key in what the app shows. Kimi
+      For Coding Global signs in with its code on kimi.ai, a chat answers,
+      and a sign-in again keeps the device id the first one recorded.
 
 ## SDK and toolchain matrix (2026-10-19)
 
@@ -2595,3 +2700,73 @@ system prompt frozen with each message's `<system-state>` (`f74afc1`). They
 passed `make harness`, `make check` and the CI build; 0.1.9 ships them
 unverified on hardware, and the next round should open a long chat, read a
 root card and switch the approval mode mid-chat on the iPhone vphone.
+
+## Small images, the pane's icon and publishing (2026-10-30, 0.3.2)
+
+CI's packages of `6b57f8e`, roothide, on the iOS 26.4 iPhone vphone (Strict,
+deepseek-v4-pro) and the iOS 26.4 iPad vphone:
+
+- A project made from the Preference Bundle template 0.1.3, built Debug and
+  installed, carries `icon.png`, `icon@2x.png` and `icon@3x.png` in
+  `/Library/PreferenceBundles/IconPane.bundle`, and its entry names
+  `icon.png`. Settings showed no row for it (Known limitations).
+- A General Chat had the agent show that `icon@3x.png` (87 px) and a
+  1290×2796 screenshot with two `file_show` calls: the icon came out a
+  32 pt tile on the iPhone's 3x screen and about 44 pt on the iPad's 2x
+  screen, the screenshot at the 30 % height limit as before (the iPad's
+  copy of the conversation was carried over from the iPhone).
+- `apelin_package_publish` given a release build of that project, whose
+  record says `Release`, passed the configuration check and stopped at "no
+  package repository is linked"; nothing reached GitHub.
+
+## Unread replies, chat logs, imports and resets (2026-10-31, 0.3.3)
+
+CI's packages of `2b34ada`, roothide, over 0.3.2 on the iOS 26.4 and 27.0.1
+iPhone vphones and the iOS 26.4 iPad vphone:
+
+- The smoke suite with `tool-host` and `i2-git-remote` passed on both
+  iPhones; on the iPad `files` and `tool-host` were skipped, as it has no
+  tweak extension or disassembler installed, and the other seven passed.
+- On the iOS 26.4 iPhone (Strict, deepseek-v4-pro), `apelin://import?url=`
+  `https://github.com/octocat/Hello-World` opened Import Repository with the
+  address, the default branch and `Hello-World`; Import made the project and
+  opened its chat. Asked to commit a `NOTES.md` and then match
+  `origin/master`, the agent asked for the git author on a card, committed,
+  and showed the reset card: the remote's address and commit, the branch's
+  old commit, the one local commit leaving it, the `apelin-backup/` branch,
+  and that a reset asks in every mode. Denied, nothing changed, and the
+  agent said so.
+- A reply that came while another chat was open put a yellow dot in place
+  of the row's spinner, and the project menu read `Hello-World - 1`, with
+  four more recent projects and More Projects under it.
+- Settings ▸ About ▸ Logs listed the chat under Chats; its log had each call
+  started and ended, the approval resolved as denied after 579 s, and each
+  run with its model and host. `git_status`'s 40-digit HEAD was written as
+  `<device id>`: the redaction takes a SHA-1 for an old-style UDID.
+- The vphone's leftover test tweaks (`ApelinHello`, `I3ChainTweak`,
+  `DemoTweak`) put their alerts over Apelin at launch; they are not Apelin's.
+
+## A renamed roothide root and an unreadable chat (2026-11-02, 0.3.4)
+
+CI's packages of `6ca0298`, roothide, over 0.3.3 on the iOS 26.4 and 27.0.1
+iPhone vphones and the iOS 26.4 iPad vphone:
+
+- Issue #34, reproduced on 0.3.3 on the iOS 26.4 iPhone: with the toolchain
+  registry's and the SDK record's paths written under another valid
+  `.jbroot-<id>` name than the root the device has, `projectCheck` of a
+  command-line project failed with "toolchain … has no runnable clang"
+  (lipo, dsymutil, strip) and "SDK … is registered at …, which no longer
+  exists". On 0.3.4, with the same records, the check passed and a debug
+  `buildStart` succeeded. The records were put back afterwards.
+- Issue #33, reproduced on 0.3.3 on the iOS 26.4 iPhone and the iPad: one
+  `Chats/<uuid>.json` cut short to `{"summary":` made the next launch show
+  "Unable to Load Chats — The data couldn't be read because it isn't in the
+  correct format." and no chat at all. On 0.3.4 on all three, the file was
+  moved to `Chats/Unreadable/`, the other chats loaded (twelve on the iOS
+  26.4 iPhone, one on the 27.0.1 one), no alert came, and New Chat was
+  there. The test file was removed afterwards.
+- `hello`, `terminal`, `logs`, `diagnostics` and `i3-image-check-refused`
+  passed on all three, and `files` on both iPhones; the iPad has no
+  toolchain or tweak extension for `files`. `i1-smoke` was not run: it
+  needs the harness's fixtures, which `Scripts/device.py` pushes, and the
+  vphones were driven from their hosts, which have no Python.

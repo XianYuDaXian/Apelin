@@ -32,6 +32,10 @@ public enum AgentWorker {
                 }
                 await state.abort()
             }
+        }, onClose: {
+            // the host has gone and the worker exits next: what still runs
+            // never ends, and the journal says so while it can
+            SessionJournal.interruptAll(reason: "the session host closed the worker's channel")
         }) { request, context in
             await handle(request, context: context, state: state)
         }
@@ -277,8 +281,9 @@ public enum AgentWorker {
         case .openAICompatible:
             guard let model else { throw ApelinError(.badRequest, "name the model for \(provider.rawValue)") }
             return .openAICompatible(model: model)
-        case .openAICodex, .cursor, .devin, .kiro, .qoder, .qoderCN, .workBuddy, .workBuddyAI, .kimiCoding, .xai,
-             .zai, .zaiCodingCN, .openRouter, .openAI, .google, .deepSeek:
+        case .openAICodex, .cursor, .devin, .kiro, .qoder, .qoderCN, .workBuddy, .workBuddyAI, .kimiCoding,
+             .kimiCodingGlobal, .xai, .zai, .zaiCodingCN, .openRouter, .openAI, .google, .deepSeek, .openCodeGo,
+             .openCodeZen:
             return .stored(storeID: provider.storeID, model: model)
         }
     }
@@ -676,6 +681,14 @@ actor EventRelay {
                 push["branch"] = .string(branch)
             }
             payload["detail"] = .object(["gitPush": .object(push)])
+        // The push and lease the host matches an agent's forced gitPush to
+        // (AgentForcePushRules).
+        case let .forcePush(force):
+            payload["detail"] = .object(["forcePush": (try? ApelinCore.JSONValue(encoding: force)) ?? .null])
+        // The squash the host matches an agent's gitSquash to
+        // (AgentSquashRules).
+        case let .squash(squash):
+            payload["detail"] = .object(["squash": (try? ApelinCore.JSONValue(encoding: squash)) ?? .null])
         case let .gitSettings(summary):
             payload["detail"] = .object(["gitSettings": .object(["summary": .string(summary)])])
         // What the host matches an agent's setup, import or call into another
@@ -722,6 +735,10 @@ actor EventRelay {
         // (AgentScreenRules).
         case let .screenControl(use):
             payload["detail"] = .object(screenDetail(use))
+        // The state the host matches an agent's gitResetToRemote to
+        // (AgentResetToRemoteRules).
+        case let .resetToRemote(reset):
+            payload["detail"] = .object(["resetToRemote": (try? ApelinCore.JSONValue(encoding: reset)) ?? .null])
         }
         return .object(payload)
     }

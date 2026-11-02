@@ -43,6 +43,15 @@ enum ApprovalCardText {
         payload?["detail"]?[RunCodeApproval.rootCommandDetail] != nil
     }
 
+    /// The card's title when it is not the call's own: a git_push the host
+    /// binds to a lease (`detail.forcePush`) overwrites the remote's branch,
+    /// which the title says. Nil for any other request.
+    static func title(_ payload: JSONValue?) -> String? {
+        payload?["detail"]?[forcePushDetail] != nil ? String(localized: "Force-push to the remote") : nil
+    }
+
+    private static let forcePushDetail = "forcePush"
+
     /// `callReason`: the reason the agent gave on the call's `toolCall`.
     static func detail(_ payload: JSONValue?, title: String, callReason: String?) -> String {
         let root = isRoot(payload)
@@ -73,6 +82,12 @@ enum ApprovalCardText {
         }
         if let edited = editedIssue(payload) {
             return ToolCallDetail(detail: edited, title: title)
+        }
+        if let forced = forcedPush(payload) {
+            return ToolCallDetail(detail: forced, title: title)
+        }
+        if let squashed = squashedCommits(payload) {
+            return ToolCallDetail(detail: squashed, title: title)
         }
         guard AgentToolName.canonical(payload?["tool"]?.stringValue ?? "") == .shellRun,
               case var .object(values)? = try? JSONCoding.decode(JSONValue.self, from: Data(json.utf8))
@@ -136,6 +151,59 @@ enum ApprovalCardText {
                 shown[field] = .string(text)
             }
         }
+        return (try? JSONCoding.encode(JSONValue.object(shown))).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// A forced git_push card's arguments: not the call's but what the
+    /// approval is bound to, its `detail.forcePush` — the remote and the
+    /// address it pushes to, the branch, the remote's commit replaced and the
+    /// local one sent in its place, and the commits that leave the branch,
+    /// newest first. Nil for any other request.
+    private static func forcedPush(_ payload: JSONValue?) -> String? {
+        guard let detail = payload?["detail"]?[forcePushDetail],
+              let remote = detail["remote"]?.stringValue, let branch = detail["branch"]?.stringValue,
+              let expected = detail["expectedCommit"]?.stringValue, let local = detail["localCommit"]?.stringValue,
+              case let .array(lost)? = detail["overwritten"], let count = detail["overwrittenCount"]?.doubleValue
+        else { return nil }
+        let subject = detail["localSubject"]?.stringValue.map { " \($0)" } ?? ""
+        let commits: [String] = lost.compactMap { entry in
+            guard let commit = entry["commit"]?.stringValue else { return nil }
+            return "\(commit.prefix(7)) \(entry["subject"]?.stringValue ?? "")"
+        }
+        var shown: [String: JSONValue] = [
+            "remote": .string(remote),
+            "branch": .string(branch),
+            "expected_commit": .string(expected),
+            "local_commit": .string(local + subject),
+            "overwritten": .string(commits.joined(separator: "\n")),
+            "overwritten_count": .string(String(Int(count))),
+        ]
+        shown["url"] = detail["url"]?.stringValue.map { .string($0) }
+        return (try? JSONCoding.encode(JSONValue.object(shown))).map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    /// A git_squash card's arguments: not the call's, which may name a count,
+    /// but what the approval is bound to, its `detail.squash` — the branch,
+    /// the base kept, the head replaced, the message and each commit
+    /// combined, newest first. Nil for any other request.
+    private static func squashedCommits(_ payload: JSONValue?) -> String? {
+        guard let detail = payload?["detail"]?["squash"],
+              let branch = detail["branch"]?.stringValue, let base = detail["base"]?.stringValue,
+              let head = detail["expectedHead"]?.stringValue, let message = detail["message"]?.stringValue,
+              case let .array(commits)? = detail["commits"], let count = detail["count"]?.doubleValue
+        else { return nil }
+        let lines: [String] = commits.compactMap { entry in
+            guard let commit = entry["commit"]?.stringValue else { return nil }
+            return "\(commit.prefix(7)) \(entry["subject"]?.stringValue ?? "")"
+        }
+        let shown: [String: JSONValue] = [
+            "branch": .string(branch),
+            "base": .string(base),
+            "head": .string(head),
+            "message": .string(message),
+            "commits": .string(lines.joined(separator: "\n")),
+            "count": .string(String(Int(count))),
+        ]
         return (try? JSONCoding.encode(JSONValue.object(shown))).map { String(decoding: $0, as: UTF8.self) }
     }
 

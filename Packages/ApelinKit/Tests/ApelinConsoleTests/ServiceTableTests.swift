@@ -271,6 +271,27 @@ final class ServiceTableTests: XCTestCase {
             return Row(reply: GitIssueCreateResponse(number: 1, url: "https://github.com/u/r/issues/1", repository: "u/r")) {
                 _ = try await $0.gitIssueCreate(repository: "u/r", title: "t", body: "b")
             }
+        case .gitSquash:
+            let squashed = GitSquashResponse(branch: "main", previousHead: "h", base: "b", commits: [], count: 2)
+            return Row(reply: squashed) { _ = try await $0.gitSquash(GitSquashRequest(projectID: "p", count: 2, preview: true)) }
+        case .gitRemoteList:
+            return Row(reply: GitRemoteListResponse(remotes: [])) { _ = try await $0.gitRemoteList(projectID: "p") }
+        case .gitRemoteSet:
+            let set = GitRemoteSetResponse(remote: GitRemoteSummary(name: "origin", url: "https://example.com/r.git"))
+            return Row(reply: set) { _ = try await $0.gitRemoteSet(projectID: "p", name: "origin", url: "https://example.com/r.git") }
+        case .gitRemoteRemove:
+            return Row(reply: ack) { try await $0.gitRemoteRemove(projectID: "p", name: "origin") }
+        case .gitResetPreview:
+            return Row(reply: handle) { _ = try await $0.gitResetPreview(GitResetPreviewRequest(projectID: "p", remote: "origin")) }
+        case .gitResetToRemote:
+            let reset = GitResetToRemoteRequest(
+                projectID: "p",
+                remote: "origin",
+                branch: "main",
+                expectedRemoteCommit: String(repeating: "a", count: 40),
+                expectedHead: nil,
+            )
+            return Row(reply: handle) { _ = try await $0.gitResetToRemote(reset) }
         }
     }
 

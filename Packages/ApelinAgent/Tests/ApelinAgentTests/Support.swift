@@ -1,5 +1,9 @@
 @testable import ApelinAgent
 import struct ApelinProtocol.ApelinError
+import struct ApelinProtocol.GitBranchComparison
+import struct ApelinProtocol.GitCommitSummary
+import struct ApelinProtocol.GitPushLease
+import struct ApelinProtocol.GitSquashResponse
 import Foundation
 
 /// A throwaway home with `Documents/wiki.qaq.apelin/Projects/<name>/`.
@@ -123,7 +127,59 @@ actor MockBackend: AgentHostBackend {
         case createRepository(RepositoryCreateApproval, evidence: ApprovalEvidence)
         case createIssue(IssueCreateApproval, evidence: ApprovalEvidence)
         case publishPackages(PackagePublishApproval, evidence: ApprovalEvidence)
+        /// A fetch that compares a branch with the remote's, as a forced
+        /// push makes before it asks.
+        case gitFetchComparing(remote: String?, branch: String)
+        /// A push with a lease: forced.
+        case gitForcePush(remote: String?, branch: String?, url: String?, lease: GitPushLease, evidence: ApprovalEvidence)
+        /// A squash's preview: what it would combine, by base or count.
+        case gitSquashPreview(base: String?, count: Int?)
+        case gitSquash(base: String?, expectedHead: String?, message: String?, evidence: ApprovalEvidence)
         case other(String)
+    }
+
+    /// What a fetch that compares a branch answers; nil: the remote has the
+    /// branch at the local commit.
+    var comparison: GitBranchComparison?
+
+    func setComparison(_ comparison: GitBranchComparison?) {
+        self.comparison = comparison
+    }
+
+    /// What a squash's preview answers: three commits after a base, none of
+    /// them on the upstream unless a test says so.
+    static let defaultSquashPreview = GitSquashResponse(
+        branch: "main",
+        previousHead: String(repeating: "d", count: 40),
+        base: String(repeating: "a", count: 40),
+        commits: [
+            GitCommitSummary(commit: String(repeating: "d", count: 40), subject: "Fix the hand"),
+            GitCommitSummary(commit: String(repeating: "c", count: 40), subject: "Draw the face"),
+            GitCommitSummary(commit: String(repeating: "b", count: 40), subject: "Hook the clock"),
+        ],
+        count: 3,
+    )
+
+    var squashPreview = MockBackend.defaultSquashPreview
+
+    func setSquashPreview(_ preview: GitSquashResponse) {
+        squashPreview = preview
+    }
+
+    func gitSquash(_ request: GitSquashToolRequest) -> GitSquashResponse {
+        guard !request.preview else {
+            calls.append(.gitSquashPreview(base: request.base, count: request.count))
+            return squashPreview
+        }
+        calls.append(.gitSquash(
+            base: request.base,
+            expectedHead: request.expectedHead,
+            message: request.message,
+            evidence: request.context.approval,
+        ))
+        var done = squashPreview
+        done.commit = String(repeating: "e", count: 40)
+        return done
     }
 
     /// What apelin_package_publish reads before it asks: a linked
@@ -401,8 +457,13 @@ actor MockBackend: AgentHostBackend {
     }
 
     func gitFetch(_ request: GitRemoteToolRequest) -> GitTaskToolResponse {
-        calls.append(.gitFetch(remote: request.remote))
-        return GitTaskToolResponse(remote: request.remote ?? "origin", updated: [])
+        guard let branch = request.branch else {
+            calls.append(.gitFetch(remote: request.remote))
+            return GitTaskToolResponse(remote: request.remote ?? "origin", updated: [])
+        }
+        calls.append(.gitFetchComparing(remote: request.remote, branch: branch))
+        let same = GitBranchComparison(branch: branch, local: "abc123", localSubject: "Mine", remote: "abc123")
+        return GitTaskToolResponse(remote: request.remote ?? "origin", updated: [], comparison: comparison ?? same)
     }
 
     func gitPull(_ request: GitRemoteToolRequest) -> GitTaskToolResponse {
@@ -411,6 +472,22 @@ actor MockBackend: AgentHostBackend {
     }
 
     func gitPush(_ request: GitRemoteToolRequest) -> GitTaskToolResponse {
+        if let lease = request.lease {
+            calls.append(.gitForcePush(
+                remote: request.remote,
+                branch: request.branch,
+                url: request.url,
+                lease: lease,
+                evidence: request.context.approval,
+            ))
+            return GitTaskToolResponse(
+                remote: request.remote ?? "origin",
+                branch: request.branch,
+                commit: lease.localCommit,
+                from: lease.expectedCommit,
+                forced: true,
+            )
+        }
         calls.append(.gitPush(
             remote: request.remote,
             branch: request.branch,

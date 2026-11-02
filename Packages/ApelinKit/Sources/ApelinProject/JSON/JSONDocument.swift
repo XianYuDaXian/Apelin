@@ -305,13 +305,19 @@ public enum StrictJSON {
         }
 
         mutating func hex4() throws -> UInt32 {
+            // exactly four hex digits: `UInt32(_:radix:)` alone takes a sign
             guard at + 4 <= bytes.count,
+                  bytes[at ..< at + 4].allSatisfy({ isHexDigit($0) }),
                   let value = UInt32(String(decoding: bytes[at ..< at + 4], as: UTF8.self), radix: 16)
             else {
                 throw fail("bad \\u escape")
             }
             at += 4
             return value
+        }
+
+        private func isHexDigit(_ byte: UInt8) -> Bool {
+            (0x30 ... 0x39).contains(byte) || (0x41 ... 0x46).contains(byte) || (0x61 ... 0x66).contains(byte)
         }
 
         mutating func array(depth: Int) throws -> JSONDocument {
@@ -385,6 +391,41 @@ enum JSONWriter {
         var out = ""
         write(value, into: &out, separators: (", ", ": "))
         return out
+    }
+
+    /// Two spaces a level, one member or element a line, `": "` after a
+    /// name, an empty object or array as `{}` or `[]`, members in stored
+    /// order: Python's `json.dumps(value, ensure_ascii=False, indent=2)`,
+    /// the manifest's written form (`ProjectManifestFormat`).
+    static func indented(_ value: JSONDocument) -> String {
+        var out = ""
+        writeIndented(value, level: 0, into: &out)
+        return out
+    }
+
+    private static func writeIndented(_ value: JSONDocument, level: Int, into out: inout String) {
+        let inner = String(repeating: "  ", count: level + 1)
+        switch value {
+        case let .array(items) where !items.isEmpty:
+            out += "["
+            for (index, item) in items.enumerated() {
+                out += index > 0 ? ",\n" : "\n"
+                out += inner
+                writeIndented(item, level: level + 1, into: &out)
+            }
+            out += "\n" + String(repeating: "  ", count: level) + "]"
+        case let .object(object) where !object.isEmpty:
+            out += "{"
+            for (index, entry) in object.entries.enumerated() {
+                out += index > 0 ? ",\n" : "\n"
+                out += inner
+                out += CanonicalJSON.quote(entry.key) + ": "
+                writeIndented(entry.value, level: level + 1, into: &out)
+            }
+            out += "\n" + String(repeating: "  ", count: level) + "}"
+        default:
+            write(value, into: &out, separators: (",", ":"))
+        }
     }
 
     private static func write(_ value: JSONDocument, into out: inout String, separators: (item: String, key: String)) {

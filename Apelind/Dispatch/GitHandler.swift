@@ -13,6 +13,7 @@ enum GitHandler: DomainHandler {
         }
         switch request.operation {
         case .gitStatus, .gitDiff, .gitStage, .gitUnstage, .gitCommit, .gitInit,
+             .gitRemoteList, .gitRemoteSet, .gitRemoteRemove,
              .gitSettings, .gitAuthorSet, .gitCredentialSet, .gitCredentialRemove:
             return await host.forward(request, to: .environment)
         case .gitRepositoryCreate:
@@ -21,7 +22,13 @@ enum GitHandler: DomainHandler {
             return await createIssue(request, host: host)
         case .gitClone:
             return await host.startTask(request, kind: .environment, role: .environment, resumable: true)
-        case .gitCloneInto, .gitFetch, .gitPull, .gitPush:
+        case .gitPush:
+            return await push(request, host: host)
+        case .gitSquash:
+            return await squash(request, host: host)
+        case .gitResetToRemote:
+            return await resetToRemote(request, host: host)
+        case .gitCloneInto, .gitFetch, .gitPull, .gitResetPreview:
             // Not resumed: a push or pull cut off is answered by running it
             // again, which the caller decides.
             return await host.startTask(request, kind: .environment, role: .environment, resumable: false)
@@ -54,6 +61,41 @@ enum GitHandler: DomainHandler {
         return nil
     }
 
+    /// An agent's forced push goes only on the user's approval of exactly
+    /// it, in every mode (AgentForcePushRules). Not resumed, as a fetch or a
+    /// pull is not.
+    private static func push(_ request: HostRequest, host: SessionHost) async -> HostReply {
+        if case let .worker(.agent, instance) = request.caller {
+            let push: GitPushRequest
+            do {
+                push = try request.decode(GitPushRequest.self)
+            } catch {
+                return request.fail(error)
+            }
+            if let refusal = await AgentForcePushRules.authorize(push, session: instance, registry: host.registry) {
+                return request.fail(refusal)
+            }
+        }
+        return await host.startTask(request, kind: .environment, role: .environment, resumable: false)
+    }
+
+    /// An agent's squash goes under Confirm only on the user's approval of
+    /// exactly it (AgentSquashRules); a preview goes as it is.
+    private static func squash(_ request: HostRequest, host: SessionHost) async -> HostReply {
+        if case let .worker(.agent, instance) = request.caller {
+            let squash: GitSquashRequest
+            do {
+                squash = try request.decode(GitSquashRequest.self)
+            } catch {
+                return request.fail(error)
+            }
+            if let refusal = await AgentSquashRules.authorize(squash, session: instance, registry: host.registry) {
+                return request.fail(refusal)
+            }
+        }
+        return await host.forward(request, to: .environment)
+    }
+
     /// An agent's is checked here before it is forwarded.
     private static func createRepository(_ request: HostRequest, host: SessionHost) async -> HostReply {
         if case let .worker(.agent, instance) = request.caller {
@@ -68,6 +110,24 @@ enum GitHandler: DomainHandler {
             }
         }
         return await host.forward(request, to: .environment)
+    }
+
+    /// An agent's spends, in every mode, the approval of exactly this
+    /// reset; then it runs as a task that is not resumed, since what it
+    /// would lose must be read again.
+    private static func resetToRemote(_ request: HostRequest, host: SessionHost) async -> HostReply {
+        if case let .worker(.agent, instance) = request.caller {
+            let reset: GitResetToRemoteRequest
+            do {
+                reset = try request.decode(GitResetToRemoteRequest.self)
+            } catch {
+                return request.fail(error)
+            }
+            if let refusal = await AgentResetToRemoteRules.authorize(reset, session: instance, registry: host.registry) {
+                return request.fail(refusal)
+            }
+        }
+        return await host.startTask(request, kind: .environment, role: .environment, resumable: false)
     }
 
     /// An agent's is checked here before it is forwarded.

@@ -72,6 +72,12 @@ public struct InvocationFacts: Sendable, Hashable {
     public var removedPackage: ListedInstallation?
     /// For git_push: where it pushes, and what.
     public var push: GitPushTarget?
+    /// For git_push with force_with_lease, when the push would take commits
+    /// off the remote's branch: what it overwrites, as the fetch before it
+    /// found the remote. Nil for an ordinary push, which loses nothing.
+    public var forcePush: ForcePushApproval?
+    /// For git_squash: what it combines, as the preview before it found it.
+    public var squash: SquashApproval?
     /// For the git settings tools: what they change, in words, without a
     /// token ("the commit author", "the credential for github.com").
     public var gitSettings: String?
@@ -123,6 +129,9 @@ public struct InvocationFacts: Sendable, Hashable {
     /// that runs icli (or another of `ScreenConsent.programs`): what it does
     /// on the screen, as the host is asked for it.
     public var screenControl: ScreenControlApproval?
+    /// For git_reset_to_remote: the state the reset was read in, from a
+    /// fetch just before asking, and what it loses.
+    public var resetToRemote: ResetToRemoteApproval?
 
     public init(
         tool: Tool,
@@ -161,11 +170,15 @@ public struct GitPushTarget: Sendable, Hashable {
     /// The address the remote is added at when the project does not have
     /// it yet; the host refuses one that differs from the remote's own.
     public var url: String?
+    /// Why a push asked to be forced goes as an ordinary one: the remote's
+    /// branch loses nothing to it. Told the model with the result.
+    public var unforced: String?
 
-    public init(remote: String, branch: String?, url: String? = nil) {
+    public init(remote: String, branch: String?, url: String? = nil, unforced: String? = nil) {
         self.remote = remote
         self.branch = branch
         self.url = url
+        self.unforced = unforced
     }
 }
 
@@ -201,8 +214,18 @@ public struct ApprovalPolicy: Sendable, Hashable {
         if let screen = evaluateScreen(facts) {
             return screen
         }
+        // A forced push takes commits off the remote's branch: it asks every
+        // time, in every mode — Full lifts root commands, not this —, the
+        // card naming what is lost, and the host spends that one approval.
+        if case .local(.gitPush) = facts.tool, let force = facts.forcePush {
+            return .ask(reason: Self.forcePushReason(force), detail: .forcePush(force))
+        }
         if case .local(.shellRun) = facts.tool, facts.runsAsRoot {
             return evaluateRoot(facts)
+        }
+        // A reset to a remote discards local work: Full asks as Strict does.
+        if case .local(.gitResetToRemote) = facts.tool {
+            return Self.resetVerdict(facts)
         }
         if mode != .confirm {
             return .allow(.relaxed)
@@ -259,6 +282,16 @@ public struct ApprovalPolicy: Sendable, Hashable {
             return .ask(reason: "What this call does on the screen could not be read. \(Self.screenNote)", detail: .none)
         }
         return .ask(reason: "\(Self.screenPhrase(use)) \(Self.screenNote)", detail: .screenControl(use))
+    }
+
+    /// A reset to a remote discards local work: it asks in every mode,
+    /// whatever the presets say, the card saying what is lost; the host
+    /// spends that one approval.
+    static func resetVerdict(_ facts: InvocationFacts) -> GateVerdict {
+        guard let reset = facts.resetToRemote else {
+            return .ask(reason: "What this reset would discard could not be read.", detail: .none)
+        }
+        return .ask(reason: reset.reason, detail: .resetToRemote(reset))
     }
 
     static let screenNote = "Ask Before Using the Screen is on, so each use of the screen needs your approval, in every mode."
@@ -421,7 +454,10 @@ public struct ApprovalPolicy: Sendable, Hashable {
         // edit, and nothing leaves the device. A fetch, pull or clone
         // only brings commits in; pull never merges, clone never
         // overwrites; init makes an empty repository where there is none.
-        case .gitStage, .gitUnstage, .gitCommit, .gitInit, .gitFetch, .gitPull, .gitClone:
+        // A remote set or removed is a line of the repository's
+        // configuration, and the push that uses one asks, naming its URL.
+        case .gitStage, .gitUnstage, .gitCommit, .gitInit, .gitFetch, .gitPull, .gitClone,
+             .gitRemoteSet, .gitRemoteRemove:
             return .allow(.notRequired)
 
         // Another conversation of the project, opened, sent to or stopped:
@@ -429,6 +465,10 @@ public struct ApprovalPolicy: Sendable, Hashable {
         // that would ask, asks there.
         case .conversationCreate, .conversationSend, .conversationStop:
             return .allow(.notRequired)
+
+        // Discards local work: `evaluate` asked already, in every mode.
+        case .gitResetToRemote:
+            return Self.resetVerdict(facts)
 
         // Publishes commits with the user's credential: every push asks,
         // and the card names where it goes.
@@ -438,10 +478,20 @@ public struct ApprovalPolicy: Sendable, Hashable {
             }
             let branch = target.branch ?? "the checked-out branch"
             let place = target.url.map { "\(target.remote) at \($0)" } ?? target.remote
+            let unforced = target.unforced.map { " \($0)" } ?? ""
             return .ask(
-                reason: "Pushing \(branch) to \(place) publishes its commits. Each push needs your approval.",
+                reason: "Pushing \(branch) to \(place) publishes its commits.\(unforced) Each push needs your approval.",
                 detail: .gitPush(remote: target.remote, branch: target.branch),
             )
+
+        // The project's own commits replaced by one, which the user may
+        // have read or published: every squash asks, the card naming each
+        // commit and the new message, and none is granted for the session.
+        case .gitSquash:
+            guard let squash = facts.squash else {
+                return .ask(reason: "What this squash combines could not be read.", detail: .none)
+            }
+            return .ask(reason: Self.squashReason(squash), detail: .squash(squash))
 
         // A public issue under the user's GitHub account, as a push
         // publishes: every one asks, the card showing the whole text.
@@ -498,7 +548,7 @@ public struct ApprovalPolicy: Sendable, Hashable {
         case .fileRead, .fileList, .fileGrep, .fileFind, .fileShow, .sdkAnalyzeFramework, .sdkReadHeader,
              .packageList, .packageConfirmLoaded, .logRead, .crashList, .crashRead, .crashSymbolicate,
              .screenCapture, .screenReadTree, .memoryList, .skillList, .skillRead, .projectCheckDistribution,
-             .templateList, .projectList, .gitStatus, .gitDiff, .gitReadSettings,
+             .templateList, .projectList, .gitStatus, .gitDiff, .gitReadSettings, .gitRemoteList,
              .conversationList, .conversationRead, .toolchainList, .sdkList, .webFetch, .feedbackRead:
             if presets.readTools.contains(tool) {
                 return .allow(.preset(tool.rawValue))

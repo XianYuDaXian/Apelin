@@ -23,7 +23,8 @@ final class RootInterfaceController: UIViewController {
     private let chatRuntime = ChatRuntime()
     private var restoredChat = false
     private var opensChatAfterWelcome = false
-    /// An `apelin://` link that came before the conversations were read.
+    /// An `apelin://` link that came before the conversations were read,
+    /// or an import that came during the welcome.
     private var pendingLink: ApelinLink?
     /// A link is being looked up: the launch's own restore waits for it.
     private var isResolvingLink = false
@@ -111,6 +112,7 @@ final class RootInterfaceController: UIViewController {
             ChatWidgetPublisher.shared.chatsChanged()
         }
         ChatWidgetPublisher.shared.attach(chatRuntime)
+        ChatRuntime.active = chatRuntime
         chatRuntime.onDraftRestored = { [weak self] id in self?.chatController.restoreDraft(for: id) }
         chatRuntime.onUnsentReturned = { [weak self] id, returned in
             self?.chatController.unsentReturned(returned, to: id)
@@ -136,7 +138,8 @@ final class RootInterfaceController: UIViewController {
         if let link = pendingLink {
             pendingLink = nil
             open(link)
-            return
+            // an import's sheet goes over the page the launch still restores
+            guard Self.isImport(link) else { return }
         }
         guard !restoredChat else { return }
         if let saved = Self.savedChatID, let summary = chatRuntime.records[saved]?.summary {
@@ -174,6 +177,18 @@ final class RootInterfaceController: UIViewController {
             self,
             selector: #selector(enteredBackground),
             name: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(syncViewedChat),
+            name: UIApplication.didBecomeActiveNotification,
+            object: nil,
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(resignedActive),
+            name: UIApplication.willResignActiveNotification,
             object: nil,
         )
 
@@ -229,6 +244,24 @@ final class RootInterfaceController: UIViewController {
         }
     }
 
+    /// Out of the reader's sight, the conversation on the page is no longer
+    /// looked at: a reply that comes meanwhile leaves it unread, until the
+    /// app is back in front with it.
+    @objc private func resignedActive() {
+        chatRuntime.viewedChat = nil
+    }
+
+    /// Tells the runtime which conversation the reader is looking at
+    /// (`ChatRuntime.viewedChat`): the one on the conversation page, while
+    /// that page is the column's, no drawer is out over it and the app is
+    /// in front. A sheet over the page does not count: nothing tells the
+    /// page when one goes, and its conversation is still the page under it.
+    @objc private func syncViewedChat() {
+        let page = navigator.topViewController as? ChatController
+        let isLooking = UIApplication.shared.applicationState == .active && !(isDrawer && drawerProgress > 0)
+        chatRuntime.viewedChat = isLooking ? page?.chat?.id : nil
+    }
+
     func presentWelcome() {
         guard presentedViewController == nil else { return }
         WelcomeFlow.present(from: self) { [weak self] project in
@@ -236,6 +269,8 @@ final class RootInterfaceController: UIViewController {
             if let project {
                 restoredChat = true
                 sidebar.openCreatedProject(project)
+                // only an import link held through the welcome is left
+                restoreChatIfReady()
             } else {
                 opensChatAfterWelcome = true
                 restoreChatIfReady()
@@ -257,6 +292,9 @@ final class RootInterfaceController: UIViewController {
                 // after this pass: showing a page lays the columns out again
                 DispatchQueue.main.async { [weak self] in self?.sidebar.startNewChat(picked: false) }
             }
+            // a drawer that was out is gone; after this pass, since reading
+            // a conversation redraws the sidebar and the page
+            DispatchQueue.main.async { [weak self] in self?.syncViewedChat() }
         }
         layoutColumns()
     }
@@ -344,6 +382,8 @@ final class RootInterfaceController: UIViewController {
         drawerProgress = open ? 1 : 0
         syncBarItems()
         animateLayout(velocity: velocity)
+        // the page under an open drawer is not looked at
+        syncViewedChat()
     }
 
     private func toggleSidebar() {
@@ -418,8 +458,10 @@ final class RootInterfaceController: UIViewController {
     /// a drawer a new conversation. The page is put back at the root only
     /// when something else is there; otherwise it takes the conversation
     /// where it is. Only a conversation the reader picked puts the drawer
-    /// away.
+    /// away. What is shown is what the reader looks at, unless a drawer is
+    /// out over it (`syncViewedChat`).
     private func open(_ chat: ChatSummary?, picked: Bool) {
+        defer { syncViewedChat() }
         guard let chat else {
             if isDrawer {
                 sidebar.startNewChat(picked: picked)
@@ -447,11 +489,24 @@ final class RootInterfaceController: UIViewController {
     /// conversations are read waits for them, and the launch shows it
     /// instead of the conversation saved; during the welcome it is dropped.
     /// A prompt goes into a new General Chat's composer with the keyboard
-    /// up, and waits there for the reader's Send.
+    /// up, and waits there for the reader's Send. An import is a sheet over
+    /// the page (`RepositoryImportFlow`); one that comes during the welcome
+    /// waits for it to finish rather than being dropped, since a tap on
+    /// Open in Apelin is what opened the app.
     func open(_ link: ApelinLink) {
-        guard link != .app, !WelcomeFlow.shouldPresent else { return }
+        guard link != .app else { return }
+        guard !WelcomeFlow.shouldPresent else {
+            if Self.isImport(link) {
+                pendingLink = link
+            }
+            return
+        }
         guard chatRuntime.isLoaded else {
             pendingLink = link
+            return
+        }
+        guard !Self.isImport(link) else {
+            openImport(link)
             return
         }
         isResolvingLink = true
@@ -481,6 +536,33 @@ final class RootInterfaceController: UIViewController {
                 chatController.restoreDraft(for: summary.id)
                 chatController.beginTyping()
             }
+        }
+    }
+
+    private static func isImport(_ link: ApelinLink) -> Bool {
+        switch link {
+        case .importRepository, .invalidImport: true
+        default: false
+        }
+    }
+
+    /// The import's confirmation; the project it opens, an imported one on
+    /// a new conversation that sends nothing, or one that had the
+    /// repository already as its link would open it.
+    private func openImport(_ link: ApelinLink) {
+        guard case let .importRepository(address, branch) = link else {
+            RepositoryImportFlow.reportUnreadableLink()
+            return
+        }
+        let request = RepositoryImportPlan.Request(address: address, branch: branch)
+        RepositoryImportFlow.open(request, from: self) { [weak self] project, imported in
+            guard let self else { return }
+            guard imported else {
+                open(.project(project.projectID ?? project.name))
+                return
+            }
+            restoredChat = true
+            sidebar.openCreatedProject(project)
         }
     }
 
