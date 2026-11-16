@@ -1,3 +1,4 @@
+import ApelinAgent
 import ApelinProtocol
 import UIKit
 
@@ -9,11 +10,13 @@ final class PermissionModeController: TableController {
     private enum Section: Hashable {
         case modes
         case screen
+        case prompt
     }
 
     private enum RowID: Hashable {
         case mode(ApprovalMode)
         case asksBeforeScreen
+        case codexOverlay
     }
 
     private struct Row: Equatable {
@@ -33,11 +36,13 @@ final class PermissionModeController: TableController {
             switch section {
             case .modes: AgentPermissions.explanation
             case .screen: String(localized: "While this is on, the agent asks you before it opens an app or a link, reads what is on the screen or acts on it, through Apelin’s screen tools or icli, in every permission mode. Before a screenshot it always asks in the conversation. Each chat follows a change when you send its next message.")
+            case .prompt: "Codex 交付叠加层只改变回复的交付形态和占位符规则；关闭后恢复 Apelin 原有提示词。下一次发送消息时生效。"
             }
         }
         dataSource.update([
             (.modes, modes.map { Row(id: .mode($0), selected: $0 == AgentPermissions.mode) }),
             (.screen, [Row(id: .asksBeforeScreen, selected: AgentPermissions.asksBeforeScreen)]),
+            (.prompt, [Row(id: .codexOverlay, selected: CodexOverlay.enabled)]),
         ], reconfigure: true)
     }
 
@@ -80,6 +85,19 @@ final class PermissionModeController: TableController {
             toggle.isOn = row.selected
             toggle.removeTarget(nil, action: nil, for: .valueChanged)
             toggle.addTarget(self, action: #selector(asksBeforeScreenChanged(_:)), for: .valueChanged)
+            cell.accessoryView = toggle
+            return cell
+        case .codexOverlay:
+            let cell = tableView.dequeueReusableCell(withIdentifier: "codexOverlay")
+                ?? UITableViewCell(style: .default, reuseIdentifier: "codexOverlay")
+            var content = cell.defaultContentConfiguration()
+            content.text = "Codex 交付叠加层"
+            cell.contentConfiguration = content
+            cell.selectionStyle = .none
+            let toggle = (cell.accessoryView as? UISwitch) ?? UISwitch()
+            toggle.isOn = row.selected
+            toggle.removeTarget(nil, action: nil, for: .valueChanged)
+            toggle.addTarget(self, action: #selector(codexOverlayChanged(_:)), for: .valueChanged)
             cell.accessoryView = toggle
             return cell
         }
@@ -132,6 +150,11 @@ final class PermissionModeController: TableController {
 
     @objc private dynamic func asksBeforeScreenChanged(_ toggle: UISwitch) {
         AgentPermissions.asksBeforeScreen = toggle.isOn
+        updateRows()
+    }
+
+    @objc private dynamic func codexOverlayChanged(_ toggle: UISwitch) {
+        CodexOverlay.enabled = toggle.isOn
         updateRows()
     }
 }

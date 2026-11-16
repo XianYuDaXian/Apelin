@@ -5,6 +5,12 @@ import Foundation
 enum CodexOverlay {
     static let marker = "Codex operates in local execution mode."
 
+    /// 是否把 Codex 交付叠加层注入系统提示词；默认开启。
+    static var enabled: Bool {
+        get { UserDefaults.standard.object(forKey: "agent.codexOverlayEnabled") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "agent.codexOverlayEnabled") }
+    }
+
     static let section = """
     # Codex delivery overlay
     Ported from keysmith-switch's Codex prompt. It refines how deliverables are shaped and changes nothing about how execution works: the approval modes, screen-consent rules, tool permissions and project boundaries above remain in force, and the stricter rule wins where both touch the same action.
