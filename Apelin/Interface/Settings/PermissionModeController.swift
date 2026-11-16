@@ -1,6 +1,13 @@
-import ApelinAgent
 import ApelinProtocol
 import UIKit
+
+/// 设置页只读写同一个 UserDefaults 键；提示词包在下次构造系统提示词时读取它。
+private enum CodexOverlayToggle {
+    static var enabled: Bool {
+        get { UserDefaults.standard.object(forKey: "agent.codexOverlayEnabled") as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: "agent.codexOverlayEnabled") }
+    }
+}
 
 /// The approval mode, and below it Ask Before Using the Screen, which holds
 /// in every mode.
@@ -42,7 +49,7 @@ final class PermissionModeController: TableController {
         dataSource.update([
             (.modes, modes.map { Row(id: .mode($0), selected: $0 == AgentPermissions.mode) }),
             (.screen, [Row(id: .asksBeforeScreen, selected: AgentPermissions.asksBeforeScreen)]),
-            (.prompt, [Row(id: .codexOverlay, selected: CodexOverlay.enabled)]),
+            (.prompt, [Row(id: .codexOverlay, selected: CodexOverlayToggle.enabled)]),
         ], reconfigure: true)
     }
 
@@ -154,7 +161,7 @@ final class PermissionModeController: TableController {
     }
 
     @objc private dynamic func codexOverlayChanged(_ toggle: UISwitch) {
-        CodexOverlay.enabled = toggle.isOn
+        CodexOverlayToggle.enabled = toggle.isOn
         updateRows()
     }
 }
