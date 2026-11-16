@@ -214,6 +214,90 @@ struct AccountDeskTests {
         #expect(!recorder.transcript.contains("c1&"))
     }
 
+    /// Antigravity's own login, kwwk's and not a stand-in: Google's PKCE
+    /// page with the loopback Antigravity registered, which a pasted
+    /// redirect can stand in for. Cancelled before the code would go to
+    /// Google, so nothing here reaches the network.
+    @Test
+    func `Antigravity signs in with Google through a loopback a pasted address can stand in for`() async throws {
+        let opened = SignInRecorder()
+        let listener: OAuthLoopbackFactory = { host, port, path in
+            opened.reporter.emit(TaskID("listener"), "\(host):\(port)\(path)", nil)
+            return SilentListener(host: host, port: port, path: path)
+        }
+        let desk = AccountDesk(store: DeliveredCredentialSource(), login: KWWKSignIn.login, listener: listener, verifyKey: { _, _, _ in })
+        let recorder = SignInRecorder()
+        #expect(AgentProvider.antigravity.signInMethods == [.browser])
+        try await desk.start(AgentSignInRequest(provider: .antigravity), taskID: TaskID("g1"), reporter: recorder.reporter)
+        try await recorder.waitFor { !$0.events.isEmpty }
+        #expect(opened.events.map(\.kind) == ["localhost:51121/oauth-callback"])
+        #expect(recorder.events.map(\.kind) == ["authorize"])
+        #expect(recorder.events[0].payload?["acceptsCallbackURL"] == .bool(true))
+        let page = try #require(recorder.events[0].payload?["url"]?.stringValue.flatMap(URLComponents.init(string:)))
+        #expect(page.host == "accounts.google.com")
+        #expect(page.queryItems?.first { $0.name == "redirect_uri" }?.value == "http://localhost:51121/oauth-callback")
+        #expect(page.queryItems?.first { $0.name == "code_challenge_method" }?.value == "S256")
+        #expect(await desk.cancel(TaskID("g1")))
+        try await recorder.waitFor { $0.state != nil }
+        #expect(recorder.state == .cancelled)
+    }
+
+    /// Trae's and Raccoon's own logins, kwwk's: each page takes any
+    /// loopback address, so the listener is asked for port 0 and the page
+    /// is given the address it names. Cancelled before a code would be
+    /// exchanged, so nothing here reaches the network. (The international
+    /// Trae asks its gate where its page is first, so it is not started.)
+    @Test(arguments: [
+        (AgentProvider.trae, "127.0.0.1:0/authorize", "www.trae.cn", "auth_callback_url"),
+        (AgentProvider.raccoon, "127.0.0.1:0/auth/callback", "xiaohuanxiong.com", "redirect"),
+    ])
+    func `Trae CN and Raccoon sign in on a loopback of any port, which a pasted address can stand in for`(
+        provider: AgentProvider,
+        asked: String,
+        host: String,
+        redirectParameter: String,
+    ) async throws {
+        let opened = SignInRecorder()
+        let listener: OAuthLoopbackFactory = { host, port, path in
+            opened.reporter.emit(TaskID("listener"), "\(host):\(port)\(path)", nil)
+            return SilentListener(host: host, port: port, path: path)
+        }
+        let desk = AccountDesk(store: DeliveredCredentialSource(), login: KWWKSignIn.login, listener: listener, verifyKey: { _, _, _ in })
+        let recorder = SignInRecorder()
+        #expect(provider.signInMethods == [.browser])
+        try await desk.start(AgentSignInRequest(provider: provider), taskID: TaskID("p1"), reporter: recorder.reporter)
+        try await recorder.waitFor { !$0.events.isEmpty }
+        #expect(opened.events.map(\.kind) == [asked])
+        #expect(recorder.events.map(\.kind) == ["authorize"])
+        #expect(recorder.events[0].payload?["acceptsCallbackURL"] == .bool(true))
+        let page = try #require(recorder.events[0].payload?["url"]?.stringValue.flatMap(URLComponents.init(string:)))
+        #expect(page.host == host)
+        #expect(page.queryItems?.first { $0.name == redirectParameter }?.value == "http://\(asked)")
+        // An address with neither a code nor Trae's `authCodeInfo` is no
+        // redirect, and the sign-in goes on waiting.
+        await #expect(throws: ApelinError.self) {
+            try await desk.respond(AgentSignInRespondRequest(
+                taskID: TaskID("p1"),
+                fields: [.callbackURL: "http://\(asked)?refreshToken=not-a-code"],
+            ))
+        }
+        #expect(recorder.state == nil)
+        #expect(await desk.cancel(TaskID("p1")))
+        try await recorder.waitFor { $0.state != nil }
+        #expect(recorder.state == .cancelled)
+    }
+
+    @Test
+    func `a pasted address is a redirect when it carries a code, Trae's auth code or an error`() throws {
+        #expect(try PasteableLoopback.parameters(of: "http://localhost:1455/auth/callback?code=c1&state=s1")["code"] == "c1")
+        #expect(try PasteableLoopback.parameters(of: "http://127.0.0.1:9/authorize?authCodeInfo=%7B%22AuthCode%22%3A%22a1%22%7D")
+            == ["authCodeInfo": #"{"AuthCode":"a1"}"#])
+        #expect(try PasteableLoopback.parameters(of: "http://localhost:1/callback?error=access_denied")["error"] == "access_denied")
+        for address in ["http://127.0.0.1:9/authorize", "http://127.0.0.1:9/authorize?authCodeInfo=", "hello"] {
+            #expect(throws: ApelinError.self) { try PasteableLoopback.parameters(of: address) }
+        }
+    }
+
     @Test
     func `an API key is asked for by field, checked by name alone, and stored in kwwk's shape`() async throws {
         let store = DeliveredCredentialSource()
@@ -518,6 +602,109 @@ struct AccountDeskTests {
         #expect(AccountDesk.lapses(Self.issued) == nil)
         #expect(AccountDesk.lapses(OAuthCredentials(access: "k", refresh: "", expires: .max)) == nil)
         #expect(AccountDesk.lapses(OAuthCredentials(access: "k", refresh: "", expires: 1000)) == Date(timeIntervalSince1970: 1))
+    }
+
+    // MARK: - Several OpenAI-compatible endpoints (#60)
+
+    @Test
+    func `the list always has one OpenAI-compatible endpoint to add, after those signed in to`() {
+        let first = CredentialProviderID.openAICompatible
+        func listed(_ stored: [String]) -> [String] {
+            AccountDesk.listed(.openAICompatible, stored: Set(stored)).map(\.rawValue)
+        }
+        #expect(listed([]) == ["openAICompatible"])
+        #expect(listed([first]) == ["openAICompatible", "openAICompatible.2"])
+        #expect(listed([first, "openai-compatible.2", "openai-compatible.4"])
+            == ["openAICompatible", "openAICompatible.2", "openAICompatible.4", "openAICompatible.3"])
+        // The first one, signed out of, is the one to add again.
+        #expect(listed(["openai-compatible.2"]) == ["openAICompatible.2", "openAICompatible"])
+        // Another provider's item, or a spelling that names no endpoint, is none.
+        #expect(listed([first, "openai-compatible.02", "openai-compatible.1", "openai-compatible.x", "openai-codex"])
+            == ["openAICompatible", "openAICompatible.2"])
+        #expect(AccountDesk.listed(.deepSeek, stored: [first]) == [.deepSeek])
+        #expect(AgentProvider.openAICompatibleEndpoint(7).storeID == "openai-compatible.7")
+        #expect(CredentialProviderID.endpointNumber("openai-compatible.7") == 7)
+        #expect(CredentialProviderID.endpointNumber(first) == nil)
+        #expect(CredentialInbox.isKnown("openai-compatible.7") && !CredentialInbox.isKnown("openai-compatible.100"))
+    }
+
+    @Test
+    func `a second OpenAI-compatible endpoint signs in beside the first, with a key, address and models of its own`() async throws {
+        let first = OAuthCredentials(access: "sk-FIRST-SECRET", refresh: "", expires: .max, extras: [
+            "baseUrl": .string("https://one.example.invalid/v1"), "defaultModel": .string("model-one"),
+        ])
+        let store = DeliveredCredentialSource([CredentialProviderID.openAICompatible: first])
+        let desk = AccountDesk(store: store, login: Self.neverCalled, listener: Self.silent, verifyKey: { _, _, _ in })
+        func endpoints() async -> [AgentAccount] {
+            await desk.list().accounts.filter { $0.provider.kind == .openAICompatible }
+        }
+        let second = AgentProvider.openAICompatibleEndpoint(2)
+        let offered = await endpoints()
+        #expect(offered.map(\.provider) == [.openAICompatible, second])
+        #expect(offered.map(\.signedIn) == [true, false])
+        #expect(offered[1].method == .apiKey)
+
+        let recorder = SignInRecorder()
+        let task = TaskID("endpoint-2")
+        try await desk.start(AgentSignInRequest(provider: second), taskID: task, reporter: recorder.reporter)
+        try await recorder.waitFor { !$0.events.isEmpty }
+        // The first endpoint's form.
+        #expect(recorder.events[0].payload?["fields"] == .array([
+            .object(["key": .string("apiKey"), "required": .bool(true), "secure": .bool(true)]),
+            .object(["key": .string("baseUrl"), "required": .bool(true), "secure": .bool(false), "placeholder": .string("https://…")]),
+            .object(["key": .string("defaultModel"), "required": .bool(true), "secure": .bool(false)]),
+        ]))
+        try await desk.respond(AgentSignInRespondRequest(taskID: task, fields: [
+            .apiKey: "sk-SECOND-SECRET", .baseURL: "https://two.example.invalid/v1", .defaultModel: "model-two",
+        ]))
+        try await recorder.waitFor { $0.state != nil }
+        #expect(recorder.state == .succeeded)
+        #expect(!recorder.transcript.contains("SECRET"))
+        #expect(try await store.credentials(for: "openai-compatible") == first)
+        let stored = try #require(try await store.credentials(for: "openai-compatible.2"))
+        #expect(stored.access == "sk-SECOND-SECRET")
+        #expect(stored.extras["baseUrl"] == .string("https://two.example.invalid/v1"))
+
+        let listed = await endpoints()
+        #expect(listed.map(\.provider) == [.openAICompatible, second, .openAICompatibleEndpoint(3)])
+        #expect(listed.map(\.account) == ["one.example.invalid", "two.example.invalid", nil])
+        #expect(listed.map(\.models) == [["model-one"], ["model-two"], nil])
+        #expect(try await desk.apiConfiguration(for: second).values["baseUrl"] == "https://two.example.invalid/v1")
+        #expect(try await desk.apiConfiguration(for: .openAICompatible).values["apiKey"] == "sk-FIRST-SECRET")
+
+        // Signing out of the first leaves the second, and the first is the one to add.
+        try await desk.signOut(.openAICompatible)
+        #expect(try await store.credentials(for: "openai-compatible.2") == stored)
+        let left = await endpoints()
+        #expect(left.map(\.provider) == [second, .openAICompatible])
+        #expect(left.map(\.signedIn) == [true, false])
+    }
+
+    @Test
+    func `each OpenAI-compatible endpoint resolves to its own address and key`() async throws {
+        func endpoint(_ key: String, _ host: String, _ model: String) -> OAuthCredentials {
+            OAuthCredentials(access: key, refresh: "", expires: .max, extras: [
+                "baseUrl": .string("https://\(host)/v1"), "defaultModel": .string(model),
+            ])
+        }
+        let manager = OAuthManager(source: DeliveredCredentialSource([
+            "openai-compatible": endpoint("sk-one", "one.example.invalid", "model-one"),
+            "openai-compatible.2": endpoint("sk-two", "two.example.invalid", "model-two"),
+        ]))
+        let one = try #require(try await ProviderRegistration.resolve(storeID: "openai-compatible", manager: manager))
+        let two = try #require(try await ProviderRegistration.resolve(
+            storeID: "openai-compatible.2",
+            manager: manager,
+            modelOverride: "model-b",
+        ))
+        #expect(one.model.baseURL == "https://one.example.invalid/v1" && one.model.id == "model-one")
+        #expect(two.model.baseURL == "https://two.example.invalid/v1" && two.model.id == "model-b")
+        #expect(one.model.api == two.model.api && one.model.provider == two.model.provider)
+        // Resolving one after the other leaves each its own key.
+        #expect(try await two.authResolver?(two.model, nil)?.token == "sk-two")
+        #expect(try await one.authResolver?(one.model, nil)?.token == "sk-one")
+        // An endpoint nobody signed in to resolves to nothing.
+        #expect(try await ProviderRegistration.resolve(storeID: "openai-compatible.3", manager: manager) == nil)
     }
 
     @Test

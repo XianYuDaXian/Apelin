@@ -120,7 +120,12 @@ public enum ApelinLink {
 /// (in brackets). Credentials are never part of a request: the agent reads
 /// them from the keychain by that id. The first four are the original
 /// names; a case is never renamed on the wire.
-public enum AgentProvider: String, Codable, Sendable {
+///
+/// On the wire a provider is one string, its case's name. A further
+/// OpenAI-compatible endpoint is `openAICompatible.<number>`, so whatever
+/// is kept by provider (a sign-in, its enabled models, the composer's
+/// model) is kept for each endpoint by itself.
+public enum AgentProvider: Hashable, Sendable {
     /// GitHub Copilot (kwwk's `github-copilot` credential).
     case githubCopilot
     /// Anthropic's Messages API with an API key (`anthropic-api-key`).
@@ -141,6 +146,8 @@ public enum AgentProvider: String, Codable, Sendable {
     case devin
     /// Kiro, through AWS Builder ID, Google or GitHub (`kiro`).
     case kiro
+    /// Antigravity, Google's, through a Google sign-in (`antigravity`).
+    case antigravity
     /// Qoder, qoder.com (`qoder`).
     case qoder
     /// Qoder CN, qoder.cn (`qoder-cn`).
@@ -149,6 +156,13 @@ public enum AgentProvider: String, Codable, Sendable {
     case workBuddy
     /// WorkBuddy AI, the international build (`workbuddy-ai`).
     case workBuddyAI
+    /// Trae CN, ByteDance's IDE, China build (`trae`).
+    case trae
+    /// Trae, the international build (`trae-intl`).
+    case traeIntl
+    /// Raccoon, SenseTime's office assistant, signed in to through its
+    /// portal (`raccoon`).
+    case raccoon
     /// Kimi For Coding, Moonshot's coding plan (`kimi-coding`).
     case kimiCoding
     /// Kimi For Coding Global, the kimi.ai coding plan (`kimi-coding-ai`).
@@ -177,9 +191,129 @@ public enum AgentProvider: String, Codable, Sendable {
     /// OpenCode Zen, opencode.ai's pay-as-you-go gateway, with an OpenCode
     /// Console key (`opencode`).
     case openCodeZen
+
+    /// One more OpenAI-compatible endpoint beside the first, with a key,
+    /// base URL and models of its own (`openai-compatible.<number>`). They
+    /// are numbered from 2 as the user adds them (#60: there was one
+    /// endpoint, and adding another replaced it).
+    case openAICompatibleEndpoint(Int)
 }
 
-extension AgentProvider: CaseIterable {}
+extension AgentProvider: RawRepresentable, Codable {
+    /// The numbers a further endpoint takes: the first is `openAICompatible`.
+    public static let endpointNumbers = 2 ... 99
+
+    private static let endpointPrefix = "openAICompatible."
+
+    public var rawValue: String {
+        switch self {
+        case .githubCopilot: "githubCopilot"
+        case .anthropic: "anthropic"
+        case .anthropicOAuth: "anthropicOAuth"
+        case .openAICompatible: "openAICompatible"
+        case .openAICodex: "openAICodex"
+        case .cursor: "cursor"
+        case .devin: "devin"
+        case .kiro: "kiro"
+        case .antigravity: "antigravity"
+        case .qoder: "qoder"
+        case .qoderCN: "qoderCN"
+        case .workBuddy: "workBuddy"
+        case .workBuddyAI: "workBuddyAI"
+        case .trae: "trae"
+        case .traeIntl: "traeIntl"
+        case .raccoon: "raccoon"
+        case .kimiCoding: "kimiCoding"
+        case .kimiCodingGlobal: "kimiCodingGlobal"
+        case .xai: "xai"
+        case .zai: "zai"
+        case .zaiCodingCN: "zaiCodingCN"
+        case .openRouter: "openRouter"
+        case .openAI: "openAI"
+        case .google: "google"
+        case .deepSeek: "deepSeek"
+        case .openCodeGo: "openCodeGo"
+        case .openCodeZen: "openCodeZen"
+        case let .openAICompatibleEndpoint(number): Self.endpointPrefix + String(number)
+        }
+    }
+
+    public init?(rawValue: String) {
+        if let fixed = Self.byName[rawValue] {
+            self = fixed
+            return
+        }
+        // Digits alone, with no sign, space or leading zero: one spelling a number.
+        guard rawValue.hasPrefix(Self.endpointPrefix),
+              let number = Int(rawValue.dropFirst(Self.endpointPrefix.count)),
+              Self.endpointNumbers.contains(number),
+              Self.endpointPrefix + String(number) == rawValue
+        else { return nil }
+        self = .openAICompatibleEndpoint(number)
+    }
+
+    private static let byName = Dictionary(uniqueKeysWithValues: allCases.map { ($0.rawValue, $0) })
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        let name = try container.decode(String.self)
+        guard let provider = Self(rawValue: name) else {
+            throw DecodingError.dataCorruptedError(in: container, debugDescription: "unknown provider \(name)")
+        }
+        self = provider
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
+}
+
+extension AgentProvider: CaseIterable {
+    /// Every provider there is to sign in to. A further OpenAI-compatible
+    /// endpoint is not one of them: it exists once the user adds it.
+    public static let allCases: [AgentProvider] = [
+        .githubCopilot,
+        .anthropic,
+        .anthropicOAuth,
+        .openAICompatible,
+        .openAICodex,
+        .cursor,
+        .devin,
+        .kiro,
+        .antigravity,
+        .qoder,
+        .qoderCN,
+        .workBuddy,
+        .workBuddyAI,
+        .trae,
+        .traeIntl,
+        .raccoon,
+        .kimiCoding,
+        .kimiCodingGlobal,
+        .xai,
+        .zai,
+        .zaiCodingCN,
+        .openRouter,
+        .openAI,
+        .google,
+        .deepSeek,
+        .openCodeGo,
+        .openCodeZen,
+    ]
+}
+
+public extension AgentProvider {
+    /// The provider whose sign-in form, transport and name this one has:
+    /// itself, and `openAICompatible` for a further endpoint.
+    var kind: AgentProvider {
+        if case .openAICompatibleEndpoint = self {
+            .openAICompatible
+        } else {
+            self
+        }
+    }
+}
 
 public enum AgentReasoningEffort: String, Codable, Sendable, CaseIterable {
     case off, minimal, low, medium, high, xhigh, max

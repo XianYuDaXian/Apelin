@@ -206,7 +206,10 @@ public actor AgentSession {
         let resolved: ResolvedProvider
         do {
             resolved = try await ProviderResolver.resolve(
-                configuration.provider, credentials: credentials, contextWindow: configuration.contextWindow,
+                configuration.provider,
+                credentials: credentials,
+                contextWindow: configuration.contextWindow,
+                network: configuration.network,
             )
         } catch {
             journal.sessionOpenFailed(error)
@@ -325,9 +328,9 @@ public actor AgentSession {
             streamFn: NetworkRecovery.stream(
                 path: configuration.network,
                 inner: journal.observingRequests(liveStreamFn),
-            ) {
+            ) { wait in
                 journal.waitingForNetwork()
-                _ = try? await log.append(.reconnecting)
+                _ = try? await log.append(wait == .route ? .waitingForNetwork : .reconnecting)
             },
             toolExecution: .sequential,
             sessionId: configuration.id,
@@ -427,7 +430,10 @@ public actor AgentSession {
             return
         }
         let resolved = try await ProviderResolver.resolve(
-            provider, credentials: credentials, contextWindow: contextWindow,
+            provider,
+            credentials: credentials,
+            contextWindow: contextWindow,
+            network: configuration.network,
         )
         guard runTask == nil else { return }
         agent.state.model = resolved.model
@@ -463,7 +469,10 @@ public actor AgentSession {
         credentials: any CredentialSource,
     ) async throws {
         let resolved = try await ProviderResolver.resolve(
-            provider, credentials: credentials, contextWindow: contextWindow,
+            provider,
+            credentials: credentials,
+            contextWindow: contextWindow,
+            network: configuration.network,
         )
         resolvedFrom = (provider, resolved.credentials)
         resolvedContextWindow = contextWindow
@@ -1037,15 +1046,43 @@ public actor AgentSession {
         compaction = nil
     }
 
+    /// What a stop was stopping, for whoever must know whether it ended.
+    public final class StoppedWork: @unchecked Sendable {
+        private let lock = NSLock()
+        private var ended = false
+
+        init(_ tasks: [Task<Void, Never>]) {
+            guard !tasks.isEmpty else {
+                ended = true
+                return
+            }
+            Task {
+                for task in tasks {
+                    await task.value
+                }
+                self.lock.withLock { self.ended = true }
+            }
+        }
+
+        /// Whether the stopped run and compaction have ended. A run started
+        /// since the stop does not count.
+        @objc public dynamic var hasEnded: Bool {
+            lock.withLock { ended }
+        }
+    }
+
     /// Stops the run. Waiting approvals resolve as denied, and the messages
     /// queued for it are dropped (`queuedMessagesDropped`).
-    public func abort() async {
+    @discardableResult
+    public func abort() async -> StoppedWork {
+        let stopped = StoppedWork([runTask, compaction].compactMap(\.self))
         aborted = true
         titleTask?.cancel()
         agent.clearSteeringQueue()
         await dropQueued()
         agent.abort()
         await gate.cancelAll(reason: "aborted")
+        return stopped
     }
 
     /// Answers a waiting approval. The host relays this from the app after
@@ -1138,6 +1175,7 @@ public actor AgentSession {
                 await record(.error(
                     message: assistant.errorMessage.map(ErrorDescription.localized)
                         ?? "The model provider returned an error. Try again.",
+                    reason: assistant.providerFailure.flatMap { FailureReason.of($0, hasRoute: hasRoute) },
                 ))
             }
         case .streamRewind:
@@ -1253,7 +1291,16 @@ public actor AgentSession {
             return
         }
         journal.runFailed(error.localizedDescription)
-        await record(.error(message: error.localizedDescription))
+        await record(.error(
+            message: ErrorDescription.localized(error.localizedDescription),
+            reason: FailureReason.of(error, hasRoute: hasRoute),
+        ))
+    }
+
+    /// Whether the device has a route to the network now, which tells a
+    /// failure with none from one the provider's side explains.
+    private var hasRoute: Bool {
+        configuration.network.isSatisfied()
     }
 
     /// Returns once a run whose loop has returned has recorded its end.

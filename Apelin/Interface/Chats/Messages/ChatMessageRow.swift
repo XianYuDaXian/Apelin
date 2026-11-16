@@ -17,7 +17,7 @@ final class ChatMessageRow: ListRowView {
 
     /// A row's insets at `width`: the padding, or more to centre the content
     /// in the readable width.
-    static func insets(for width: CGFloat) -> UIEdgeInsets {
+    @objc dynamic static func insets(for width: CGFloat) -> UIEdgeInsets {
         let side = max(horizontalPadding, ((width - readableWidth) / 2).rounded(.down))
         return UIEdgeInsets(
             top: ChatMarkdownView.blockSpacing / 2,
@@ -38,13 +38,13 @@ final class ChatMessageRow: ListRowView {
     private let senderLabel = UILabel()
     /// The message this row shows: only a change to it animates, never the
     /// row taking another message out of the pool.
-    private var shownID: UUID?
+    @objc dynamic private var shownID: UUID?
     private let label = TextLabelView()
     private let markdownView = ChatMarkdownView()
-    private var markdownText: String?
+    @objc dynamic private var markdownText: String?
     /// The reply has finished, but its last text is still fading in.
-    private var finishesStreamWhenStill = false
-    private var revealObservation: NSKeyValueObservation?
+    @objc dynamic private var finishesStreamWhenStill = false
+    @objc dynamic private var revealObservation: NSKeyValueObservation?
     private let attachmentsView = MessageAttachmentsView()
     /// Under the last reply, when it can be asked again.
     private let retryButton = UIButton(type: .system)
@@ -53,10 +53,10 @@ final class ChatMessageRow: ListRowView {
     /// The button's square.
     private static let retrySide: CGFloat = 32
     /// What the button adds to a row.
-    static var retryHeight: CGFloat {
+    @objc dynamic static var retryHeight: CGFloat {
         retrySpacing + retrySide
     }
-    var attachmentHeightLimit: CGFloat = 0 {
+    @objc dynamic var attachmentHeightLimit: CGFloat = 0 {
         didSet {
             if attachmentHeightLimit != oldValue {
                 setNeedsLayout()
@@ -67,7 +67,7 @@ final class ChatMessageRow: ListRowView {
     /// The screen's, the one `height(for:…)` was given, rather than the
     /// row's own traits, which a row not yet in its window may not have:
     /// the row lays its images out at the height it was measured at.
-    var displayScale: CGFloat = 0 {
+    @objc dynamic var displayScale: CGFloat = 0 {
         didSet {
             if displayScale != oldValue {
                 setNeedsLayout()
@@ -76,10 +76,10 @@ final class ChatMessageRow: ListRowView {
     }
 
     private var attachments: [ComposerAttachment] = []
-    private var isUser = false
+    @objc dynamic private var isUser = false
     private static let sizingMarkdown = ChatMarkdownView()
     private static let sizingLabel = TextLabelView()
-    var onAttachmentLayoutChanged: (() -> Void)?
+    @objc dynamic var onAttachmentLayoutChanged: (() -> Void)?
     var onPreview: ((ComposerAttachment) -> Void)?
     var onPreviewImages: (([ComposerAttachment], UUID) -> Void)?
     /// The last reply's retry button was tapped.
@@ -230,7 +230,7 @@ final class ChatMessageRow: ListRowView {
         setNeedsLayout()
     }
 
-    private func finishStream() {
+    @objc dynamic private func finishStream() {
         finishesStreamWhenStill = false
         markdownView.isStreaming = false
     }
@@ -338,12 +338,12 @@ final class ChatMessageRow: ListRowView {
         return senderHeight + textHeight + attachmentHeight + gap + retryHeight + insets.top + insets.bottom
     }
 
-    private static var senderFont: UIFont {
+    @objc dynamic private static var senderFont: UIFont {
         .preferredFont(forTextStyle: .footnote)
     }
 
     /// The sender line and the space under it.
-    private static var senderHeight: CGFloat {
+    @objc dynamic private static var senderHeight: CGFloat {
         ceil(senderFont.lineHeight) + senderSpacing
     }
 
@@ -352,7 +352,7 @@ final class ChatMessageRow: ListRowView {
         (textSize.map { ceil($0.width) } ?? available) + textPadding * 2
     }
 
-    private static func textWidth(for width: CGFloat, user: Bool) -> CGFloat {
+    @objc dynamic private static func textWidth(for width: CGFloat, user: Bool) -> CGFloat {
         let insets = Self.insets(for: width)
         let available = width - insets.left - insets.right
         return max(user ? min(800, available - userContentPadding * 2) - textPadding * 2 : available, 1)
@@ -362,22 +362,22 @@ final class ChatMessageRow: ListRowView {
     /// line to the top of the label. TextKit's `boundingRect` gives shorter
     /// lines wherever a fallback font brings a taller ascent and descent, as
     /// PingFang does for Chinese, and the text then sat low in its bubble.
-    private static func textSize(_ text: String, width: CGFloat) -> CGSize {
+    @objc dynamic private static func textSize(_ text: String, width: CGFloat) -> CGSize {
         sizingLabel.attributedText = attributedText(text)
         return sizingLabel.sizeThatFits(CGSize(width: width, height: 0))
     }
 
-    private static func attributedText(_ text: String) -> NSAttributedString {
+    @objc dynamic private static func attributedText(_ text: String) -> NSAttributedString {
         NSAttributedString(string: text, attributes: [.font: font, .foregroundColor: UIColor.label])
     }
 
-    private static var font: UIFont {
+    @objc dynamic private static var font: UIFont {
         .preferredFont(forTextStyle: .body)
     }
 }
 
 extension ChatMessageRow: TextLabelViewDelegate {
-    func textLabelView(
+    @objc dynamic func textLabelView(
         _ label: TextLabelView,
         editMenuForSelection selection: NSRange,
         suggestedActions: [UIMenuElement],

@@ -15,8 +15,8 @@ public final class LineReader {
     private let descriptor: Int32
     private let maxLineBytes: Int
     private var buffer = Data()
-    private var skipping = false
-    private var finished = false
+    @objc private dynamic var skipping = false
+    @objc private dynamic var finished = false
     private var chunk = [UInt8](repeating: 0, count: 64 * 1024)
 
     /// Does not take ownership of `descriptor`.

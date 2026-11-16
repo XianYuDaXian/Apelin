@@ -68,14 +68,18 @@ public enum AgentWorker {
                     await session.setAsksBeforeScreen(asks)
                 }
                 if let provider = prompt.provider {
-                    try await session.configure(
-                        provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: prompt.model)),
-                        thinking: .init(rawValue: prompt.reasoningEffort?.rawValue ?? "off") ?? .off,
-                        explicitReasoningOff: prompt.reasoningEffort == .off,
-                        serviceTier: AgentWorker.serviceTier(prompt.serviceTier),
-                        contextWindow: prompt.contextWindow,
-                        credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
-                    )
+                    do {
+                        try await session.configure(
+                            provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: prompt.model)),
+                            thinking: .init(rawValue: prompt.reasoningEffort?.rawValue ?? "off") ?? .off,
+                            explicitReasoningOff: prompt.reasoningEffort == .off,
+                            serviceTier: AgentWorker.serviceTier(prompt.serviceTier),
+                            contextWindow: prompt.contextWindow,
+                            credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
+                        )
+                    } catch let error as ProviderResolutionError {
+                        throw AgentWorker.signInError(error)
+                    }
                     await state.modelChoice.set(
                         provider: provider,
                         model: prompt.model,
@@ -137,14 +141,18 @@ public enum AgentWorker {
                 // The reply is asked again with the model the composer shows
                 // now, not the one the session was opened with.
                 if let provider = regenerate.provider {
-                    try await session.configure(
-                        provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: regenerate.model)),
-                        thinking: .init(rawValue: regenerate.reasoningEffort?.rawValue ?? "off") ?? .off,
-                        explicitReasoningOff: regenerate.reasoningEffort == .off,
-                        serviceTier: AgentWorker.serviceTier(regenerate.serviceTier),
-                        contextWindow: regenerate.contextWindow,
-                        credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
-                    )
+                    do {
+                        try await session.configure(
+                            provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: regenerate.model)),
+                            thinking: .init(rawValue: regenerate.reasoningEffort?.rawValue ?? "off") ?? .off,
+                            explicitReasoningOff: regenerate.reasoningEffort == .off,
+                            serviceTier: AgentWorker.serviceTier(regenerate.serviceTier),
+                            contextWindow: regenerate.contextWindow,
+                            credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
+                        )
+                    } catch let error as ProviderResolutionError {
+                        throw AgentWorker.signInError(error)
+                    }
                     await state.modelChoice.set(
                         provider: provider,
                         model: regenerate.model,
@@ -161,14 +169,18 @@ public enum AgentWorker {
                 let session = try await state.session(change.sessionID)
                 // Mid-run: the answer in flight is not touched, the next
                 // request of the turn reads the new model.
-                try await session.switchModel(
-                    provider: AgentWorker.provider(AgentOpenRequest(provider: change.provider, model: change.model)),
-                    thinking: .init(rawValue: change.reasoningEffort?.rawValue ?? "off") ?? .off,
-                    explicitReasoningOff: change.reasoningEffort == .off,
-                    serviceTier: AgentWorker.serviceTier(change.serviceTier),
-                    contextWindow: change.contextWindow,
-                    credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
-                )
+                do {
+                    try await session.switchModel(
+                        provider: AgentWorker.provider(AgentOpenRequest(provider: change.provider, model: change.model)),
+                        thinking: .init(rawValue: change.reasoningEffort?.rawValue ?? "off") ?? .off,
+                        explicitReasoningOff: change.reasoningEffort == .off,
+                        serviceTier: AgentWorker.serviceTier(change.serviceTier),
+                        contextWindow: change.contextWindow,
+                        credentials: KeychainCredentialSource(accessGroup: keychainAccessGroup),
+                    )
+                } catch let error as ProviderResolutionError {
+                    throw AgentWorker.signInError(error)
+                }
                 await state.modelChoice.set(
                     provider: change.provider,
                     model: change.model,
@@ -262,6 +274,26 @@ public enum AgentWorker {
         wire.flatMap { ServiceTier(rawValue: $0.rawValue) }
     }
 
+    /// What the app is told when a session's sign-in cannot be used. One
+    /// that is not saved is `denied`, with what the inbox refused beside
+    /// it. One that is saved and could not be exchanged or renewed is
+    /// `unavailable` with the reason the failure had (no network, a
+    /// provider out of reach or too slow), which the app says in its own
+    /// words, and `internal` in the provider's when it had none.
+    static func signInError(_ error: ProviderResolutionError, inboxRejected: [String] = []) -> ApelinError {
+        switch error {
+        case .missingCredentials:
+            var message = error.localizedDescription
+            if !inboxRejected.isEmpty {
+                message += " (inbox: \(inboxRejected.joined(separator: "; ")))"
+            }
+            return ApelinError(.denied, message)
+        case let .unresolved(message, reason):
+            guard let reason else { return ApelinError(.internal, message) }
+            return ApelinError(.unavailable, message, reason: reason)
+        }
+    }
+
     /// The kwwk provider configuration for an open request. The first four
     /// keep their own cases (and need a model named, as they always have);
     /// every other provider uses its credential store id and the default
@@ -281,9 +313,15 @@ public enum AgentWorker {
         case .openAICompatible:
             guard let model else { throw ApelinError(.badRequest, "name the model for \(provider.rawValue)") }
             return .openAICompatible(model: model)
-        case .openAICodex, .cursor, .devin, .kiro, .qoder, .qoderCN, .workBuddy, .workBuddyAI, .kimiCoding,
-             .kimiCodingGlobal, .xai, .zai, .zaiCodingCN, .openRouter, .openAI, .google, .deepSeek, .openCodeGo,
-             .openCodeZen:
+        case .openAICodex, .cursor, .devin, .kiro, .antigravity, .qoder, .qoderCN, .workBuddy, .workBuddyAI,
+             .trae, .traeIntl, .raccoon,
+             .kimiCoding, .kimiCodingGlobal, .xai, .zai, .zaiCodingCN, .openRouter, .openAI, .google, .deepSeek,
+             .openCodeGo, .openCodeZen:
+            return .stored(storeID: provider.storeID, model: model)
+        case .openAICompatibleEndpoint:
+            // As the first endpoint: its base URL is with its key, and the
+            // model is named.
+            guard let model else { throw ApelinError(.badRequest, "name the model for \(provider.rawValue)") }
             return .stored(storeID: provider.storeID, model: model)
         }
     }
@@ -364,11 +402,7 @@ actor WorkerState {
                 credentials: keychain,
             )
         } catch let error as ProviderResolutionError {
-            var message = error.localizedDescription
-            if !imported.rejected.isEmpty {
-                message += " (inbox: \(imported.rejected.joined(separator: "; ")))"
-            }
-            throw ApelinError(.denied, message)
+            throw AgentWorker.signInError(error, inboxRejected: imported.rejected)
         } catch let error as ApelinError {
             throw error
         } catch {
@@ -436,8 +470,43 @@ actor WorkerState {
         return .approve(approve.scope == .session ? .session : .once)
     }
 
+    /// How long a stopped run has to end. A tool call no longer holds it
+    /// (`ToolRunner.run`); this is for what is left, a model request or a
+    /// compaction that does not answer its cancellation.
+    static let stopPatience: Duration = .seconds(20)
+
+    /// Stops the run. One that has not ended `stopPatience` later would
+    /// leave the conversation working with Stop spent and every later
+    /// message queued behind it (#59), so the session's task is ended
+    /// instead (`endUnstopped`). Each stop is timed by itself: a second
+    /// one does not give the run more time.
     func abort() async {
-        await session?.abort()
+        guard let session else { return }
+        let stopped = await session.abort()
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.stopPatience)
+            if !stopped.hasEnded {
+                await self?.endUnstopped()
+            }
+        }
+    }
+
+    /// Ends the task of a session whose stopped run did not end, and the
+    /// process with it, without waiting for the session: the app reads the
+    /// task's end as the turn's, and the conversation opens again on its
+    /// next message with the transcript its last finished run left.
+    private func endUnstopped() {
+        guard !finished else { return }
+        finished = true
+        if let context, let taskID {
+            let message = "This chat did not stop in time, so Apelin ended it. Send a message to continue."
+            context.emit(taskID, "error", .object(["message": .string(message)]))
+            context.finish(taskID, .cancelled, message: message)
+        }
+        Task.detached {
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            exit(0)
+        }
     }
 
     /// A run ended; a headless session ends with it.
@@ -585,6 +654,8 @@ actor EventRelay {
             return [("messageDiscarded", nil)]
         case .reconnecting:
             return [("reconnecting", nil)]
+        case .waitingForNetwork:
+            return [("waitingForNetwork", nil)]
         case .toolCallPreparing:
             return [("toolCallPreparing", nil)]
         case let .textDelta(text):
@@ -633,8 +704,12 @@ actor EventRelay {
                 payload["title"] = .string(title)
             }
             return [(AgentNoticeRules.eventKind, .object(payload))]
-        case let .error(message):
-            return [("error", .object(["message": .string(message)]))]
+        case let .error(message, reason):
+            var payload: [String: ApelinCore.JSONValue] = ["message": .string(message)]
+            if let reason {
+                payload["reason"] = .string(reason.rawValue)
+            }
+            return [("error", .object(payload))]
         case let .finished(reason):
             return [("finished", .object(["reason": .string(reason.rawValue)]))]
         case .compactionStarted:

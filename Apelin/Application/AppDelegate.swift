@@ -5,7 +5,7 @@ import UIKit
 
 /// Not `@main`: `main.swift` clears saved scenes before `UIApplicationMain`.
 final class AppDelegate: UIResponder, UIApplicationDelegate {
-    func application(
+    @objc dynamic func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions _: [UIApplication.LaunchOptionsKey: Any]?,
     ) -> Bool {
@@ -21,7 +21,12 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             })
             Self.presentWhenActive(alert, in: application)
         }
+        // before anything reads the data folder
+        let recovered = DataFolder.container.flatMap { ContainerDataFolder.recover(from: $0, into: .app) }
         AppJournal.start()
+        if let recovered {
+            AppJournal.note(recovered)
+        }
         NetworkAccess.start()
         ConversationNotices.start()
         // the progress card and the alerts carry the app's icon, as Fila's do
@@ -35,11 +40,11 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 
     /// A quit takes the Live Activity with it: nothing would update it
     /// after (`ChatWidgetPublisher.endActivitiesForQuit`).
-    func applicationWillTerminate(_: UIApplication) {
+    @objc dynamic func applicationWillTerminate(_: UIApplication) {
         ChatWidgetPublisher.endActivitiesForQuit()
     }
 
-    func application(
+    @objc dynamic func application(
         _: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
         options _: UIScene.ConnectionOptions,
@@ -52,7 +57,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
     /// The watch fires once, and may fire with no scene active: at launch,
     /// in the background, or on resume before the scene activates. The
     /// notice then waits for the next activation instead of being lost.
-    private static func presentWhenActive(_ alert: UIAlertController, in application: UIApplication) {
+    @objc private dynamic static func presentWhenActive(_ alert: UIAlertController, in application: UIApplication) {
         let active = application.connectedScenes.first { $0.activationState == .foregroundActive }
         guard let scene = active as? UIWindowScene else {
             var observer: NSObjectProtocol?
@@ -81,9 +86,9 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
 }
 
 final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
-    var window: UIWindow?
+    @objc dynamic var window: UIWindow?
 
-    func scene(
+    @objc dynamic func scene(
         _ scene: UIScene,
         willConnectTo _: UISceneSession,
         options connectionOptions: UIScene.ConnectionOptions,
@@ -101,7 +106,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     /// Open in Apelin, or an `apelin://` link, while the app runs.
-    func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
+    @objc dynamic func scene(_ scene: UIScene, openURLContexts contexts: Set<UIOpenURLContext>) {
         guard let scene = scene as? UIWindowScene else { return }
         openURLs(contexts, in: scene)
     }
@@ -112,7 +117,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// sheet, and becomes an attachment on a conversation (`SampleInbox`).
     /// One link or transfer at a time: a second sheet could not be presented
     /// over the first.
-    private func openURLs(_ contexts: Set<UIOpenURLContext>, in scene: UIWindowScene) {
+    @objc private dynamic func openURLs(_ contexts: Set<UIOpenURLContext>, in scene: UIWindowScene) {
         var samples: [URL] = []
         var showedTransfer = false
         for context in contexts {
@@ -139,7 +144,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// hands the copies to the conversation page, where they join the shown
     /// conversation's composer. The copy runs off the main thread: a share
     /// can be tens of megabytes, and the open call has already returned.
-    private func receive(_ urls: [URL], in scene: UIWindowScene) {
+    @objc private dynamic func receive(_ urls: [URL], in scene: UIWindowScene) {
         guard let root = Self.rootInterface(in: scene) else { return }
         let folder = DataFolder.app.root
         Task { @MainActor in
@@ -165,7 +170,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     /// The page that shows the conversations, whichever window carries it.
-    private static func rootInterface(in scene: UIWindowScene) -> RootInterfaceController? {
+    @objc private dynamic static func rootInterface(in scene: UIWindowScene) -> RootInterfaceController? {
         let scenes = [scene] + UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
         return scenes.lazy.flatMap(\.windows).compactMap { $0.rootViewController as? RootInterfaceController }.first
     }

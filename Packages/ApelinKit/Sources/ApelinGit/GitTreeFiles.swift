@@ -66,7 +66,7 @@ final class ReplacementRecord {
 
     /// After the checkout: the settled bytes over the repository's, and the
     /// set-aside files gone.
-    func finish() throws {
+    @objc dynamic func finish() throws {
         for (url, bytes) in settled {
             do {
                 try bytes.write(to: url, options: .atomic)
@@ -84,7 +84,7 @@ final class ReplacementRecord {
 
     /// After a failure, once what the checkout wrote is gone: each file back
     /// where it was.
-    func restore() {
+    @objc dynamic func restore() {
         for (original, moved) in setAside.reversed() {
             if let moved {
                 unlink(original.path)

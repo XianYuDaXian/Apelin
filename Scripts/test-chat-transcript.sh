@@ -1,14 +1,18 @@
 #!/bin/bash
 # Compile the app's event-to-transcript reducer, how it reads past a reopened
-# session's replay, how it adopts the conversations agents open, how far it
+# session's replay and takes from it the approvals its stopped task left,
+# how it adopts the conversations agents open, how far it
 # follows a turn, how the trace sheet lists a summary's steps, how dropped
 # messages go back to the composer, which conversations a deleted project
-# takes with it, which tool results are builds the star prompt counts and
+# takes with it, what a rootless app's data container gives back, which
+# tool results are builds the star prompt counts and
 # how often it asks, the order the sidebar lists conversations in, which
 # projects the project menu lists at its top, which conversations offer
 # Delete and when it asks first, which replies leave a conversation
-# unread, and what a forced push's and a squash's approval cards show,
-# against the harness modules.
+# unread, what a forced push's and a squash's approval cards show, how
+# a sign-in page says it is finished from another device, which typed
+# text the Web capture takes for an address, and which version of a linked
+# package the app shows, against the harness modules.
 # Usage: test-chat-transcript.sh <ApelinKit modules directory>
 set -euo pipefail
 
@@ -22,6 +26,7 @@ sources=(
     "$root/Apelin/Interface/Chats/ChatUnread.swift"
     "$root/Apelin/Interface/Chats/Composer/ComposerDraft.swift"
     "$root/Apelin/Interface/Chats/Messages/ChatMessage.swift"
+    "$root/Apelin/Interface/Chats/Messages/ChatFailure.swift"
     "$root/Apelin/Interface/Chats/Messages/ApprovalCardText.swift"
     "$root/Apelin/Interface/Chats/Messages/ToolCallBanner.swift"
     "$root/Apelin/Interface/Chats/Messages/ToolCallDetail.swift"
@@ -32,6 +37,7 @@ sources=(
     "$root/Apelin/Interface/Chats/ChatAdoption.swift"
     "$root/Apelin/Interface/Chats/DroppedMessages.swift"
     "$root/Apelin/Interface/Chats/DeletedProjects.swift"
+    "$root/Apelin/Application/ContainerDataFolder.swift"
     "$root/Apelin/Interface/Chats/ChatDeletion.swift"
     "$root/Apelin/Interface/Chats/TurnFollowing.swift"
     "$root/Apelin/Interface/Root/SidebarOrder.swift"
@@ -39,12 +45,17 @@ sources=(
     "$root/Apelin/Interface/Root/ChatRowAction.swift"
     "$root/Apelin/Interface/Feedback/CompletedBuilds.swift"
     "$root/Apelin/Interface/Feedback/StarPromptState.swift"
+    "$root/Apelin/Interface/Settings/Accounts/SignInProgress.swift"
+    "$root/Apelin/Interface/Chats/Composer/WebAddress.swift"
+    "$root/Apelin/Interface/Settings/LinkedPackage.swift"
     "$root/Tests/ChatTranscript/TranscriptFold.swift"
     "$root/Tests/ChatTranscript/ToolCallDetailCheck.swift"
     "$root/Tests/ChatTranscript/TraceStepCheck.swift"
     "$root/Tests/ChatTranscript/ReplayEndCheck.swift"
+    "$root/Tests/ChatTranscript/AbandonedApprovalCheck.swift"
     "$root/Tests/ChatTranscript/DroppedMessagesCheck.swift"
     "$root/Tests/ChatTranscript/DeletedProjectsCheck.swift"
+    "$root/Tests/ChatTranscript/ContainerDataFolderCheck.swift"
     "$root/Tests/ChatTranscript/CompletedBuildsCheck.swift"
     "$root/Tests/ChatTranscript/StarPromptStateCheck.swift"
     "$root/Tests/ChatTranscript/SidebarOrderCheck.swift"
@@ -53,6 +64,9 @@ sources=(
     "$root/Tests/ChatTranscript/ChatUnreadCheck.swift"
     "$root/Tests/ChatTranscript/ForcePushCardCheck.swift"
     "$root/Tests/ChatTranscript/SquashCardCheck.swift"
+    "$root/Tests/ChatTranscript/SignInElsewhereCheck.swift"
+    "$root/Tests/ChatTranscript/WebAddressCheck.swift"
+    "$root/Tests/ChatTranscript/LinkedPackageCheck.swift"
     "$root/Tests/ChatTranscript/main.swift"
 )
 

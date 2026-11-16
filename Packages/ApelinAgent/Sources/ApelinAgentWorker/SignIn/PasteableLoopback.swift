@@ -13,14 +13,14 @@ final class PasteableLoopback: OAuthLoopbackListener, @unchecked Sendable {
     private let inner: any OAuthLoopbackListener
     private let lock = NSLock()
     private var waiter: CheckedContinuation<[String: String], Error>?
-    private var pasted: [String: String]?
-    private var stopped = false
+    @objc private dynamic var pasted: [String: String]?
+    @objc private dynamic var stopped = false
 
     init(inner: any OAuthLoopbackListener) {
         self.inner = inner
     }
 
-    var redirectURI: String {
+    @objc dynamic var redirectURI: String {
         inner.redirectURI
     }
 
@@ -38,7 +38,7 @@ final class PasteableLoopback: OAuthLoopbackListener, @unchecked Sendable {
         }
     }
 
-    func stop() {
+    @objc dynamic func stop() {
         inner.stop()
         let waiter = lock.withLock { () -> CheckedContinuation<[String: String], Error>? in
             stopped = true
@@ -51,7 +51,7 @@ final class PasteableLoopback: OAuthLoopbackListener, @unchecked Sendable {
     /// The redirect as the user pasted it. Its query is what the listener
     /// would have read; anything without a code or a provider error is not
     /// a redirect, and the sign-in goes on waiting.
-    func paste(_ text: String) throws {
+    @objc dynamic func paste(_ text: String) throws {
         let parameters = try Self.parameters(of: text)
         let waiter = lock.withLock { () -> CheckedContinuation<[String: String], Error>? in
             if let waiter = self.waiter {
@@ -64,7 +64,7 @@ final class PasteableLoopback: OAuthLoopbackListener, @unchecked Sendable {
         waiter?.resume(returning: parameters)
     }
 
-    static func parameters(of text: String) throws -> [String: String] {
+    @objc static dynamic func parameters(of text: String) throws -> [String: String] {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let components = URLComponents(string: trimmed), let items = components.queryItems else {
             throw ApelinError(
@@ -78,7 +78,10 @@ final class PasteableLoopback: OAuthLoopbackListener, @unchecked Sendable {
                 parameters[item.name] = value
             }
         }
-        guard parameters["code"]?.isEmpty == false || parameters["error"]?.isEmpty == false else {
+        // What kwwk's listener takes for a redirect: the authorization code,
+        // Trae's `authCodeInfo` in its place, or a provider error.
+        let isRedirect = ["code", "authCodeInfo", "error"].contains { parameters[$0]?.isEmpty == false }
+        guard isRedirect else {
             throw ApelinError(
                 .badRequest,
                 "This address does not contain a sign-in code. Copy the full address from Safari and paste it again.",

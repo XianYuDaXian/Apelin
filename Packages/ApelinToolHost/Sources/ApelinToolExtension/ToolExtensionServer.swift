@@ -63,8 +63,8 @@ public final class ToolCallContext: @unchecked Sendable {
     private let channel: ToolAttachmentChannel?
     private let attachmentWait: TimeInterval
     private let lock = NSLock()
-    private var cancelled = false
-    private var claimed = Set<String>()
+    @objc private dynamic var cancelled = false
+    @objc private dynamic var claimed = Set<String>()
 
     init(
         requestID: String,
@@ -84,19 +84,19 @@ public final class ToolCallContext: @unchecked Sendable {
 
     /// Whether the host cancelled this call. Long handlers check it between
     /// steps; a cancelled Swift task reads true here too.
-    public var isCancelled: Bool {
+    @objc public dynamic var isCancelled: Bool {
         lock.lock()
         defer { lock.unlock() }
         return cancelled || Task.isCancelled
     }
 
-    public func checkCancellation() throws {
+    @objc public dynamic func checkCancellation() throws {
         if isCancelled {
             throw CancellationError()
         }
     }
 
-    func markCancelled() {
+    @objc dynamic func markCancelled() {
         lock.lock()
         cancelled = true
         lock.unlock()
@@ -129,7 +129,7 @@ public final class ToolCallContext: @unchecked Sendable {
         }
     }
 
-    func discardUnclaimed() {
+    @objc dynamic func discardUnclaimed() {
         lock.lock()
         let unclaimed = attachmentReferences.map(\.id).filter { !claimed.contains($0) }
         lock.unlock()
@@ -158,12 +158,12 @@ public final class ToolExtensionServer: @unchecked Sendable {
     private var writer: LineWriter?
     private var channel: ToolAttachmentChannel?
     private var negotiatedVersion: Int?
-    private var outboundFrameLimit: Int
+    @objc private dynamic var outboundFrameLimit: Int
     private var inFlight: [String: (context: ToolCallContext, task: Task<Void, Never>)] = [:]
     /// Calls in flight whose last frame is being written. They hold no slot:
     /// the host sends its next queued call the moment it reads that frame.
-    private var answering = Set<String>()
-    private var attachmentCounter = 0
+    @objc private dynamic var answering = Set<String>()
+    @objc private dynamic var attachmentCounter = 0
 
     /// `peer.name` is the extension id from the manifest.
     public init(
@@ -180,7 +180,7 @@ public final class ToolExtensionServer: @unchecked Sendable {
         outboundFrameLimit = limits.maxFrameBytes
     }
 
-    public func run() -> Never {
+    @objc public dynamic func run() -> Never {
         if CommandLine.arguments.dropFirst().contains("--describe") {
             describe()
             exit(0)
@@ -225,7 +225,7 @@ public final class ToolExtensionServer: @unchecked Sendable {
 
     // MARK: - Frames
 
-    private var currentVersion: Int {
+    @objc private dynamic var currentVersion: Int {
         lock.lock()
         defer { lock.unlock() }
         return negotiatedVersion ?? supportedVersions.max() ?? ToolProtocol.version
@@ -511,7 +511,7 @@ public final class ToolExtensionServer: @unchecked Sendable {
         writer?.write(data)
     }
 
-    private func cancel(requestID: String) {
+    @objc private dynamic func cancel(requestID: String) {
         lock.lock()
         let entry = inFlight[requestID]
         lock.unlock()
@@ -534,7 +534,7 @@ public final class ToolExtensionServer: @unchecked Sendable {
     /// stdin has ended: the host is done. Calls in flight get `cancelGrace`
     /// to finish (their results go nowhere, or to a one-shot pipe), then are
     /// cancelled and given a moment more.
-    private func shutDown() -> Never {
+    @objc private dynamic func shutDown() -> Never {
         func waitForCalls(_ seconds: TimeInterval) -> Bool {
             let deadline = Date().addingTimeInterval(seconds)
             while Date() < deadline {
@@ -562,7 +562,7 @@ public final class ToolExtensionServer: @unchecked Sendable {
         exit(0)
     }
 
-    private func describe() {
+    @objc private dynamic func describe() {
         struct Description: Encodable {
             var id: String
             var version: String

@@ -13,8 +13,8 @@ public extension AgentProvider {
     /// preserving this order within each group.
     static let signInOrder: [AgentProvider] = {
         let order: [AgentProvider] = [
-            .openAICodex, .anthropicOAuth, .githubCopilot, .cursor,
-            .workBuddyAI, .workBuddy, .kimiCoding, .kimiCodingGlobal, .xai, .openRouter,
+            .openAICodex, .anthropicOAuth, .githubCopilot, .cursor, .antigravity,
+            .workBuddyAI, .workBuddy, .trae, .traeIntl, .raccoon, .kimiCoding, .kimiCodingGlobal, .xai, .openRouter,
             .zai, .zaiCodingCN, .qoder, .qoderCN, .kiro, .devin,
             .openAI, .deepSeek, .openCodeGo, .openCodeZen, .google, .anthropic, .openAICompatible,
         ]
@@ -28,14 +28,19 @@ public extension AgentProvider {
         case .anthropicOAuth: CredentialProviderID.anthropicOAuth
         case .anthropic: CredentialProviderID.anthropicAPIKey
         case .openAICompatible: CredentialProviderID.openAICompatible
+        case let .openAICompatibleEndpoint(number): CredentialProviderID.openAICompatibleEndpoint(number)
         case .openAICodex: "openai-codex"
         case .cursor: "cursor"
         case .devin: "devin"
         case .kiro: "kiro"
+        case .antigravity: "antigravity"
         case .qoder: QoderSite.global.id
         case .qoderCN: QoderSite.cn.id
         case .workBuddy: WorkBuddySite.china.id
         case .workBuddyAI: WorkBuddySite.international.id
+        case .trae: TraeSite.china.id
+        case .traeIntl: TraeSite.international.id
+        case .raccoon: RaccoonOAuth.providerId
         case .kimiCoding: KimiSite.china.id
         case .kimiCodingGlobal: KimiSite.global.id
         case .xai: "xai"
@@ -57,10 +62,11 @@ public extension AgentProvider {
         switch self {
         case .githubCopilot, .kimiCoding, .kimiCodingGlobal, .xai:
             .deviceCode
-        case .anthropicOAuth, .openAICodex, .cursor, .devin, .kiro, .qoder, .qoderCN, .workBuddy, .workBuddyAI,
-             .zai, .zaiCodingCN, .openRouter:
+        case .anthropicOAuth, .openAICodex, .cursor, .devin, .kiro, .antigravity, .qoder, .qoderCN, .workBuddy,
+             .workBuddyAI, .zai, .zaiCodingCN, .openRouter, .trae, .traeIntl, .raccoon:
             .browser
-        case .anthropic, .openAICompatible, .openAI, .google, .deepSeek, .openCodeGo, .openCodeZen:
+        case .anthropic, .openAICompatible, .openAICompatibleEndpoint, .openAI, .google, .deepSeek, .openCodeGo,
+             .openCodeZen:
             .apiKey
         }
     }
@@ -143,8 +149,9 @@ enum SignInKeyForms {
         ]),
     ]
 
+    /// A further OpenAI-compatible endpoint takes the first one's form.
     static func fields(for provider: AgentProvider) -> [KeyField]? {
-        all.first { $0.provider == provider }?.fields
+        all.first { $0.provider == provider.kind }?.fields
     }
 }
 

@@ -6,7 +6,9 @@ import UIKit
 /// in Apelin's display order. Signed-in ones first, each with who
 /// it is signed in as under its name and a `…` menu (Edit Configuration or Sign In Again, Sign
 /// Out); then the rest, those signed in to with an account apart from those
-/// that take a typed key. A search field narrows the list by name.
+/// that take a typed key. A search field narrows the list by name. The
+/// OpenAI-compatible login is there once for each endpoint signed in to,
+/// told apart by its host, and once more among the keys to add another.
 final class ModelProvidersController: TableController, UISearchResultsUpdating {
     private enum Group: Hashable {
         case signedIn
@@ -57,9 +59,9 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
 
     /// The accounts as apelin-agent last listed them.
     private var accounts: [AgentAccount] = []
-    private var loaded = false
-    private var failure: Error?
-    private var query = ""
+    @objc private dynamic var loaded = false
+    @objc private dynamic var failure: Error?
+    @objc private dynamic var query = ""
     private var sections: [(Section, [Row])] = [(.status, [.status(.loading)])]
     private var loader: Task<Void, Never>?
     private let search = UISearchController(searchResultsController: nil)
@@ -96,7 +98,12 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         }
         dataSource.footerTitle = { [weak self] section in
             guard let self, section == sections.last?.0, case .group = section else { return nil }
-            return String(localized: "Credentials stay in this device’s keychain.")
+            // kwwk signs in and talks to every provider here: its version
+            // is what a report about one needs.
+            guard let kwwk = LinkedPackage.kwwkVersion else {
+                return String(localized: "Credentials stay in this device’s keychain.")
+            }
+            return String(localized: "Credentials stay in this device’s keychain. Currently using kwwk \(kwwk).")
         }
         dataSource.update(sections)
     }
@@ -106,7 +113,7 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         load()
     }
 
-    private func load() {
+    @objc(apelin_load) private dynamic func load() {
         loader?.cancel()
         dataSource.beginLoad()
         loader = Task { [weak self] in
@@ -125,14 +132,14 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         }
     }
 
-    func updateSearchResults(for searchController: UISearchController) {
+    @objc dynamic func updateSearchResults(for searchController: UISearchController) {
         let text = (searchController.searchBar.text ?? "").trimmingCharacters(in: .whitespaces)
         guard text != query else { return }
         query = text
         regroup()
     }
 
-    private func regroup() {
+    @objc private dynamic func regroup() {
         if !loaded {
             sections = [(.status, [.status(.loading)])]
         } else if let failure, accounts.isEmpty {
@@ -140,7 +147,11 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         } else {
             let shown = query.isEmpty
                 ? accounts
-                : accounts.filter { $0.provider.displayName.localizedStandardContains(query) }
+                : accounts.filter {
+                    $0.provider.displayName.localizedStandardContains(query)
+                        // an endpoint is found by the host it was signed in to as well
+                        || ($0.account ?? "").localizedStandardContains(query)
+                }
             let groups: [(Group, [AgentAccount])] = [
                 (.signedIn, shown.filter(\.signedIn)),
                 (.accounts, shown.filter { !$0.signedIn && $0.method != .apiKey }),
@@ -255,7 +266,7 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
                     image: UIImage(systemName: "rectangle.portrait.and.arrow.right"),
                     attributes: .destructive,
                 ) { [weak self] _ in
-                    self?.confirmSignOut(account.provider)
+                    self?.confirmSignOut(account)
                 },
             ]),
         ]
@@ -293,9 +304,13 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         presentPageAsFormSheet(page)
     }
 
-    private func confirmSignOut(_ provider: AgentProvider) {
+    /// An OpenAI-compatible endpoint is named by its host: there can be
+    /// several, all with the provider's one name.
+    private func confirmSignOut(_ account: AgentAccount) {
+        let provider = account.provider
+        let name = provider.kind == .openAICompatible ? account.account ?? provider.displayName : provider.displayName
         presentConfirmation(
-            title: "Sign Out of \(provider.displayName)?",
+            title: "Sign Out of \(name)?",
             message: "Agent sessions that use it stop working until you sign in again.",
             confirmTitle: "Sign Out",
             destructive: true,

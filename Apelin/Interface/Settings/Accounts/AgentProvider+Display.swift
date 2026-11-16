@@ -6,24 +6,32 @@ import UIKit
 /// DeepSeek's is the unmodified official whale SVG:
 /// https://api-docs.deepseek.com/img/favicon.svg and OpenCode's (Go's and
 /// Zen's alike) the unmodified official favicon SVG:
-/// https://opencode.ai/favicon.svg
+/// https://opencode.ai/favicon.svg. Antigravity's is its official mark,
+/// https://antigravity.google/assets/image/antigravity-logo.png, scaled
+/// onto the white plate Google AI Studio's mark sits on.
 /// Which providers there are, and in
-/// what order, is apelin-agent's answer, not this file's.
+/// what order, is apelin-agent's answer, not this file's. Every
+/// OpenAI-compatible endpoint has the first one's name and mark: the list
+/// tells them apart by the host each was signed in to.
 extension AgentProvider {
     var displayName: String {
         switch self {
         case .githubCopilot: String(localized: "GitHub Copilot")
         case .anthropicOAuth: String(localized: "Claude Code")
         case .anthropic: String(localized: "Anthropic API")
-        case .openAICompatible: String(localized: "OpenAI-Compatible API")
+        case .openAICompatible, .openAICompatibleEndpoint: String(localized: "OpenAI-Compatible API")
         case .openAICodex: String(localized: "ChatGPT Codex")
         case .cursor: String(localized: "Cursor")
         case .devin: String(localized: "Devin")
         case .kiro: String(localized: "Kiro")
+        case .antigravity: String(localized: "Antigravity")
         case .qoder: String(localized: "Qoder")
         case .qoderCN: String(localized: "Qoder CN")
         case .workBuddy: String(localized: "WorkBuddy")
         case .workBuddyAI: String(localized: "WorkBuddy AI")
+        case .trae: String(localized: "Trae CN")
+        case .traeIntl: String(localized: "Trae")
+        case .raccoon: String(localized: "Raccoon")
         case .kimiCoding: String(localized: "Kimi For Coding")
         case .kimiCodingGlobal: String(localized: "Kimi For Coding Global")
         case .xai: String(localized: "Grok")
@@ -43,15 +51,19 @@ extension AgentProvider {
         case .githubCopilot: UIImage(named: "ProviderGitHubCopilot")
         case .anthropicOAuth: UIImage(named: "ProviderClaude")
         case .anthropic: UIImage(named: "ProviderAnthropicAPI")
-        case .openAICompatible: UIImage(named: "ProviderOpenAICompatible")
+        case .openAICompatible, .openAICompatibleEndpoint: UIImage(named: "ProviderOpenAICompatible")
         case .openAICodex: UIImage(named: "ProviderChatGPTCodex")
         case .cursor: UIImage(named: "ProviderCursor")
         case .devin: UIImage(named: "ProviderDevin")
         case .kiro: UIImage(named: "ProviderKiro")
+        case .antigravity: UIImage(named: "ProviderAntigravity")
         case .qoder: UIImage(named: "ProviderQoder")
         case .qoderCN: UIImage(named: "ProviderQoderCN")
         case .workBuddy: UIImage(named: "ProviderWorkBuddy")
         case .workBuddyAI: UIImage(named: "ProviderWorkBuddyAI")
+        // Both builds share Trae's one mark.
+        case .trae, .traeIntl: UIImage(named: "ProviderTrae")
+        case .raccoon: UIImage(named: "ProviderRaccoon")
         case .kimiCoding, .kimiCodingGlobal: UIImage(named: "ProviderKimi")
         case .xai: UIImage(named: "ProviderGrok")
         case .zai: UIImage(named: "ProviderZai")
@@ -73,7 +85,7 @@ extension AgentProvider {
             String(localized: "Sign in with your Claude Pro or Max plan.")
         case .anthropic:
             String(localized: "Use an API key from the Anthropic Console.")
-        case .openAICompatible:
+        case .openAICompatible, .openAICompatibleEndpoint:
             String(localized: "Use an endpoint that supports the OpenAI Chat Completions API.")
         case .openAICodex:
             String(localized: "Sign in with your ChatGPT Plus or Pro plan.")
@@ -83,6 +95,8 @@ extension AgentProvider {
             String(localized: "Sign in with your Devin or Windsurf subscription.")
         case .kiro:
             String(localized: "Sign in to Kiro with AWS Builder ID, Google or GitHub.")
+        case .antigravity:
+            String(localized: "Sign in with the Google account you use for Antigravity.")
         case .qoder:
             String(localized: "Sign in with your qoder.com subscription.")
         case .qoderCN:
@@ -91,6 +105,12 @@ extension AgentProvider {
             String(localized: "Sign in to WorkBuddy with your CodeBuddy China plan.")
         case .workBuddyAI:
             String(localized: "Sign in to WorkBuddy AI with your CodeBuddy international plan.")
+        case .trae:
+            String(localized: "Sign in with your Trae CN account in the browser.")
+        case .traeIntl:
+            String(localized: "Sign in with your Trae account in the browser.")
+        case .raccoon:
+            String(localized: "Sign in with your Raccoon account in the browser.")
         case .kimiCoding:
             String(localized: "Sign in with your Kimi coding plan.")
         case .kimiCodingGlobal:
