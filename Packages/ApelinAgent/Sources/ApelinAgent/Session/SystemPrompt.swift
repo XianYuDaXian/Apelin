@@ -80,6 +80,7 @@ enum SystemPrompt {
         - Whenever you open or point to another conversation or project, give the user its link as markdown, which opens it in Apelin with one tap: [title](apelin://conversation/<session id>) or [name](apelin://project/<projectID>). The tools' results carry these links. Apelin has no other links.
         - A sequence that backgrounds or closes Apelin can go on from here: verify each visible step, relaunch wiki.qaq.apelin when asked, and respring only with apelin_device_respring.
         """)
+        sections.append(CodexOverlay.section)
         if project.isTemporary {
             sections.append("""
             # General Chat
