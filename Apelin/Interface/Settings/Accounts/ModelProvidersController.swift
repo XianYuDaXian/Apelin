@@ -188,7 +188,10 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         alert.addAction(UIAlertAction(title: String(localized: "Add"), style: .default) { [weak self] _ in
             let value = alert.textFields?.first?.text ?? ""
             guard CustomReasoningEfforts.add(value) else {
-                self?.presentNotice(title: "无效推理强度", message: "请输入非内置且不重复的原始值。")
+                self?.presentNotice(
+                    title: String(localized: "Invalid Model ID"),
+                    message: String(localized: "Enter a model ID without spaces or line breaks."),
+                )
                 return
             }
             self?.manageReasoningEfforts()
