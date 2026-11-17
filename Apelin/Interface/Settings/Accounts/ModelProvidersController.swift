@@ -189,8 +189,8 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
             let value = alert.textFields?.first?.text ?? ""
             guard CustomReasoningEfforts.add(value) else {
                 self?.presentNotice(
-                    title: String(localized: "Invalid Model ID"),
-                    message: String(localized: "Enter a model ID without spaces or line breaks."),
+                    title: "Invalid Model ID",
+                    message: "Enter a model ID without spaces or line breaks.",
                 )
                 return
             }

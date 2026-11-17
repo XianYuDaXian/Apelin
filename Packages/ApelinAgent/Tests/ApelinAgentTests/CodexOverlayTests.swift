@@ -3,10 +3,18 @@ import Foundation
 import Testing
 
 /// 验证移植的 Codex 叠加层只注入一次，且不替换 Apelin 自带规则、技能目录仍保持在末尾。
-@Suite("Codex 交付叠加层")
+@Suite("Codex 交付叠加层", .serialized)
 struct CodexOverlayTests {
+    private func forceOverlayForTest() -> Bool {
+        let previous = CodexOverlay.enabled
+        CodexOverlay.enabled = true
+        return previous
+    }
+
     @Test
     func `叠加层只出现一次且保留内置提示词`() throws {
+        let previous = forceOverlayForTest()
+        defer { CodexOverlay.enabled = previous }
         let home = try TemporaryHome()
         defer { home.remove() }
 
