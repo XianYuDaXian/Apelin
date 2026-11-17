@@ -111,14 +111,15 @@ final class ComposerModelBar: ComposerSectionView {
     }
 
     private static func title(for effort: AgentReasoningEffort) -> String {
-        switch effort {
-        case .off: String(localized: "Off")
-        case .minimal: String(localized: "Minimal")
-        case .low: String(localized: "Low")
-        case .medium: String(localized: "Medium")
-        case .high: String(localized: "High")
-        case .xhigh: String(localized: "Extra High")
-        case .max: String(localized: "Maximum")
+        switch effort.rawValue {
+        case "off": String(localized: "Off")
+        case "minimal": String(localized: "Minimal")
+        case "low": String(localized: "Low")
+        case "medium": String(localized: "Medium")
+        case "high": String(localized: "High")
+        case "xhigh": String(localized: "Extra High")
+        case "max": String(localized: "Maximum")
+        default: effort.rawValue
         }
     }
 

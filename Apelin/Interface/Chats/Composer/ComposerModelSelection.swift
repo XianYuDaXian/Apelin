@@ -67,7 +67,7 @@ enum ComposerModelPreferences {
     /// Nil until the reader picks one.
     static var effort: AgentReasoningEffort? {
         get {
-            UserDefaults.standard.string(forKey: effortKey).flatMap(AgentReasoningEffort.init(rawValue:))
+            UserDefaults.standard.string(forKey: effortKey).map(AgentReasoningEffort.init(rawValue:))
                 ?? legacy?.effort
         }
         set {

@@ -83,6 +83,12 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         super.viewDidLoad()
         title = String(localized: "Model Providers")
         navigationItem.backButtonDisplayMode = .minimal
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "推理强度",
+            style: .plain,
+            target: self,
+            action: #selector(manageReasoningEfforts),
+        )
         search.searchResultsUpdater = self
         search.obscuresBackgroundDuringPresentation = false
         search.searchBar.placeholder = String(localized: "Search")
@@ -137,6 +143,57 @@ final class ModelProvidersController: TableController, UISearchResultsUpdating {
         guard text != query else { return }
         query = text
         regroup()
+    }
+
+    @objc private dynamic func manageReasoningEfforts() {
+        let values = CustomReasoningEfforts.all
+        let position = CustomReasoningEfforts.position == CustomReasoningEfforts.positionFirst ? "最前" : "最后"
+        let message = values.isEmpty
+            ? "暂无自定义强度，当前位置：" + position
+            : values.map { $0.rawValue }.joined(separator: " · ")
+        let sheet = UIAlertController(title: "自定义推理强度", message: message, preferredStyle: .alert)
+        for effort in values {
+            sheet.addAction(UIAlertAction(title: "删除 " + effort.rawValue, style: .destructive) { [weak self] _ in
+                CustomReasoningEfforts.remove(effort)
+                self?.manageReasoningEfforts()
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "新增", style: .default) { [weak self] _ in
+            self?.addCustomReasoningEffort()
+        })
+        sheet.addAction(UIAlertAction(title: "位置：" + position, style: .default) { [weak self] _ in
+            CustomReasoningEfforts.setPosition(
+                CustomReasoningEfforts.position == CustomReasoningEfforts.positionFirst
+                    ? CustomReasoningEfforts.positionLast
+                    : CustomReasoningEfforts.positionFirst,
+            )
+            self?.manageReasoningEfforts()
+        })
+        sheet.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        present(sheet, animated: true)
+    }
+
+    private func addCustomReasoningEffort() {
+        let alert = UIAlertController(
+            title: "新增推理强度",
+            message: "输入供应商接受的原始值，例如 ultra-high。",
+            preferredStyle: .alert,
+        )
+        alert.addTextField { field in
+            field.placeholder = "Reasoning Effort"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: String(localized: "Cancel"), style: .cancel))
+        alert.addAction(UIAlertAction(title: String(localized: "Add"), style: .default) { [weak self] _ in
+            let value = alert.textFields?.first?.text ?? ""
+            guard CustomReasoningEfforts.add(value) else {
+                self?.presentNotice(title: "无效推理强度", message: "请输入非内置且不重复的原始值。")
+                return
+            }
+            self?.manageReasoningEfforts()
+        })
+        present(alert, animated: true)
     }
 
     @objc private dynamic func regroup() {

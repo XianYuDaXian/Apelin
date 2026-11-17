@@ -13,6 +13,7 @@ private actor LiveModel {
         var model: Model
         var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
         var thinking: ThinkingLevel
+        var reasoningEffortRaw: String?
         var explicitReasoningOff: Bool
         var serviceTier: ServiceTier?
         var transport: Transport?
@@ -25,12 +26,13 @@ private actor LiveModel {
         model: Model,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         thinking: ThinkingLevel,
+        reasoningEffortRaw: String? = nil,
         explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier?,
         transport: Transport?,
         apiKey: String?,
     ) {
-        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier, transport: transport, apiKey: apiKey)
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, reasoningEffortRaw: reasoningEffortRaw, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier, transport: transport, apiKey: apiKey)
     }
 
     func current() -> Snapshot {
@@ -38,8 +40,14 @@ private actor LiveModel {
     }
 
     /// A change that keeps the model, such as the composer's tier.
-    func update(thinking: ThinkingLevel, explicitReasoningOff: Bool, serviceTier: ServiceTier?) {
+    func update(
+        thinking: ThinkingLevel,
+        reasoningEffortRaw: String? = nil,
+        explicitReasoningOff: Bool,
+        serviceTier: ServiceTier?,
+    ) {
         snapshot.thinking = thinking
+        snapshot.reasoningEffortRaw = reasoningEffortRaw
         snapshot.explicitReasoningOff = explicitReasoningOff
         snapshot.serviceTier = serviceTier
     }
@@ -48,12 +56,13 @@ private actor LiveModel {
         model: Model,
         authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?,
         thinking: ThinkingLevel,
+        reasoningEffortRaw: String? = nil,
         explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier?,
         transport: Transport?,
         apiKey: String?,
     ) {
-        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier, transport: transport, apiKey: apiKey)
+        snapshot = Snapshot(model: model, authResolver: authResolver, thinking: thinking, reasoningEffortRaw: reasoningEffortRaw, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier, transport: transport, apiKey: apiKey)
     }
 }
 
@@ -99,6 +108,7 @@ public actor AgentSession {
         var model: Model
         var authResolver: (@Sendable (Model, String?) async throws -> ResolvedProviderAuth?)?
         var thinking: ThinkingLevel
+        var reasoningEffortRaw: String?
         var serviceTier: ServiceTier?
     }
     /// What the model was last resolved from. The same provider and stored
@@ -258,6 +268,7 @@ public actor AgentSession {
             model: resolved.model,
             authResolver: resolved.authResolver,
             thinking: configuration.thinking,
+            reasoningEffortRaw: configuration.reasoningEffortRaw,
             explicitReasoningOff: configuration.explicitReasoningOff,
             serviceTier: configuration.serviceTier,
             transport: ProviderTransport.responses(model: resolved.model, credentials: resolved.credentials),
@@ -297,7 +308,10 @@ public actor AgentSession {
             }()
             if conversation {
                 model = ProviderReasoning.model(
-                    model, level: Self.reasoningLevel(live.thinking), explicitOff: live.explicitReasoningOff,
+                    model,
+                    level: Self.reasoningLevel(live.thinking),
+                    explicitOff: live.explicitReasoningOff,
+                    reasoningEffortRaw: live.reasoningEffortRaw,
                 )
                 options.serviceTier = live.serviceTier
             } else {
@@ -414,6 +428,7 @@ public actor AgentSession {
     public func configure(
         provider: ProviderConfiguration,
         thinking: ThinkingLevel,
+        reasoningEffortRaw: String? = nil,
         explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier? = nil,
         contextWindow: Int? = nil,
@@ -426,7 +441,12 @@ public actor AgentSession {
             guard runTask == nil else { return }
             agent.state.thinkingLevel = thinking
             agent.state.serviceTier = serviceTier
-            await liveModel.update(thinking: thinking, explicitReasoningOff: explicitReasoningOff, serviceTier: serviceTier)
+            await liveModel.update(
+                thinking: thinking,
+                reasoningEffortRaw: reasoningEffortRaw,
+                explicitReasoningOff: explicitReasoningOff,
+                serviceTier: serviceTier,
+            )
             return
         }
         let resolved = try await ProviderResolver.resolve(
@@ -444,6 +464,7 @@ public actor AgentSession {
             model: resolved.model,
             authResolver: resolved.authResolver,
             thinking: thinking,
+            reasoningEffortRaw: reasoningEffortRaw,
             explicitReasoningOff: explicitReasoningOff,
             serviceTier: serviceTier,
             transport: ProviderTransport.responses(model: resolved.model, credentials: resolved.credentials),
@@ -463,6 +484,7 @@ public actor AgentSession {
     public func switchModel(
         provider: ProviderConfiguration,
         thinking: ThinkingLevel,
+        reasoningEffortRaw: String? = nil,
         explicitReasoningOff: Bool = false,
         serviceTier: ServiceTier? = nil,
         contextWindow: Int? = nil,
@@ -481,6 +503,7 @@ public actor AgentSession {
             model: resolved.model,
             authResolver: resolved.authResolver,
             thinking: thinking,
+            reasoningEffortRaw: reasoningEffortRaw,
             serviceTier: serviceTier,
         )
         // The stream function reads this for the rest of the running turn.
@@ -488,6 +511,7 @@ public actor AgentSession {
             model: change.model,
             authResolver: change.authResolver,
             thinking: change.thinking,
+            reasoningEffortRaw: change.reasoningEffortRaw,
             explicitReasoningOff: explicitReasoningOff,
             serviceTier: change.serviceTier,
             transport: ProviderTransport.responses(model: change.model, credentials: resolved.credentials),
@@ -510,14 +534,15 @@ public actor AgentSession {
     }
 
     private static func reasoningLevel(_ level: ThinkingLevel) -> ReasoningLevel? {
-        switch level {
-        case .off: nil
-        case .minimal: .minimal
-        case .low: .low
-        case .medium: .medium
-        case .high: .high
-        case .xhigh: .xhigh
-        case .max: .max
+        switch level.rawValue {
+        case "off": nil
+        case "minimal": .minimal
+        case "low": .low
+        case "medium": .medium
+        case "high": .high
+        case "xhigh": .xhigh
+        case "max": .max
+        default: nil
         }
     }
 

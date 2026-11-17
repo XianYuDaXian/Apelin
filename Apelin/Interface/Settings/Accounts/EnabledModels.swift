@@ -32,7 +32,9 @@ enum EnabledModels {
         UserDefaults.standard.set(hidden.sorted(), forKey: "hiddenModels.\(provider.rawValue)")
         UserDefaults.standard.set(
             reasoningEfforts.mapValues { efforts in
-                AgentReasoningEffort.allCases.filter { efforts.contains($0) }.map(\.rawValue)
+                efforts
+                    .filter { CustomReasoningEfforts.options.contains($0) }
+                    .map(\.rawValue)
             },
             forKey: "modelReasoningEfforts.\(provider.rawValue)",
         )
@@ -61,7 +63,8 @@ enum EnabledModels {
         let stored = UserDefaults.standard.dictionary(forKey: "modelReasoningEfforts.\(provider.rawValue)") ?? [:]
         return stored.compactMapValues { value in
             guard let values = value as? [String] else { return nil }
-            return AgentReasoningEffort.allCases.filter { values.contains($0.rawValue) }
+            let options = CustomReasoningEfforts.options
+            return options.filter { values.contains($0.rawValue) }
         }
     }
 

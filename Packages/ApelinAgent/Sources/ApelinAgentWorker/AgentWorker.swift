@@ -71,7 +71,8 @@ public enum AgentWorker {
                     do {
                         try await session.configure(
                             provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: prompt.model)),
-                            thinking: .init(rawValue: prompt.reasoningEffort?.rawValue ?? "off") ?? .off,
+                            thinking: AgentReasoningSelection.thinkingLevel(for: prompt.reasoningEffort),
+                            reasoningEffortRaw: prompt.reasoningEffort?.rawValue,
                             explicitReasoningOff: prompt.reasoningEffort == .off,
                             serviceTier: AgentWorker.serviceTier(prompt.serviceTier),
                             contextWindow: prompt.contextWindow,
@@ -144,7 +145,8 @@ public enum AgentWorker {
                     do {
                         try await session.configure(
                             provider: AgentWorker.provider(AgentOpenRequest(provider: provider, model: regenerate.model)),
-                            thinking: .init(rawValue: regenerate.reasoningEffort?.rawValue ?? "off") ?? .off,
+                            thinking: AgentReasoningSelection.thinkingLevel(for: regenerate.reasoningEffort),
+                            reasoningEffortRaw: regenerate.reasoningEffort?.rawValue,
                             explicitReasoningOff: regenerate.reasoningEffort == .off,
                             serviceTier: AgentWorker.serviceTier(regenerate.serviceTier),
                             contextWindow: regenerate.contextWindow,
@@ -172,7 +174,8 @@ public enum AgentWorker {
                 do {
                     try await session.switchModel(
                         provider: AgentWorker.provider(AgentOpenRequest(provider: change.provider, model: change.model)),
-                        thinking: .init(rawValue: change.reasoningEffort?.rawValue ?? "off") ?? .off,
+                        thinking: AgentReasoningSelection.thinkingLevel(for: change.reasoningEffort),
+                        reasoningEffortRaw: change.reasoningEffort?.rawValue,
                         explicitReasoningOff: change.reasoningEffort == .off,
                         serviceTier: AgentWorker.serviceTier(change.serviceTier),
                         contextWindow: change.contextWindow,
@@ -383,7 +386,8 @@ actor WorkerState {
                         asksBeforeScreen: ScreenConsent.asks(open.asksBeforeScreen),
                     ),
                     dataRoot: dataRoot,
-                    thinking: .init(rawValue: open.reasoningEffort?.rawValue ?? "off") ?? .off,
+                    thinking: AgentReasoningSelection.thinkingLevel(for: open.reasoningEffort),
+                    reasoningEffortRaw: open.reasoningEffort?.rawValue,
                     explicitReasoningOff: open.reasoningEffort == .off,
                     contextWindow: open.contextWindow,
                     serviceTier: AgentWorker.serviceTier(open.serviceTier),

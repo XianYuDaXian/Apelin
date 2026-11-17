@@ -98,7 +98,12 @@ enum ProviderModelWindow {
 
 /// A selected effort is an explicit capability declared in the model settings.
 enum ProviderReasoning {
-    static func model(_ model: Model, level: ReasoningLevel?, explicitOff: Bool = false) -> Model {
+    static func model(
+        _ model: Model,
+        level: ReasoningLevel?,
+        explicitOff: Bool = false,
+        reasoningEffortRaw: String? = nil,
+    ) -> Model {
         guard level != nil || explicitOff else { return model }
         var selected = model
         selected.reasoning = true
@@ -107,6 +112,11 @@ enum ProviderReasoning {
         let key = level?.rawValue ?? "off"
         if (mapping[key] ?? nil) == nil {
             mapping[key] = level?.rawValue ?? "none"
+        }
+        if let reasoningEffortRaw,
+           !reasoningEffortRaw.isEmpty,
+           AgentReasoningEffort(rawValue: reasoningEffortRaw).isCustom {
+            mapping[level?.rawValue ?? "high"] = reasoningEffortRaw
         }
         selected.thinkingLevelMap = mapping
         if selected.api == "openai-completions", selected.compat?.supportsReasoningEffort == nil {

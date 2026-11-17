@@ -82,7 +82,7 @@ enum ProviderModels {
         let efforts = WorkBuddyEffortCache.shared.efforts(for: provider.storeID) ?? [:]
         guard let catalog = catalogKey(provider, credentials: credentials) else { return efforts }
         let bundled = Dictionary(uniqueKeysWithValues: ModelsCatalog.models(for: catalog).filter(\.reasoning).map { model in
-            (model.id, supportedThinkingLevels(model).compactMap { AgentReasoningEffort(rawValue: $0.rawValue) })
+            (model.id, supportedThinkingLevels(model).map { AgentReasoningEffort(rawValue: $0.rawValue) })
         })
         // A model the live config named keeps its own levels; one it did not
         // is the bundled row's.
@@ -134,7 +134,7 @@ enum ProviderModels {
                 var levels: [String: [AgentReasoningEffort]] = [:]
                 for listing in live where levels[listing.model.id] == nil {
                     levels[listing.model.id] = supportedThinkingLevels(listing.model)
-                        .compactMap { AgentReasoningEffort(rawValue: $0.rawValue) }
+                        .map { AgentReasoningEffort(rawValue: $0.rawValue) }
                 }
                 WorkBuddyEffortCache.shared.store(levels, for: provider.storeID)
                 return live.map(\.model.id)

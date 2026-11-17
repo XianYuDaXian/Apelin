@@ -315,8 +315,63 @@ public extension AgentProvider {
     }
 }
 
-public enum AgentReasoningEffort: String, Codable, Sendable, CaseIterable {
-    case off, minimal, low, medium, high, xhigh, max
+/// A thinking effort by its wire value. The built-in levels stay as static
+/// values, while a user can add any raw value a provider accepts.
+public struct AgentReasoningEffort: RawRepresentable, Codable, Hashable, Sendable, CaseIterable {
+    public var rawValue: String
+
+    public init(rawValue: String) {
+        self.rawValue = rawValue
+    }
+
+    public static let off = Self(rawValue: "off")
+    public static let minimal = Self(rawValue: "minimal")
+    public static let low = Self(rawValue: "low")
+    public static let medium = Self(rawValue: "medium")
+    public static let high = Self(rawValue: "high")
+    public static let xhigh = Self(rawValue: "xhigh")
+    public static let max = Self(rawValue: "max")
+
+    public static let knownCases: [AgentReasoningEffort] = [
+        .off, .minimal, .low, .medium, .high, .xhigh, .max,
+    ]
+
+    /// Kept for call sites that only care about the built-in levels.
+    public static let allCases = knownCases
+
+    /// Whether this value is outside the built-in levels.
+    public var isCustom: Bool {
+        !Self.knownCases.contains(self)
+    }
+
+    /// Orders values with custom ones first or last, preserving their input
+    /// order and dropping duplicates by exact wire value.
+    public static func ordered(
+        _ values: [AgentReasoningEffort],
+        customFirst: Bool,
+    ) -> [AgentReasoningEffort] {
+        var seen: Set<String> = []
+        var builtIn: [AgentReasoningEffort] = []
+        var custom: [AgentReasoningEffort] = []
+        for value in values where seen.insert(value.rawValue).inserted {
+            if value.isCustom {
+                custom.append(value)
+            } else {
+                builtIn.append(value)
+            }
+        }
+        return customFirst ? custom + builtIn : builtIn + custom
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        rawValue = try container.decode(String.self)
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(rawValue)
+    }
 }
 
 /// The processing tiers Apelin offers above the provider's standard one,

@@ -212,7 +212,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
     }
 
     private func effortMenu(for model: String) -> UIMenu {
-        UIMenu(title: String(localized: "Reasoning Effort"), children: AgentReasoningEffort.allCases.map { effort in
+        UIMenu(title: String(localized: "Reasoning Effort"), children: CustomReasoningEfforts.options.map { effort in
             UIAction(
                 title: Self.title(for: effort),
                 attributes: saving ? .disabled : [],
@@ -223,7 +223,7 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
                 if !supported.insert(effort).inserted {
                     supported.remove(effort)
                 }
-                reasoningEfforts[model] = AgentReasoningEffort.allCases.filter { supported.contains($0) }
+                reasoningEfforts[model] = CustomReasoningEfforts.options.filter { supported.contains($0) }
                 updateRows()
             }
         })
@@ -283,14 +283,15 @@ final class ModelActivationController: TableController, UISearchResultsUpdating 
     }
 
     private static func title(for effort: AgentReasoningEffort) -> String {
-        switch effort {
-        case .off: String(localized: "Off")
-        case .minimal: String(localized: "Minimal")
-        case .low: String(localized: "Low")
-        case .medium: String(localized: "Medium")
-        case .high: String(localized: "High")
-        case .xhigh: String(localized: "Extra High")
-        case .max: String(localized: "Maximum")
+        switch effort.rawValue {
+        case "off": String(localized: "Off")
+        case "minimal": String(localized: "Minimal")
+        case "low": String(localized: "Low")
+        case "medium": String(localized: "Medium")
+        case "high": String(localized: "High")
+        case "xhigh": String(localized: "Extra High")
+        case "max": String(localized: "Maximum")
+        default: effort.rawValue
         }
     }
 
